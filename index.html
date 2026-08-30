@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#F7F2EC" />
+  <title>Primeira Fornada — Encomendas</title>
+  <style>
+    :root {
+      --bg: #f7f2ec;
+      --surface: #fffdfb;
+      --surface-2: #fbf6f1;
+      --text: #2f211a;
+      --muted: #7b665b;
+      --line: #e7d9cf;
+      --accent: #c97f5d;
+      --accent-strong: #a85f42;
+      --accent-soft: #f2d7c9;
+      --gold: #dda94e;
+      --success: #2f7d58;
+      --danger: #b64c4c;
+      --shadow: 0 18px 50px rgba(76, 49, 37, 0.09);
+      --radius-xl: 28px;
+      --radius-lg: 18px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 10% 8%, rgba(242, 215, 201, .42), transparent 32%),
+        radial-gradient(circle at 90% 12%, rgba(221, 169, 78, .10), transparent 28%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+
+    .app-shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 26px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 44px;
+      height: 44px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, var(--accent-soft), #fff1e8);
+      border: 1px solid rgba(201, 127, 93, .18);
+      box-shadow: 0 8px 22px rgba(168, 95, 66, .10);
+      flex: 0 0 auto;
+      font-size: 22px;
+    }
+
+    .brand-copy strong {
+      display: block;
+      font-size: 15px;
+      letter-spacing: .02em;
+    }
+
+    .brand-copy span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .view-switch {
+      display: inline-flex;
+      gap: 6px;
+      padding: 5px;
+      background: rgba(255,255,255,.72);
+      border: 1px solid rgba(231, 217, 207, .9);
+      border-radius: 999px;
+      backdrop-filter: blur(10px);
+    }
+
+    .view-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .view-switch button.active {
+      background: var(--text);
+      color: white;
+      box-shadow: 0 6px 16px rgba(47,33,26,.14);
+    }
+
+    .hidden { display: none !important; }
+
+    .order-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .card {
+      background: rgba(255,253,251,.96);
+      border: 1px solid rgba(231, 217, 207, .82);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+    }
+
+    .order-card { padding: clamp(24px, 4vw, 46px); }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 11px;
+      border-radius: 999px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: 18px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    .hero h1 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: .98;
+      letter-spacing: -.035em;
+      margin-bottom: 14px;
+      max-width: 700px;
+    }
+
+    .hero .lead {
+      color: #5f4a40;
+      font-size: clamp(17px, 2.2vw, 20px);
+      line-height: 1.55;
+      max-width: 720px;
+      margin-bottom: 12px;
+    }
+
+    .hero .description {
+      color: var(--muted);
+      line-height: 1.65;
+      max-width: 730px;
+      margin-bottom: 34px;
+    }
+
+    .form-section {
+      padding-top: 27px;
+      margin-top: 27px;
+      border-top: 1px solid var(--line);
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .section-heading h2 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .section-heading p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .field.full { grid-column: 1 / -1; }
+
+    .field label {
+      display: block;
+      margin: 0 0 8px;
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .field small {
+      display: block;
+      color: var(--muted);
+      margin-top: 7px;
+      line-height: 1.4;
+    }
+
+    .control {
+      width: 100%;
+      min-height: 52px;
+      border-radius: var(--radius-md);
+      border: 1px solid #dccdc3;
+      background: #fff;
+      color: var(--text);
+      outline: 0;
+      padding: 13px 14px;
+      transition: .18s ease;
+    }
+
+    textarea.control {
+      min-height: 112px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .control:hover { border-color: #cdb7aa; }
+    .control:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(201, 127, 93, .12);
+    }
+
+    .control::placeholder { color: #a9978d; }
+
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .choice {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      background: #fff;
+      transition: .18s ease;
+    }
+
+    .choice:hover { transform: translateY(-1px); border-color: #cfb8aa; }
+    .choice.selected {
+      border-color: var(--accent);
+      background: #fff9f5;
+      box-shadow: 0 0 0 3px rgba(201, 127, 93, .10);
+    }
+
+    .choice input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .choice-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      font-weight: 800;
+    }
+
+    .choice-subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .price {
+      white-space: nowrap;
+      color: var(--accent-strong);
+      font-weight: 900;
+    }
+
+    .summary-card {
+      position: sticky;
+      top: 20px;
+      padding: 24px;
+    }
+
+    .summary-card h3 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 25px;
+      margin-bottom: 6px;
+    }
+
+    .summary-card > p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      margin: 8px 0 18px;
+    }
+
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 12px 0;
+      border-bottom: 1px dashed #eaded7;
+      font-size: 14px;
+    }
+
+    .summary-row:last-child { border-bottom: 0; }
+    .summary-row span:first-child { color: var(--muted); }
+    .summary-row strong { text-align: right; }
+
+    .total-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin: 18px 0;
+    }
+
+    .total-row span { color: var(--muted); font-size: 13px; }
+    .total-row strong {
+      display: block;
+      font-size: 30px;
+      letter-spacing: -.03em;
+      margin-top: 2px;
+    }
+
+    .primary-btn, .secondary-btn, .danger-btn, .ghost-btn {
+      min-height: 48px;
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-weight: 800;
+      border: 0;
+      transition: .18s ease;
+    }
+
+    .primary-btn {
+      width: 100%;
+      color: white;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      box-shadow: 0 10px 22px rgba(168,95,66,.20);
+    }
+
+    .primary-btn:hover { transform: translateY(-1px); filter: saturate(1.05); }
+    .primary-btn:disabled { opacity: .55; cursor: wait; transform: none; }
+
+    .secondary-btn {
+      background: var(--text);
+      color: white;
+    }
+
+    .ghost-btn {
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .danger-btn {
+      background: #fff4f4;
+      color: var(--danger);
+      border: 1px solid #f0cdcd;
+    }
+
+    .secure-note {
+      display: flex;
+      gap: 9px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .message {
+      display: none;
+      margin-top: 14px;
+      padding: 13px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .message.show { display: block; }
+    .message.success { background: #ecf7f1; color: #225e43; border: 1px solid #c7e8d8; }
+    .message.error { background: #fff1f1; color: #913838; border: 1px solid #efcece; }
+    .message.info { background: #fff8ef; color: #7b5730; border: 1px solid #eedbc4; }
+
+    .footer-note {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 22px;
+    }
+
+    /* Admin */
+    .admin-layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .admin-nav {
+      position: sticky;
+      top: 20px;
+      padding: 14px;
+    }
+
+    .admin-nav h3 {
+      margin: 6px 8px 14px;
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .admin-nav button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 11px 12px;
+      border-radius: 12px;
+      color: var(--muted);
+      font-weight: 750;
+      margin-bottom: 4px;
+    }
+
+    .admin-nav button.active {
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
+    .admin-content { padding: 28px; }
+    .admin-content h1 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 34px;
+      margin-bottom: 8px;
+    }
+    .admin-content > p { color: var(--muted); margin-bottom: 28px; }
+
+    .admin-panel { display: none; }
+    .admin-panel.active { display: block; }
+
+    .admin-section {
+      padding: 22px 0;
+      border-top: 1px solid var(--line);
+    }
+    .admin-section:first-child { border-top: 0; padding-top: 0; }
+
+    .admin-section h2 { font-size: 18px; margin-bottom: 6px; }
+    .admin-section .help { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .list-editor { display: grid; gap: 10px; }
+
+    .list-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 125px auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+
+    .list-row.simple { grid-template-columns: minmax(0, 1fr) auto; }
+    .list-row.payment { grid-template-columns: minmax(0, 1fr) auto; }
+
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--danger);
+      font-weight: 900;
+    }
+
+    .editor-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .status-pill.off { background: #fff4ee; color: #9a5c3e; }
+    .status-pill.on { background: #edf8f2; color: #246747; }
+
+    .connection-box {
+      border: 1px dashed #d7c3b6;
+      background: #fffaf6;
+      border-radius: 16px;
+      padding: 16px;
+      line-height: 1.55;
+      color: #6d5649;
+      font-size: 13px;
+    }
+
+    .connection-box code {
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 2px 6px;
+      border-radius: 7px;
+      color: var(--text);
+    }
+
+    .orders-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; background: #fff; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid #eee3dc; text-align: left; font-size: 13px; }
+    th { background: #fbf7f3; color: var(--muted); font-weight: 800; }
+    tr:last-child td { border-bottom: 0; }
+
+    .empty-state {
+      border: 1px dashed #d8c8be;
+      background: #fffaf7;
+      border-radius: 16px;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translate(-50%, 20px);
+      opacity: 0;
+      pointer-events: none;
+      transition: .22s ease;
+      background: #2e211b;
+      color: white;
+      padding: 11px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      z-index: 999;
+      box-shadow: 0 14px 34px rgba(0,0,0,.15);
+    }
+
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 940px) {
+      .order-layout { grid-template-columns: 1fr; }
+      .summary-card { position: static; }
+      .admin-layout { grid-template-columns: 1fr; }
+      .admin-nav {
+        position: static;
+        display: flex;
+        overflow-x: auto;
+        gap: 6px;
+      }
+      .admin-nav h3 { display: none; }
+      .admin-nav button { width: auto; white-space: nowrap; margin: 0; }
+    }
+
+    @media (max-width: 660px) {
+      .app-shell { width: min(100% - 20px, 1180px); padding-top: 14px; }
+      .topbar { align-items: flex-start; flex-direction: column; margin-bottom: 14px; }
+      .view-switch { width: 100%; }
+      .view-switch button { flex: 1; }
+      .order-card, .admin-content { padding: 22px 18px; border-radius: 22px; }
+      .summary-card { padding: 20px; border-radius: 22px; }
+      .form-grid, .choice-grid, .admin-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .list-row { grid-template-columns: 1fr; }
+      .list-row.simple, .list-row.payment { grid-template-columns: 1fr auto; }
+      .list-row .icon-btn { justify-self: end; }
+      .hero h1 { font-size: 38px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">🍰</div>
+        <div class="brand-copy">
+          <strong id="brandNameTop">Primeira Fornada</strong>
+          <span>bolos artesanais por encomenda</span>
+        </div>
+      </div>
+
+      <div class="view-switch" role="tablist" aria-label="Alternar visualização">
+        <button id="customerTab" class="active" type="button">Página do cliente</button>
+        <button id="adminTab" type="button">Central de gestão</button>
+      </div>
+    </header>
+
+    <!-- VISÃO DO CLIENTE -->
+    <main id="customerView">
+      <div class="order-layout">
+        <section class="card order-card">
+          <div class="hero">
+            <div class="eyebrow">Produção artesanal · encomendas limitadas</div>
+            <h1 id="heroTitle">Primeira Fornada 🍰</h1>
+            <p class="lead" id="heroSubtitle">Estamos começando uma nova fase por aqui. 💛</p>
+            <p class="description" id="heroDescription">Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seu sabor, tamanho e a melhor forma de pagamento.</p>
+          </div>
+
+          <form id="orderForm" novalidate>
+            <div class="form-section">
+              <div class="section-heading">
+                <div>
+                  <h2>Seus dados</h2>
+                  <p>Precisamos deles para confirmar a encomenda com você.</p>
+                </div>
+              </div>
+
+              <div class="form-grid">
+                <div class="field">
+                  <label for="customerName">Qual é o seu nome?</label>
+                  <input class="control" id="customerName" name="customerName" autocomplete="name" placeholder="Seu nome" required />
+                </div>
+
+                <div class="field">
+                  <label for="customerPhone">Qual é o seu WhatsApp?</label>
+                  <input class="control" id="customerPhone" name="customerPhone" inputmode="tel" autocomplete="tel" placeholder="(34) 99999-9999" required />
+                </div>
+
+                <div class="field">
+                  <label for="orderDate">Para qual dia?</label>
+                  <input class="control" id="orderDate" name="orderDate" type="date" required />
+                  <small>O pedido ainda ficará sujeito à confirmação de disponibilidade.</small>
+                </div>
+
+                <div class="field">
+                  <label for="pickupTime">Horário preferido</label>
+                  <input class="control" id="pickupTime" name="pickupTime" type="time" required />
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <div>
+                  <h2>Escolha o bolo</h2>
+                  <p>Primeiro o sabor, depois o tamanho.</p>
+                </div>
+              </div>
+
+              <div class="field full" style="margin-bottom:18px">
+                <label for="flavorSelect">Qual sabor você deseja?</label>
+                <select class="control" id="flavorSelect" name="flavor" required>
+                  <option value="">Selecione um sabor</option>
+                </select>
+              </div>
+
+              <div class="field full">
+                <label>Qual tamanho?</label>
+                <div id="sizeChoices" class="choice-grid"></div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <div>
+                  <h2>Pagamento</h2>
+                  <p>Escolha como prefere pagar.</p>
+                </div>
+              </div>
+
+              <div class="field full">
+                <label for="paymentSelect">Forma de pagamento</label>
+                <select class="control" id="paymentSelect" name="payment" required>
+                  <option value="">Selecione a forma de pagamento</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <div>
+                  <h2>Detalhes do pedido</h2>
+                  <p>Conte algo importante para prepararmos seu bolo.</p>
+                </div>
+              </div>
+
+              <div class="field full">
+                <label for="notes">Observações <span style="font-weight:500;color:var(--muted)">(opcional)</span></label>
+                <textarea class="control" id="notes" name="notes" placeholder="Ex.: nome para escrever, alergia, preferência de decoração ou outra observação."></textarea>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <aside class="card summary-card" aria-live="polite">
+          <h3>Seu pedido</h3>
+          <p>Confira os principais detalhes antes de enviar.</p>
+
+          <div class="summary-list">
+            <div class="summary-row"><span>Sabor</span><strong id="summaryFlavor">—</strong></div>
+            <div class="summary-row"><span>Tamanho</span><strong id="summarySize">—</strong></div>
+            <div class="summary-row"><span>Data</span><strong id="summaryDate">—</strong></div>
+            <div class="summary-row"><span>Pagamento</span><strong id="summaryPayment">—</strong></div>
+          </div>
+
+          <div class="total-row">
+            <div>
+              <span>Valor estimado</span>
+              <strong id="summaryTotal">R$ 0,00</strong>
+            </div>
+            <div style="font-size:28px" aria-hidden="true">🤎</div>
+          </div>
+
+          <button id="submitOrderBtn" class="primary-btn" type="submit" form="orderForm">Enviar encomenda</button>
+          <div class="secure-note"><span>🔒</span><span>Seus dados serão usados apenas para registrar e confirmar esta encomenda.</span></div>
+          <div id="orderMessage" class="message"></div>
+        </aside>
+      </div>
+
+      <div class="footer-note">Feito com carinho, do forno para a sua mesa. ✨</div>
+    </main>
+
+    <!-- CENTRAL DE GESTÃO -->
+    <main id="adminView" class="hidden">
+      <div class="admin-layout">
+        <aside class="card admin-nav">
+          <h3>Central</h3>
+          <button type="button" class="admin-nav-btn active" data-panel="brandPanel">Marca e textos</button>
+          <button type="button" class="admin-nav-btn" data-panel="catalogPanel">Sabores e preços</button>
+          <button type="button" class="admin-nav-btn" data-panel="paymentPanel">Pagamentos</button>
+          <button type="button" class="admin-nav-btn" data-panel="integrationPanel">Google Sheets</button>
+          <button type="button" class="admin-nav-btn" data-panel="ordersPanel">Pedidos locais</button>
+        </aside>
+
+        <section class="card admin-content">
+          <h1>Central de gestão</h1>
+          <p>Edite o que aparece no formulário sem mexer no código da página.</p>
+
+          <div id="brandPanel" class="admin-panel active">
+            <div class="admin-section">
+              <h2>Marca e apresentação</h2>
+              <p class="help">Altere nome, chamada principal e texto de apresentação.</p>
+              <div class="admin-grid">
+                <div class="field">
+                  <label for="adminBrandName">Nome da marca</label>
+                  <input class="control" id="adminBrandName" />
+                </div>
+                <div class="field">
+                  <label for="adminHeroTitle">Título</label>
+                  <input class="control" id="adminHeroTitle" />
+                </div>
+                <div class="field full">
+                  <label for="adminHeroSubtitle">Subtítulo</label>
+                  <input class="control" id="adminHeroSubtitle" />
+                </div>
+                <div class="field full">
+                  <label for="adminDescription">Descrição</label>
+                  <textarea class="control" id="adminDescription"></textarea>
+                </div>
+              </div>
+              <div class="editor-actions">
+                <button id="saveBrandBtn" class="secondary-btn" type="button">Salvar alterações</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="catalogPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Sabores</h2>
+              <p class="help">Adicione ou remova os sabores disponíveis para encomenda.</p>
+              <div id="flavorEditor" class="list-editor"></div>
+              <div class="editor-actions">
+                <button id="addFlavorBtn" class="ghost-btn" type="button">+ Adicionar sabor</button>
+              </div>
+            </div>
+
+            <div class="admin-section">
+              <h2>Tamanhos e preços</h2>
+              <p class="help">Cada tamanho aparece como uma opção visual no formulário do cliente.</p>
+              <div id="sizeEditor" class="list-editor"></div>
+              <div class="editor-actions">
+                <button id="addSizeBtn" class="ghost-btn" type="button">+ Adicionar tamanho</button>
+                <button id="saveCatalogBtn" class="secondary-btn" type="button">Salvar catálogo</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="paymentPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Formas de pagamento</h2>
+              <p class="help">Configure as opções que o cliente poderá escolher.</p>
+              <div id="paymentEditor" class="list-editor"></div>
+              <div class="editor-actions">
+                <button id="addPaymentBtn" class="ghost-btn" type="button">+ Adicionar forma</button>
+                <button id="savePaymentBtn" class="secondary-btn" type="button">Salvar pagamentos</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="integrationPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Conexão com Google Sheets</h2>
+              <p class="help">Cole aqui a URL publicada do seu Google Apps Script Web App.</p>
+
+              <div class="field full">
+                <label for="appsScriptUrl">URL do Apps Script</label>
+                <input class="control" id="appsScriptUrl" type="url" placeholder="https://script.google.com/macros/s/SEU_ID/exec" />
+                <small>A URL fica salva neste navegador. Em produção, a configuração pode ser carregada do próprio Apps Script.</small>
+              </div>
+
+              <div style="margin-top:16px" class="connection-box">
+                <strong>Como o HTML está preparado:</strong><br>
+                • <code>POST</code> com <code>action=createOrder</code> registra pedidos.<br>
+                • <code>GET ?action=getConfig</code> pode trazer sabores, preços e pagamentos.<br>
+                • <code>POST</code> com <code>action=saveConfig</code> pode persistir a central na planilha.<br><br>
+                Sem URL configurada, o formulário continua funcionando em modo de demonstração e salva pedidos apenas neste navegador.
+              </div>
+
+              <div class="editor-actions">
+                <button id="saveIntegrationBtn" class="secondary-btn" type="button">Salvar URL</button>
+                <button id="testIntegrationBtn" class="ghost-btn" type="button">Testar conexão</button>
+                <span id="connectionStatus" class="status-pill off">● Não configurado</span>
+              </div>
+              <div id="integrationMessage" class="message"></div>
+            </div>
+          </div>
+
+          <div id="ordersPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Pedidos salvos localmente</h2>
+              <p class="help">Útil para testar o fluxo antes de conectar a planilha.</p>
+              <div id="ordersContainer"></div>
+              <div class="editor-actions">
+                <button id="clearLocalOrdersBtn" class="danger-btn" type="button">Limpar pedidos locais</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const DEFAULT_CONFIG = {
+        brandName: 'Primeira Fornada',
+        heroTitle: 'Primeira Fornada 🍰',
+        heroSubtitle: 'Estamos começando uma nova fase por aqui. 💛',
+        description: 'Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seu sabor, tamanho e a melhor forma de pagamento.',
+        flavors: [
+          'Chocolate com brigadeiro',
+          'Ninho com morango',
+          'Cenoura com chocolate',
+          'Red Velvet',
+          'Doce de leite com nozes'
+        ],
+        sizes: [
+          { id: 'p', name: 'Pequeno', description: 'Serve aproximadamente 8 pessoas', price: 89 },
+          { id: 'm', name: 'Médio', description: 'Serve aproximadamente 15 pessoas', price: 129 },
+          { id: 'g', name: 'Grande', description: 'Serve aproximadamente 25 pessoas', price: 179 },
+          { id: 'gg', name: 'Festa', description: 'Serve aproximadamente 35 pessoas', price: 239 }
+        ],
+        payments: ['PIX', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro']
+      };
+
+      const STORAGE_KEYS = {
+        config: 'primeiraFornada.config.v1',
+        orders: 'primeiraFornada.orders.v1',
+        endpoint: 'primeiraFornada.appsScriptUrl.v1'
+      };
+
+      let config = loadJSON(STORAGE_KEYS.config, DEFAULT_CONFIG);
+      let selectedSizeId = '';
+      let isSubmitting = false;
+
+      const $ = (id) => document.getElementById(id);
+      const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+      function clone(value) {
+        return JSON.parse(JSON.stringify(value));
+      }
+
+      function loadJSON(key, fallback) {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : clone(fallback);
+        } catch (_) {
+          return clone(fallback);
+        }
+      }
+
+      function saveConfigLocal() {
+        localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(config));
+      }
+
+      function getEndpoint() {
+        return (localStorage.getItem(STORAGE_KEYS.endpoint) || '').trim();
+      }
+
+      function brl(value) {
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+      }
+
+      function escapeHtml(value = '') {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      function normalizePhone(value) {
+        const digits = value.replace(/\D/g, '').slice(0, 11);
+        if (digits.length <= 2) return digits;
+        if (digits.length <= 7) return `(${digits.slice(0,2)}) ${digits.slice(2)}`;
+        if (digits.length <= 10) return `(${digits.slice(0,2)}) ${digits.slice(2,6)}-${digits.slice(6)}`;
+        return `(${digits.slice(0,2)}) ${digits.slice(2,7)}-${digits.slice(7)}`;
+      }
+
+      function toISODateLocal(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+
+      function formatDate(value) {
+        if (!value) return '—';
+        const [y,m,d] = value.split('-');
+        return `${d}/${m}/${y}`;
+      }
+
+      function showToast(message) {
+        const toast = $('toast');
+        toast.textContent = message;
+        toast.classList.add('show');
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => toast.classList.remove('show'), 2300);
+      }
+
+      function setMessage(element, type, text) {
+        element.className = `message show ${type}`;
+        element.textContent = text;
+      }
+
+      function clearMessage(element) {
+        element.className = 'message';
+        element.textContent = '';
+      }
+
+      function renderBrand() {
+        $('brandNameTop').textContent = config.brandName;
+        $('heroTitle').textContent = config.heroTitle;
+        $('heroSubtitle').textContent = config.heroSubtitle;
+        $('heroDescription').textContent = config.description;
+        document.title = `${config.brandName} — Encomendas`;
+      }
+
+      function renderFlavorOptions() {
+        const select = $('flavorSelect');
+        const current = select.value;
+        select.innerHTML = '<option value="">Selecione um sabor</option>' +
+          config.flavors.map(flavor => `<option value="${escapeHtml(flavor)}">${escapeHtml(flavor)}</option>`).join('');
+        if (config.flavors.includes(current)) select.value = current;
+      }
+
+      function renderPaymentOptions() {
+        const select = $('paymentSelect');
+        const current = select.value;
+        select.innerHTML = '<option value="">Selecione a forma de pagamento</option>' +
+          config.payments.map(payment => `<option value="${escapeHtml(payment)}">${escapeHtml(payment)}</option>`).join('');
+        if (config.payments.includes(current)) select.value = current;
+      }
+
+      function renderSizeChoices() {
+        const container = $('sizeChoices');
+        container.innerHTML = config.sizes.map(size => `
+          <label class="choice ${selectedSizeId === size.id ? 'selected' : ''}" data-size-id="${escapeHtml(size.id)}">
+            <input type="radio" name="size" value="${escapeHtml(size.id)}" ${selectedSizeId === size.id ? 'checked' : ''}>
+            <div class="choice-title">
+              <span>${escapeHtml(size.name)}</span>
+              <span class="price">${brl(size.price)}</span>
+            </div>
+            <div class="choice-subtitle">${escapeHtml(size.description || '')}</div>
+          </label>
+        `).join('');
+
+        qsa('.choice', container).forEach(choice => {
+          choice.addEventListener('click', () => {
+            selectedSizeId = choice.dataset.sizeId;
+            renderSizeChoices();
+            updateSummary();
+          });
+        });
+      }
+
+      function updateSummary() {
+        const size = config.sizes.find(item => item.id === selectedSizeId);
+        $('summaryFlavor').textContent = $('flavorSelect').value || '—';
+        $('summarySize').textContent = size ? size.name : '—';
+        $('summaryDate').textContent = formatDate($('orderDate').value);
+        $('summaryPayment').textContent = $('paymentSelect').value || '—';
+        $('summaryTotal').textContent = brl(size?.price || 0);
+      }
+
+      function setMinDate() {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        $('orderDate').min = toISODateLocal(tomorrow);
+      }
+
+      function validateOrder() {
+        const name = $('customerName').value.trim();
+        const phoneDigits = $('customerPhone').value.replace(/\D/g, '');
+        const date = $('orderDate').value;
+        const time = $('pickupTime').value;
+        const flavor = $('flavorSelect').value;
+        const payment = $('paymentSelect').value;
+        const size = config.sizes.find(item => item.id === selectedSizeId);
+
+        if (!name) return 'Informe seu nome.';
+        if (phoneDigits.length < 10) return 'Informe um WhatsApp válido.';
+        if (!date) return 'Escolha a data desejada.';
+        if (!time) return 'Escolha o horário preferido.';
+        if (!flavor) return 'Escolha um sabor.';
+        if (!size) return 'Escolha o tamanho do bolo.';
+        if (!payment) return 'Escolha a forma de pagamento.';
+        return '';
+      }
+
+      function makeOrderPayload() {
+        const size = config.sizes.find(item => item.id === selectedSizeId);
+        return {
+          action: 'createOrder',
+          createdAt: new Date().toISOString(),
+          customerName: $('customerName').value.trim(),
+          whatsapp: $('customerPhone').value.trim(),
+          date: $('orderDate').value,
+          time: $('pickupTime').value,
+          flavor: $('flavorSelect').value,
+          sizeId: size?.id || '',
+          size: size?.name || '',
+          servings: size?.description || '',
+          price: Number(size?.price || 0),
+          payment: $('paymentSelect').value,
+          notes: $('notes').value.trim(),
+          source: 'web-order-form'
+        };
+      }
+
+      async function postToAppsScript(payload) {
+        const endpoint = getEndpoint();
+        if (!endpoint) throw new Error('ENDPOINT_NOT_CONFIGURED');
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error(`HTTP_${response.status}`);
+        const text = await response.text();
+        try { return JSON.parse(text); } catch (_) { return { ok: true, raw: text }; }
+      }
+
+      function saveOrderLocal(order) {
+        const orders = loadJSON(STORAGE_KEYS.orders, []);
+        orders.unshift({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...order });
+        localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(orders.slice(0, 100)));
+        renderLocalOrders();
+      }
+
+      async function submitOrder(event) {
+        event.preventDefault();
+        if (isSubmitting) return;
+        clearMessage($('orderMessage'));
+
+        const validationError = validateOrder();
+        if (validationError) {
+          setMessage($('orderMessage'), 'error', validationError);
+          return;
+        }
+
+        const order = makeOrderPayload();
+        isSubmitting = true;
+        $('submitOrderBtn').disabled = true;
+        $('submitOrderBtn').textContent = 'Enviando...';
+
+        try {
+          if (getEndpoint()) {
+            const result = await postToAppsScript(order);
+            if (result && result.ok === false) throw new Error(result.message || 'Erro ao registrar pedido.');
+            setMessage($('orderMessage'), 'success', 'Pedido enviado! Agora é só aguardar a confirmação da encomenda pelo WhatsApp.');
+          } else {
+            saveOrderLocal(order);
+            setMessage($('orderMessage'), 'info', 'Pedido salvo em modo de demonstração neste navegador. Conecte o Google Apps Script na Central de gestão para enviar à planilha.');
+          }
+
+          $('orderForm').reset();
+          selectedSizeId = '';
+          renderSizeChoices();
+          updateSummary();
+        } catch (error) {
+          console.error(error);
+          saveOrderLocal(order);
+          setMessage($('orderMessage'), 'error', 'Não foi possível falar com a planilha agora. O pedido ficou salvo localmente neste navegador para não perder as informações.');
+        } finally {
+          isSubmitting = false;
+          $('submitOrderBtn').disabled = false;
+          $('submitOrderBtn').textContent = 'Enviar encomenda';
+        }
+      }
+
+      function switchView(view) {
+        const admin = view === 'admin';
+        $('customerView').classList.toggle('hidden', admin);
+        $('adminView').classList.toggle('hidden', !admin);
+        $('customerTab').classList.toggle('active', !admin);
+        $('adminTab').classList.toggle('active', admin);
+        if (admin) {
+          renderAdminEditors();
+          history.replaceState(null, '', '#admin');
+        } else {
+          history.replaceState(null, '', location.pathname + location.search);
+        }
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+
+      function renderAdminEditors() {
+        $('adminBrandName').value = config.brandName;
+        $('adminHeroTitle').value = config.heroTitle;
+        $('adminHeroSubtitle').value = config.heroSubtitle;
+        $('adminDescription').value = config.description;
+        $('appsScriptUrl').value = getEndpoint();
+        renderFlavorEditor();
+        renderSizeEditor();
+        renderPaymentEditor();
+        renderConnectionStatus();
+        renderLocalOrders();
+      }
+
+      function renderFlavorEditor() {
+        $('flavorEditor').innerHTML = config.flavors.map((flavor, index) => `
+          <div class="list-row simple" data-flavor-index="${index}">
+            <input class="control flavor-input" value="${escapeHtml(flavor)}" aria-label="Sabor ${index + 1}">
+            <button class="icon-btn remove-flavor" type="button" title="Remover sabor">×</button>
+          </div>
+        `).join('') || '<div class="empty-state">Nenhum sabor cadastrado.</div>';
+
+        qsa('.remove-flavor').forEach((button, index) => button.addEventListener('click', () => {
+          captureFlavorEditor();
+          config.flavors.splice(index, 1);
+          renderFlavorEditor();
+        }));
+      }
+
+      function captureFlavorEditor() {
+        const inputs = qsa('.flavor-input');
+        if (!inputs.length) return;
+        config.flavors = inputs.map(input => input.value.trim()).filter(Boolean);
+      }
+
+      function renderSizeEditor() {
+        $('sizeEditor').innerHTML = config.sizes.map((size, index) => `
+          <div class="list-row" data-size-index="${index}">
+            <div style="display:grid;gap:8px">
+              <input class="control size-name" value="${escapeHtml(size.name)}" placeholder="Nome do tamanho" aria-label="Nome do tamanho ${index + 1}">
+              <input class="control size-description" value="${escapeHtml(size.description || '')}" placeholder="Ex.: Serve aproximadamente 15 pessoas" aria-label="Descrição do tamanho ${index + 1}">
+            </div>
+            <input class="control size-price" type="number" min="0" step="0.01" value="${Number(size.price || 0)}" placeholder="Preço" aria-label="Preço do tamanho ${index + 1}">
+            <button class="icon-btn remove-size" type="button" title="Remover tamanho">×</button>
+          </div>
+        `).join('') || '<div class="empty-state">Nenhum tamanho cadastrado.</div>';
+
+        qsa('.remove-size').forEach((button, index) => button.addEventListener('click', () => {
+          captureSizeEditor();
+          config.sizes.splice(index, 1);
+          renderSizeEditor();
+        }));
+      }
+
+      function captureSizeEditor() {
+        const rows = qsa('[data-size-index]', $('sizeEditor'));
+        if (!rows.length) return;
+        config.sizes = rows.map((row, index) => {
+          const old = config.sizes[index] || {};
+          return {
+            id: old.id || `size-${Date.now()}-${index}`,
+            name: row.querySelector('.size-name').value.trim(),
+            description: row.querySelector('.size-description').value.trim(),
+            price: Number(row.querySelector('.size-price').value || 0)
+          };
+        }).filter(item => item.name);
+      }
+
+      function renderPaymentEditor() {
+        $('paymentEditor').innerHTML = config.payments.map((payment, index) => `
+          <div class="list-row payment" data-payment-index="${index}">
+            <input class="control payment-input" value="${escapeHtml(payment)}" aria-label="Pagamento ${index + 1}">
+            <button class="icon-btn remove-payment" type="button" title="Remover forma de pagamento">×</button>
+          </div>
+        `).join('') || '<div class="empty-state">Nenhuma forma de pagamento cadastrada.</div>';
+
+        qsa('.remove-payment').forEach((button, index) => button.addEventListener('click', () => {
+          capturePaymentEditor();
+          config.payments.splice(index, 1);
+          renderPaymentEditor();
+        }));
+      }
+
+      function capturePaymentEditor() {
+        const inputs = qsa('.payment-input');
+        if (!inputs.length) return;
+        config.payments = inputs.map(input => input.value.trim()).filter(Boolean);
+      }
+
+      function applyConfigEverywhere() {
+        renderBrand();
+        renderFlavorOptions();
+        renderPaymentOptions();
+        if (!config.sizes.some(item => item.id === selectedSizeId)) selectedSizeId = '';
+        renderSizeChoices();
+        updateSummary();
+        saveConfigLocal();
+      }
+
+      async function maybeSyncConfigRemote() {
+        if (!getEndpoint()) return;
+        try {
+          await postToAppsScript({ action: 'saveConfig', config });
+        } catch (error) {
+          console.warn('Configuração salva apenas localmente:', error);
+          showToast('Salvo localmente; sincronização pendente');
+        }
+      }
+
+      function renderConnectionStatus() {
+        const status = $('connectionStatus');
+        if (getEndpoint()) {
+          status.className = 'status-pill on';
+          status.textContent = '● URL configurada';
+        } else {
+          status.className = 'status-pill off';
+          status.textContent = '● Não configurado';
+        }
+      }
+
+      async function loadRemoteConfig() {
+        const endpoint = getEndpoint();
+        if (!endpoint) return;
+        try {
+          const url = new URL(endpoint);
+          url.searchParams.set('action', 'getConfig');
+          const response = await fetch(url.toString(), { method: 'GET' });
+          if (!response.ok) return;
+          const data = await response.json();
+          const remoteConfig = data.config || data;
+          if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.sizes) && Array.isArray(remoteConfig.payments)) {
+            config = { ...config, ...remoteConfig };
+            applyConfigEverywhere();
+          }
+        } catch (error) {
+          console.warn('Usando configuração local:', error);
+        }
+      }
+
+      async function testConnection() {
+        clearMessage($('integrationMessage'));
+        const endpoint = $('appsScriptUrl').value.trim();
+        if (!endpoint) {
+          setMessage($('integrationMessage'), 'error', 'Cole primeiro a URL publicada do Apps Script.');
+          return;
+        }
+
+        try {
+          new URL(endpoint);
+        } catch (_) {
+          setMessage($('integrationMessage'), 'error', 'A URL informada não parece válida.');
+          return;
+        }
+
+        localStorage.setItem(STORAGE_KEYS.endpoint, endpoint);
+        renderConnectionStatus();
+        setMessage($('integrationMessage'), 'info', 'Testando conexão...');
+
+        try {
+          const url = new URL(endpoint);
+          url.searchParams.set('action', 'ping');
+          const response = await fetch(url.toString());
+          if (!response.ok) throw new Error('Falha HTTP');
+          setMessage($('integrationMessage'), 'success', 'Conexão realizada. O endpoint respondeu corretamente.');
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', 'A URL foi salva, mas o navegador não conseguiu validar a resposta. Verifique a implantação do Apps Script e a permissão de acesso.');
+        }
+      }
+
+      function renderLocalOrders() {
+        const container = $('ordersContainer');
+        if (!container) return;
+        const orders = loadJSON(STORAGE_KEYS.orders, []);
+        if (!orders.length) {
+          container.innerHTML = '<div class="empty-state">Ainda não há pedidos salvos localmente.</div>';
+          return;
+        }
+
+        container.innerHTML = `
+          <div class="orders-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data do pedido</th>
+                  <th>Cliente</th>
+                  <th>WhatsApp</th>
+                  <th>Entrega/retirada</th>
+                  <th>Sabor</th>
+                  <th>Tamanho</th>
+                  <th>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${orders.map(order => `
+                  <tr>
+                    <td>${escapeHtml(new Date(order.createdAt).toLocaleString('pt-BR'))}</td>
+                    <td>${escapeHtml(order.customerName)}</td>
+                    <td>${escapeHtml(order.whatsapp)}</td>
+                    <td>${escapeHtml(formatDate(order.date))} ${escapeHtml(order.time || '')}</td>
+                    <td>${escapeHtml(order.flavor)}</td>
+                    <td>${escapeHtml(order.size)}</td>
+                    <td>${escapeHtml(brl(order.price))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      // Eventos principais
+      $('customerTab').addEventListener('click', () => switchView('customer'));
+      $('adminTab').addEventListener('click', () => switchView('admin'));
+      $('orderForm').addEventListener('submit', submitOrder);
+      $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
+      ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+
+      qsa('.admin-nav-btn').forEach(button => {
+        button.addEventListener('click', () => {
+          qsa('.admin-nav-btn').forEach(btn => btn.classList.remove('active'));
+          qsa('.admin-panel').forEach(panel => panel.classList.remove('active'));
+          button.classList.add('active');
+          $(button.dataset.panel).classList.add('active');
+        });
+      });
+
+      $('saveBrandBtn').addEventListener('click', async () => {
+        config.brandName = $('adminBrandName').value.trim() || DEFAULT_CONFIG.brandName;
+        config.heroTitle = $('adminHeroTitle').value.trim() || config.brandName;
+        config.heroSubtitle = $('adminHeroSubtitle').value.trim();
+        config.description = $('adminDescription').value.trim();
+        applyConfigEverywhere();
+        await maybeSyncConfigRemote();
+        showToast('Marca e textos salvos');
+      });
+
+      $('addFlavorBtn').addEventListener('click', () => {
+        captureFlavorEditor();
+        config.flavors.push('Novo sabor');
+        renderFlavorEditor();
+      });
+
+      $('addSizeBtn').addEventListener('click', () => {
+        captureSizeEditor();
+        config.sizes.push({ id: `size-${Date.now()}`, name: 'Novo tamanho', description: 'Descrição do tamanho', price: 0 });
+        renderSizeEditor();
+      });
+
+      $('saveCatalogBtn').addEventListener('click', async () => {
+        captureFlavorEditor();
+        captureSizeEditor();
+        applyConfigEverywhere();
+        await maybeSyncConfigRemote();
+        renderAdminEditors();
+        showToast('Catálogo salvo');
+      });
+
+      $('addPaymentBtn').addEventListener('click', () => {
+        capturePaymentEditor();
+        config.payments.push('Nova forma de pagamento');
+        renderPaymentEditor();
+      });
+
+      $('savePaymentBtn').addEventListener('click', async () => {
+        capturePaymentEditor();
+        applyConfigEverywhere();
+        await maybeSyncConfigRemote();
+        renderAdminEditors();
+        showToast('Pagamentos salvos');
+      });
+
+      $('saveIntegrationBtn').addEventListener('click', () => {
+        const url = $('appsScriptUrl').value.trim();
+        if (url) {
+          try { new URL(url); } catch (_) {
+            setMessage($('integrationMessage'), 'error', 'Digite uma URL válida.');
+            return;
+          }
+          localStorage.setItem(STORAGE_KEYS.endpoint, url);
+          setMessage($('integrationMessage'), 'success', 'URL salva neste navegador.');
+        } else {
+          localStorage.removeItem(STORAGE_KEYS.endpoint);
+          setMessage($('integrationMessage'), 'info', 'Integração removida. O formulário voltou ao modo de demonstração.');
+        }
+        renderConnectionStatus();
+      });
+
+      $('testIntegrationBtn').addEventListener('click', testConnection);
+
+      $('clearLocalOrdersBtn').addEventListener('click', () => {
+        if (!confirm('Deseja apagar todos os pedidos salvos neste navegador?')) return;
+        localStorage.removeItem(STORAGE_KEYS.orders);
+        renderLocalOrders();
+        showToast('Pedidos locais removidos');
+      });
+
+      // Inicialização
+      setMinDate();
+      renderBrand();
+      renderFlavorOptions();
+      renderPaymentOptions();
+      renderSizeChoices();
+      updateSummary();
+      renderAdminEditors();
+
+      if (location.hash === '#admin') switchView('admin');
+      loadRemoteConfig();
+    })();
+  </script>
+</body>
+</html>
