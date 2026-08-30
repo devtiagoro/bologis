@@ -1097,6 +1097,7 @@
       let selectedSizeId = '';
       let isSubmitting = false;
       let isOrdersOpen = false;
+      let configRevision = 0;
 
       const $ = (id) => document.getElementById(id);
       const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -1414,7 +1415,9 @@
       async function apiGet(action) {
         const url = new URL(APPS_SCRIPT_URL);
         url.searchParams.set('action', action);
-        const response = await fetch(url.toString());
+        // Evita que navegador/CDN reaproveite uma resposta antiga de getConfig.
+        url.searchParams.set('_ts', String(Date.now()));
+        const response = await fetch(url.toString(), { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP_${response.status}`);
         const data = await response.json();
         if (!data.ok) throw new Error(data.message || data.error || 'Erro na API');
@@ -1611,8 +1614,26 @@
       }
 
       async function saveConfigRemote() {
-        await apiPost({ action: 'saveConfig', config });
-        await loadRemoteConfig();
+        // Envia um snapshot estável e invalida qualquer leitura iniciada antes deste salvamento.
+        const revision = ++configRevision;
+        const snapshot = JSON.parse(JSON.stringify(config));
+        const result = await apiPost({ action: 'saveConfig', config: snapshot });
+
+        // Se outro salvamento mais novo começou, este retorno não deve sobrescrevê-lo.
+        if (revision !== configRevision) return;
+
+        // O Apps Script atual retorna a configuração persistida. Use essa resposta diretamente
+        // para não fazer um GET que possa trazer conteúdo antigo de cache.
+        if (result.config && Array.isArray(result.config.flavors) && Array.isArray(result.config.sizes) && Array.isArray(result.config.payments)) {
+          config = normalizeConfig(result.config);
+          appState.config = config;
+          applyConfigEverywhere();
+          if (!isPublic) renderAdminEditors();
+        } else {
+          // Compatibilidade com versões do Apps Script que retornem somente { ok: true }.
+          await loadRemoteConfig();
+        }
+
         showToast('Configurações salvas');
       }
 
@@ -1623,11 +1644,18 @@
       }
 
       async function loadRemoteConfig() {
+        const revisionAtStart = configRevision;
         try {
           const data = await apiGet('getConfig');
+
+          // Se houve um salvamento enquanto esta leitura estava em andamento,
+          // ignore a resposta antiga para ela não restaurar configurações anteriores.
+          if (revisionAtStart !== configRevision) return;
+
           const remoteConfig = data.config;
           if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.sizes) && Array.isArray(remoteConfig.payments)) {
-            config = normalizeConfig({ ...config, ...remoteConfig });
+            // Google Sheets é a fonte de verdade. Não mesclar com o estado local antigo.
+            config = normalizeConfig(remoteConfig);
             appState.config = config;
             applyConfigEverywhere();
             if (!isPublic) renderAdminEditors();
