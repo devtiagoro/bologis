@@ -92,32 +92,6 @@
       font-size: 13px;
     }
 
-    .view-switch {
-      display: inline-flex;
-      gap: 6px;
-      padding: 5px;
-      background: rgba(255,255,255,.72);
-      border: 1px solid rgba(231, 217, 207, .9);
-      border-radius: 999px;
-      backdrop-filter: blur(10px);
-    }
-
-    .view-switch button {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      padding: 10px 14px;
-      border-radius: 999px;
-      font-weight: 700;
-      font-size: 13px;
-    }
-
-    .view-switch button.active {
-      background: var(--text);
-      color: white;
-      box-shadow: 0 6px 16px rgba(47,33,26,.14);
-    }
-
     .hidden { display: none !important; }
 
     .order-layout {
@@ -462,6 +436,41 @@
     }
 
     .admin-content { padding: 28px; }
+    .admin-tabs {
+      display: inline-flex;
+      gap: 6px;
+      padding: 5px;
+      margin-bottom: 26px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+    }
+
+    .admin-tabs button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .admin-tabs button.active {
+      background: var(--text);
+      color: white;
+      box-shadow: 0 6px 16px rgba(47,33,26,.14);
+    }
+
+    .admin-edit-layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .admin-edit-layout.hidden { display: none; }
+
     .admin-content h1 {
       font-family: Georgia, "Times New Roman", serif;
       font-size: 34px;
@@ -591,7 +600,7 @@
     @media (max-width: 940px) {
       .order-layout { grid-template-columns: 1fr; }
       .summary-card { position: static; }
-      .admin-layout { grid-template-columns: 1fr; }
+      .admin-layout, .admin-edit-layout { grid-template-columns: 1fr; }
       .admin-nav {
         position: static;
         display: flex;
@@ -605,11 +614,11 @@
     @media (max-width: 660px) {
       .app-shell { width: min(100% - 20px, 1180px); padding-top: 14px; }
       .topbar { align-items: flex-start; flex-direction: column; margin-bottom: 14px; }
-      .view-switch { width: 100%; }
-      .view-switch button { flex: 1; }
       .order-card, .admin-content { padding: 22px 18px; border-radius: 22px; }
       .summary-card { padding: 20px; border-radius: 22px; }
       .form-grid, .choice-grid, .admin-grid { grid-template-columns: 1fr; }
+      .admin-tabs { width: 100%; }
+      .admin-tabs button { flex: 1; }
       .field.full { grid-column: auto; }
       .list-row { grid-template-columns: 1fr; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr auto; }
@@ -629,10 +638,6 @@
         </div>
       </div>
 
-      <div class="view-switch" role="tablist" aria-label="Alternar visualização">
-        <button id="customerTab" class="active" type="button">Página do cliente</button>
-        <button id="adminTab" type="button">Central de gestão</button>
-      </div>
     </header>
 
     <!-- VISÃO DO CLIENTE -->
@@ -762,19 +767,22 @@
 
     <!-- CENTRAL DE GESTÃO -->
     <main id="adminView" class="hidden">
-      <div class="admin-layout">
+      <section class="card admin-content">
+        <h1>Central de gestão</h1>
+        <p>Edite o que aparece no formulário e acompanhe os pedidos recebidos.</p>
+        <div class="admin-tabs" role="tablist" aria-label="Seções da Central">
+          <button id="editAdminTab" class="active" type="button" role="tab" aria-selected="true">Editar</button>
+          <button id="ordersAdminTab" type="button" role="tab" aria-selected="false">Pedidos</button>
+        </div>
+
+        <div id="adminEditView" class="admin-edit-layout">
         <aside class="card admin-nav">
           <h3>Central</h3>
           <button type="button" class="admin-nav-btn active" data-panel="brandPanel">Marca e textos</button>
           <button type="button" class="admin-nav-btn" data-panel="catalogPanel">Sabores e preços</button>
           <button type="button" class="admin-nav-btn" data-panel="paymentPanel">Pagamentos</button>
           <button type="button" class="admin-nav-btn" data-panel="integrationPanel">Google Sheets</button>
-          <button type="button" class="admin-nav-btn" data-panel="ordersPanel">Pedidos locais</button>
         </aside>
-
-        <section class="card admin-content">
-          <h1>Central de gestão</h1>
-          <p>Edite o que aparece no formulário sem mexer no código da página.</p>
 
           <div id="brandPanel" class="admin-panel active">
             <div class="admin-section">
@@ -865,17 +873,19 @@
             </div>
           </div>
 
-          <div id="ordersPanel" class="admin-panel">
-            <div class="admin-section">
-              <h2>Pedidos salvos localmente</h2>
-              <p class="help">Útil para testar o fluxo antes de conectar a planilha.</p>
-              <div id="ordersContainer"></div>
-              <div class="editor-actions">
-                <button id="clearLocalOrdersBtn" class="danger-btn" type="button">Limpar pedidos locais</button>
-              </div>
+        </div>
+
+        <div id="adminOrdersView" class="admin-panel">
+          <div id="ordersPanel" class="admin-section">
+            <h2>Pedidos recebidos</h2>
+            <p class="help">Pedidos locais aparecem aqui. A área está pronta para carregar registros do Google Sheets.</p>
+            <div id="ordersContainer"></div>
+            <div class="editor-actions">
+              <button id="clearLocalOrdersBtn" class="danger-btn" type="button">Limpar pedidos locais</button>
             </div>
           </div>
-        </section>
+        </div>
+      </section>
       </div>
     </main>
   </div>
@@ -913,6 +923,8 @@
         endpoint: 'primeiraFornada.appsScriptUrl.v1'
       };
 
+      const params = new URLSearchParams(window.location.search);
+      const isAdmin = params.get('admin') === '1';
       let config = loadJSON(STORAGE_KEYS.config, DEFAULT_CONFIG);
       let selectedSizeId = '';
       let isSubmitting = false;
@@ -1156,18 +1168,31 @@
         }
       }
 
-      function switchView(view) {
-        const admin = view === 'admin';
-        $('customerView').classList.toggle('hidden', admin);
-        $('adminView').classList.toggle('hidden', !admin);
-        $('customerTab').classList.toggle('active', !admin);
-        $('adminTab').classList.toggle('active', admin);
-        if (admin) {
-          renderAdminEditors();
-          history.replaceState(null, '', '#admin');
-        } else {
-          history.replaceState(null, '', location.pathname + location.search);
-        }
+      function renderPublicOrderForm() {
+        $('customerView').classList.remove('hidden');
+        $('adminView').classList.add('hidden');
+        renderBrand();
+        renderFlavorOptions();
+        renderPaymentOptions();
+        renderSizeChoices();
+        updateSummary();
+      }
+
+      function renderAdmin() {
+        $('customerView').classList.add('hidden');
+        $('adminView').classList.remove('hidden');
+        renderAdminEditors();
+      }
+
+      function switchAdminTab(tab) {
+        const orders = tab === 'orders';
+        $('editAdminTab').classList.toggle('active', !orders);
+        $('ordersAdminTab').classList.toggle('active', orders);
+        $('editAdminTab').setAttribute('aria-selected', String(!orders));
+        $('ordersAdminTab').setAttribute('aria-selected', String(orders));
+        $('adminEditView').classList.toggle('hidden', orders);
+        $('adminOrdersView').classList.toggle('active', orders);
+        if (orders) renderLocalOrders();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
@@ -1381,11 +1406,12 @@
       }
 
       // Eventos principais
-      $('customerTab').addEventListener('click', () => switchView('customer'));
-      $('adminTab').addEventListener('click', () => switchView('admin'));
       $('orderForm').addEventListener('submit', submitOrder);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
       ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+
+      $('editAdminTab').addEventListener('click', () => switchAdminTab('edit'));
+      $('ordersAdminTab').addEventListener('click', () => switchAdminTab('orders'));
 
       qsa('.admin-nav-btn').forEach(button => {
         button.addEventListener('click', () => {
@@ -1466,16 +1492,10 @@
         showToast('Pedidos locais removidos');
       });
 
-      // Inicialização
+      // Inicialização: a URL pública não carrega controles administrativos.
       setMinDate();
-      renderBrand();
-      renderFlavorOptions();
-      renderPaymentOptions();
-      renderSizeChoices();
-      updateSummary();
-      renderAdminEditors();
-
-      if (location.hash === '#admin') switchView('admin');
+      if (isAdmin) renderAdmin();
+      else renderPublicOrderForm();
       loadRemoteConfig();
     })();
   </script>
