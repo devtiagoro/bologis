@@ -468,6 +468,37 @@
     .order-expired { background: #fff8ef; }
     .status-select { min-width: 180px; }
 
+    .initial-loading {
+      width: min(560px, 100%);
+      margin: 60px auto 0;
+      padding: 32px 24px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .initial-loading strong {
+      display: block;
+      color: var(--text);
+      margin-top: 12px;
+      font-size: 16px;
+    }
+
+    .loading-spinner {
+      width: 30px;
+      height: 30px;
+      margin: 0 auto;
+      border: 3px solid var(--accent-soft);
+      border-top-color: var(--accent-strong);
+      border-radius: 50%;
+      animation: loading-spin .75s linear infinite;
+    }
+
+    @keyframes loading-spin { to { transform: rotate(360deg); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .loading-spinner { animation: none; border-top-color: var(--accent-soft); }
+    }
+
     .footer-note {
       text-align: center;
       color: var(--muted);
@@ -732,7 +763,7 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
+    <header id="appTopbar" class="topbar hidden">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">🍰</div>
         <div class="brand-copy">
@@ -743,8 +774,14 @@
 
     </header>
 
+    <div id="initialLoading" class="card initial-loading" role="status" aria-live="polite">
+      <div id="initialLoadingSpinner" class="loading-spinner" aria-hidden="true"></div>
+      <strong id="initialLoadingTitle">Carregando informações...</strong>
+      <span id="initialLoadingText">Só um instante.</span>
+    </div>
+
     <!-- VISÃO DO CLIENTE -->
-    <main id="customerView">
+    <main id="customerView" class="hidden">
       <div id="orderLayout" class="order-layout">
         <section class="card order-card">
           <div class="hero">
@@ -1789,7 +1826,7 @@
 
           // Se houve um salvamento enquanto esta leitura estava em andamento,
           // ignore a resposta antiga para ela não restaurar configurações anteriores.
-          if (revisionAtStart !== configRevision) return;
+          if (revisionAtStart !== configRevision) return false;
 
           const remoteConfig = data.config;
           if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.sizes) && Array.isArray(remoteConfig.payments)) {
@@ -1798,13 +1835,16 @@
             appState.config = config;
             applyConfigEverywhere();
             if (!isPublic) renderAdminEditors();
+            return true;
           }
+          return false;
         } catch (error) {
           console.error('Falha ao carregar configurações:', error);
           const message = isPublic
             ? $('orderMessage')
             : $('integrationMessage');
           setMessage(message, 'error', 'Não foi possível carregar as opções no momento. Tente novamente.');
+          return false;
         }
       }
 
@@ -2043,11 +2083,26 @@
 
       $('testIntegrationBtn').addEventListener('click', testConnection);
 
-      // Inicialização: a Central é o modo padrão; public=1 abre somente o pedido.
-      setMinDate();
-      if (isPublic) renderPublicOrderForm();
-      else renderAdmin();
-      loadRemoteConfig();
+      // Inicialização: carregue primeiro a configuração real para evitar exibir
+      // valores padrão antigos e depois substituí-los na tela.
+      async function initializeApp() {
+        setMinDate();
+        const loaded = await loadRemoteConfig();
+
+        if (!loaded) {
+          $('initialLoadingSpinner').classList.add('hidden');
+          $('initialLoadingTitle').textContent = 'Não foi possível carregar as informações.';
+          $('initialLoadingText').textContent = 'Atualize a página para tentar novamente.';
+          return;
+        }
+
+        $('initialLoading').classList.add('hidden');
+        $('appTopbar').classList.remove('hidden');
+        if (isPublic) renderPublicOrderForm();
+        else renderAdmin();
+      }
+
+      initializeApp();
     })();
   </script>
 </body>
