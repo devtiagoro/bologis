@@ -389,6 +389,79 @@
     .message.error { background: #fff1f1; color: #913838; border: 1px solid #efcece; }
     .message.info { background: #fff8ef; color: #7b5730; border: 1px solid #eedbc4; }
 
+    .availability-notice {
+      display: none;
+      margin: 0 0 24px;
+      padding: 18px;
+      border: 1px solid #eedbc4;
+      border-radius: 16px;
+      background: #fff8ef;
+      color: #7b5730;
+      line-height: 1.55;
+    }
+
+    .availability-notice.show { display: block; }
+    .availability-notice strong { display: block; color: var(--text); margin-bottom: 5px; }
+
+    .delivery-box {
+      padding: 15px 16px;
+      border: 1px solid var(--accent-soft);
+      border-radius: 14px;
+      background: #fff9f5;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .delivery-box strong { display: block; color: var(--text); margin-top: 3px; }
+
+    .payment-preview {
+      display: none;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .payment-preview.show { display: block; }
+    .payment-preview h4 { margin: 0 0 8px; font-size: 16px; }
+    .payment-preview p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .pix-qr { display: grid; place-items: center; min-height: 180px; margin: 12px 0; }
+    .pix-qr canvas, .pix-qr img { max-width: 100%; border-radius: 8px; }
+    .payment-payload { word-break: break-all; font-size: 12px; color: var(--muted); }
+    .payment-preview .ghost-btn { width: 100%; }
+
+    .order-success {
+      display: none;
+      padding: clamp(24px, 5vw, 46px);
+    }
+
+    .order-success.show { display: block; }
+    .order-success h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(32px, 5vw, 48px); margin-bottom: 8px; }
+    .order-success > p { color: var(--muted); line-height: 1.55; }
+    .success-number { display: inline-block; margin: 12px 0 24px; padding: 10px 13px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-strong); font-weight: 900; }
+    .success-summary { display: grid; gap: 0; margin: 20px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .success-summary .summary-row { padding: 13px 0; }
+    .success-status { color: var(--accent-strong); font-weight: 900; }
+    .success-note { padding: 16px; border-radius: 14px; background: #fff8ef; color: #7b5730; line-height: 1.55; }
+    .success-payment { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+    .success-payment .primary-btn, .success-payment .ghost-btn { width: 100%; }
+
+    .admin-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .admin-toggle-row:last-child { border-bottom: 0; }
+    .admin-toggle-row label { font-weight: 800; }
+    .admin-toggle-row small { display: block; margin-top: 4px; color: var(--muted); font-weight: 400; }
+    .admin-toggle-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent-strong); }
+    .deadline-note { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 16px; }
+    .order-expired { background: #fff8ef; }
+    .status-select { min-width: 180px; }
+
     .footer-note {
       text-align: center;
       color: var(--muted);
@@ -642,6 +715,7 @@
       .form-grid, .choice-grid, .admin-grid { grid-template-columns: 1fr; }
       .admin-tabs { width: 100%; }
       .admin-tabs button { flex: 1; }
+      .order-success .primary-btn, .order-success .ghost-btn, .order-success .success-payment a { width: 88vw; max-width: 360px; margin-left: auto; margin-right: auto; }
       .field.full { grid-column: auto; }
       .list-row { grid-template-columns: 1fr; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr auto; }
@@ -665,13 +739,14 @@
 
     <!-- VISÃO DO CLIENTE -->
     <main id="customerView">
-      <div class="order-layout">
+      <div id="orderLayout" class="order-layout">
         <section class="card order-card">
           <div class="hero">
             <div class="eyebrow">Produção artesanal · encomendas limitadas</div>
             <h1 id="heroTitle">Primeira Fornada 🍰</h1>
             <p class="lead" id="heroSubtitle">Estamos começando uma nova fase por aqui. 💛</p>
             <p class="description" id="heroDescription">Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seu sabor, tamanho e a melhor forma de pagamento.</p>
+            <div id="availabilityNotice" class="availability-notice"><strong>Pedidos encerrados por enquanto 🍰</strong>Recebemos pedidos de segunda a quinta. As entregas acontecem aos domingos.<br><br>O formulário estará disponível novamente na segunda-feira.</div>
           </div>
 
           <form id="orderForm" novalidate>
@@ -695,9 +770,9 @@
                 </div>
 
                 <div class="field">
-                  <label for="orderDate">Para qual dia?</label>
-                  <input class="control" id="orderDate" name="orderDate" type="date" required />
-                  <small>O pedido ainda ficará sujeito à confirmação de disponibilidade.</small>
+                  <label>Entrega desta fornada</label>
+                  <div id="deliveryDateBox" class="delivery-box">Calculando a próxima entrega...</div>
+                  <input id="orderDate" name="orderDate" type="hidden" required />
                 </div>
 
                 <div class="field">
@@ -779,11 +854,31 @@
             <div style="font-size:28px" aria-hidden="true">🤎</div>
           </div>
 
+          <div class="deadline-note">Seu pedido será registrado como aguardando pagamento. A reserva só será confirmada após a confirmação do pagamento até quinta-feira às 23h59.</div>
+
           <button id="submitOrderBtn" class="primary-btn" type="submit" form="orderForm">Enviar encomenda</button>
           <div class="secure-note"><span>🔒</span><span>Seus dados serão usados apenas para registrar e confirmar esta encomenda.</span></div>
           <div id="orderMessage" class="message"></div>
         </aside>
       </div>
+
+      <section id="orderSuccessView" class="card order-success" aria-live="polite">
+        <h1>Pedido recebido 🍰</h1>
+        <p>Seu pedido foi registrado. A confirmação da encomenda será realizada após a conferência do pagamento.</p>
+        <div id="successOrderNumber" class="success-number"></div>
+        <div class="success-summary">
+          <div class="summary-row"><span>Cliente</span><strong id="successCustomer">—</strong></div>
+          <div class="summary-row"><span>WhatsApp</span><strong id="successWhatsapp">—</strong></div>
+          <div class="summary-row"><span>Sabor</span><strong id="successFlavor">—</strong></div>
+          <div class="summary-row"><span>Tamanho</span><strong id="successSize">—</strong></div>
+          <div class="summary-row"><span>Valor</span><strong id="successPrice">—</strong></div>
+          <div class="summary-row"><span>Entrega</span><strong id="successDelivery">—</strong></div>
+          <div class="summary-row"><span>Forma de pagamento</span><strong id="successPayment">—</strong></div>
+          <div class="summary-row"><span>Status</span><strong class="success-status">Aguardando pagamento</strong></div>
+        </div>
+        <div class="success-note">Para garantir sua encomenda desta fornada, o pagamento deverá ser confirmado até quinta-feira às 23h59.</div>
+        <div id="successPaymentDetails" class="success-payment"></div>
+      </section>
 
       <div class="footer-note">Feito com carinho, do forno para a sua mesa. ✨</div>
     </main>
@@ -798,6 +893,7 @@
           </div>
           <div class="admin-heading-actions">
             <button id="copyPublicLinkBtn" class="ghost-btn" type="button">Copiar link público</button>
+            <button id="openSpreadsheetBtn" class="ghost-btn" type="button">Abrir planilha de pedidos</button>
           </div>
         </div>
         <div class="admin-tabs" role="tablist" aria-label="Seções da Central">
@@ -811,6 +907,7 @@
           <button type="button" class="admin-nav-btn active" data-panel="brandPanel">Marca e textos</button>
           <button type="button" class="admin-nav-btn" data-panel="catalogPanel">Sabores e preços</button>
           <button type="button" class="admin-nav-btn" data-panel="paymentPanel">Pagamentos</button>
+          <button type="button" class="admin-nav-btn" data-panel="availabilityPanel">Disponibilidade</button>
           <button type="button" class="admin-nav-btn" data-panel="integrationPanel">Google Sheets</button>
         </aside>
 
@@ -875,6 +972,33 @@
             </div>
           </div>
 
+          <div id="availabilityPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Disponibilidade</h2>
+              <p class="help">Controle quando a Primeira Fornada aceita novos pedidos. As entregas acontecem aos domingos.</p>
+              <div class="admin-toggle-row">
+                <div><label for="availabilityEnabled">Receber pedidos</label><small>Desative para fechar o formulário em qualquer dia.</small></div>
+                <input id="availabilityEnabled" type="checkbox" />
+              </div>
+              <div id="availabilityDays"></div>
+              <div class="admin-grid" style="margin-top:16px">
+                <div class="field">
+                  <label for="deliveryDaySelect">Dia padrão de entrega</label>
+                  <select class="control" id="deliveryDaySelect"></select>
+                </div>
+                <div class="field">
+                  <label for="paymentDeadlineDaySelect">Prazo de pagamento</label>
+                  <select class="control" id="paymentDeadlineDaySelect"></select>
+                </div>
+                <div class="field">
+                  <label for="paymentDeadlineTime">Horário limite</label>
+                  <input class="control" id="paymentDeadlineTime" type="time" step="1" />
+                </div>
+              </div>
+              <div class="editor-actions"><button id="saveAvailabilityBtn" class="secondary-btn" type="button">Salvar disponibilidade</button></div>
+            </div>
+          </div>
+
           <div id="integrationPanel" class="admin-panel">
             <div class="admin-section">
               <h2>Conexão com Google Sheets</h2>
@@ -886,16 +1010,23 @@
                 <small>A URL fica salva neste navegador. Em produção, a configuração pode ser carregada do próprio Apps Script.</small>
               </div>
 
+              <div class="field full" style="margin-top:16px">
+                <label for="spreadsheetUrl">URL da planilha de pedidos</label>
+                <input class="control" id="spreadsheetUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/SEU_ID" />
+                <small>Esse link será aberto pelo botão “Abrir planilha de pedidos”.</small>
+              </div>
+
               <div style="margin-top:16px" class="connection-box">
                 <strong>Como o HTML está preparado:</strong><br>
                 • <code>POST</code> com <code>action=createOrder</code> registra pedidos.<br>
                 • <code>GET ?action=getConfig</code> pode trazer sabores, preços e pagamentos.<br>
                 • <code>POST</code> com <code>action=saveConfig</code> pode persistir a central na planilha.<br><br>
-                Sem URL configurada, o formulário continua funcionando em modo de demonstração e salva pedidos apenas neste navegador.
+                A aplicação usa a URL do Apps Script definida no código como fonte de dados da planilha.
               </div>
 
               <div class="editor-actions">
                 <button id="saveIntegrationBtn" class="secondary-btn" type="button">Salvar URL</button>
+                <button id="saveSpreadsheetBtn" class="ghost-btn" type="button">Salvar URL da planilha</button>
                 <button id="testIntegrationBtn" class="ghost-btn" type="button">Testar conexão</button>
                 <span id="connectionStatus" class="status-pill off">● Não configurado</span>
               </div>
@@ -908,11 +1039,9 @@
         <div id="adminOrdersView" class="admin-panel">
           <div id="ordersPanel" class="admin-section">
             <h2>Pedidos recebidos</h2>
-            <p class="help">Pedidos locais aparecem aqui. A área está pronta para carregar registros do Google Sheets.</p>
+            <p class="help">Pedidos recebidos do Google Sheets. Os mais recentes aparecem primeiro.</p>
+            <div id="ordersMessage" class="message"></div>
             <div id="ordersContainer"></div>
-            <div class="editor-actions">
-              <button id="clearLocalOrdersBtn" class="danger-btn" type="button">Limpar pedidos locais</button>
-            </div>
           </div>
         </div>
       </section>
@@ -921,6 +1050,7 @@
 
   <div id="toast" class="toast" role="status"></div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
     (() => {
       'use strict';
@@ -943,44 +1073,33 @@
           { id: 'g', name: 'Grande', description: 'Serve aproximadamente 25 pessoas', price: 179 },
           { id: 'gg', name: 'Festa', description: 'Serve aproximadamente 35 pessoas', price: 239 }
         ],
-        payments: ['PIX', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro']
+        payments: [
+          { id: 'pix', name: 'PIX', type: 'pix', description: 'Pagamento via PIX', active: true, paymentLink: '' },
+          { id: 'card', name: 'Cartão', type: 'card', description: 'Crédito ou débito', active: true, paymentLink: '' }
+        ],
+        availability: {
+          enabled: true,
+          days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: false, saturday: false, sunday: false },
+          deliveryDay: 'sunday',
+          paymentDeadlineDay: 'thursday',
+          paymentDeadlineTime: '23:59:59'
+        },
+        spreadsheetUrl: ''
       };
 
-      const STORAGE_KEYS = {
-        config: 'primeiraFornada.config.v1',
-        orders: 'primeiraFornada.orders.v1',
-        endpoint: 'primeiraFornada.appsScriptUrl.v1'
-      };
-
+      const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbycxiYuUR0osloFwqWONXd13AhDY6_3HyS-n9mq0jms4eJhfa7gnBppfe-kMf2Y6Hlp/exec';
+      const ORDERS_SPREADSHEET_URL = '';
+      const SPREADSHEET_STORAGE_KEY = 'primeiraFornada.spreadsheetUrl.v1';
       const params = new URLSearchParams(window.location.search);
       const isPublic = params.get('public') === '1';
-      let config = loadJSON(STORAGE_KEYS.config, DEFAULT_CONFIG);
+      let config = normalizeConfig(DEFAULT_CONFIG);
+      const appState = { config, orders: [] };
       let selectedSizeId = '';
       let isSubmitting = false;
+      let isOrdersOpen = false;
 
       const $ = (id) => document.getElementById(id);
       const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
-
-      function clone(value) {
-        return JSON.parse(JSON.stringify(value));
-      }
-
-      function loadJSON(key, fallback) {
-        try {
-          const raw = localStorage.getItem(key);
-          return raw ? JSON.parse(raw) : clone(fallback);
-        } catch (_) {
-          return clone(fallback);
-        }
-      }
-
-      function saveConfigLocal() {
-        localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(config));
-      }
-
-      function getEndpoint() {
-        return (localStorage.getItem(STORAGE_KEYS.endpoint) || '').trim();
-      }
 
       function brl(value) {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
@@ -1016,6 +1135,10 @@
         return `${d}/${m}/${y}`;
       }
 
+      function getSpreadsheetUrl() {
+        return (config.spreadsheetUrl || localStorage.getItem(SPREADSHEET_STORAGE_KEY) || ORDERS_SPREADSHEET_URL || '').trim();
+      }
+
       function showToast(message) {
         const toast = $('toast');
         toast.textContent = message;
@@ -1032,6 +1155,62 @@
       function clearMessage(element) {
         element.className = 'message';
         element.textContent = '';
+      }
+
+      const WEEK_DAYS = [
+        ['monday', 'Segunda-feira'], ['tuesday', 'Terça-feira'], ['wednesday', 'Quarta-feira'],
+        ['thursday', 'Quinta-feira'], ['friday', 'Sexta-feira'], ['saturday', 'Sábado'], ['sunday', 'Domingo']
+      ];
+
+      function normalizeConfig(value) {
+        const next = { ...DEFAULT_CONFIG, ...(value || {}) };
+        next.availability = { ...DEFAULT_CONFIG.availability, ...(value?.availability || {}) };
+        next.availability.days = { ...DEFAULT_CONFIG.availability.days, ...(value?.availability?.days || {}) };
+        const normalizedPayments = [];
+        (value?.payments || DEFAULT_CONFIG.payments).forEach((payment, index) => {
+          const item = typeof payment === 'string'
+            ? { id: payment.toLowerCase().includes('pix') ? 'pix' : 'card', name: payment.toLowerCase().includes('pix') ? 'PIX' : 'Cartão', type: payment.toLowerCase().includes('pix') ? 'pix' : 'card', description: payment.toLowerCase().includes('pix') ? 'Pagamento via PIX' : 'Crédito ou débito', active: true, paymentLink: '' }
+            : { active: true, paymentLink: '', description: payment.type === 'pix' ? 'Pagamento via PIX' : 'Crédito ou débito', ...payment };
+          item.id = item.type === 'pix' ? 'pix' : 'card';
+          item.name = item.type === 'pix' ? (item.name || 'PIX') : 'Cartão';
+          if (!normalizedPayments.some(existing => existing.id === item.id)) normalizedPayments.push(item);
+        });
+        next.payments = normalizedPayments;
+        return next;
+      }
+
+      function currentDayKey(date = new Date()) {
+        return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][date.getDay()];
+      }
+
+      function isOrdersOpenToday(date = new Date()) {
+        return config.availability?.enabled !== false && config.availability?.days?.[currentDayKey(date)] === true;
+      }
+
+      function nextDeliveryDate(from = new Date()) {
+        const target = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(config.availability?.deliveryDay || 'sunday');
+        const date = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+        let distance = (target - date.getDay() + 7) % 7;
+        if (distance === 0) distance = 7;
+        date.setDate(date.getDate() + distance);
+        return date;
+      }
+
+      function formatLongDate(date) {
+        const value = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
+        return value.charAt(0).toUpperCase() + value.slice(1);
+      }
+
+      function isPaymentDeadlineExpired(order) {
+        if (order.status !== 'Aguardando pagamento') return false;
+        const now = new Date();
+        const createdAt = order.createdAt ? new Date(order.createdAt) : now;
+        const deadlineDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(config.availability.paymentDeadlineDay || 'thursday');
+        const deadline = new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate());
+        deadline.setDate(deadline.getDate() + ((deadlineDay - deadline.getDay() + 7) % 7));
+        const [hour, minute, second] = (config.availability.paymentDeadlineTime || '23:59:59').split(':').map(Number);
+        deadline.setHours(hour || 0, minute || 0, second || 0, 0);
+        return now > deadline;
       }
 
       function getPublicUrl() {
@@ -1083,8 +1262,9 @@
         const select = $('paymentSelect');
         const current = select.value;
         select.innerHTML = '<option value="">Selecione a forma de pagamento</option>' +
-          config.payments.map(payment => `<option value="${escapeHtml(payment)}">${escapeHtml(payment)}</option>`).join('');
-        if (config.payments.includes(current)) select.value = current;
+          config.payments.filter(payment => payment.active !== false).map(payment => `<option value="${escapeHtml(payment.id)}">${escapeHtml(payment.name)}</option>`).join('');
+        if (config.payments.some(payment => payment.id === current)) select.value = current;
+        updatePaymentPreview();
       }
 
       function renderSizeChoices() {
@@ -1114,8 +1294,78 @@
         $('summaryFlavor').textContent = $('flavorSelect').value || '—';
         $('summarySize').textContent = size ? size.name : '—';
         $('summaryDate').textContent = formatDate($('orderDate').value);
-        $('summaryPayment').textContent = $('paymentSelect').value || '—';
+        const payment = config.payments.find(item => item.id === $('paymentSelect').value);
+        $('summaryPayment').textContent = payment?.name || '—';
         $('summaryTotal').textContent = brl(size?.price || 0);
+        updatePaymentPreview();
+      }
+
+      function updatePaymentPreview() {
+        return;
+      }
+
+      function renderPaymentDetails(container, payment) {
+        if (!payment || !payment.paymentLink) {
+          container.innerHTML = '<p>Os dados de pagamento ainda não foram configurados.</p>';
+          return;
+        }
+        const isPix = payment.type === 'pix';
+        container.innerHTML = isPix
+          ? `<h4>Pagamento via PIX</h4><p>Use o QR Code ou copie o código abaixo. O pedido ficará aguardando pagamento.</p><div id="pixQr" class="pix-qr"></div><div class="payment-payload">${escapeHtml(payment.paymentLink)}</div><button id="copyPixBtn" class="ghost-btn" type="button">Copiar PIX</button>`
+          : `<h4>Pagamento com cartão</h4><p>${escapeHtml(payment.description || 'Crédito ou débito')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(payment.paymentLink)}" target="_blank" rel="noopener">Pagar com cartão</a><div class="payment-payload" style="margin-top:10px">${escapeHtml(payment.paymentLink)}</div><button id="copyCardBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
+
+        if (isPix && window.QRCode) new QRCode($('pixQr'), { text: payment.paymentLink, width: 180, height: 180, colorDark: '#2f211a', colorLight: '#ffffff' });
+        else if (isPix) $('pixQr').textContent = 'Não foi possível gerar o QR Code. Copie o PIX abaixo.';
+        if (isPix) $('copyPixBtn').addEventListener('click', () => copyText(payment.paymentLink, 'PIX copiado'));
+        else $('copyCardBtn').addEventListener('click', () => copyText(payment.paymentLink, 'Link copiado'));
+      }
+
+      function renderOrderSuccess(order, orderNumber) {
+        const size = config.sizes.find(item => item.id === order.sizeId);
+        const payment = config.payments.find(item => item.id === $('paymentSelect').value);
+        $('orderLayout').classList.add('hidden');
+        $('orderSuccessView').classList.add('show');
+        $('successOrderNumber').textContent = `Nº do pedido: ${orderNumber || 'aguardando identificação'}`;
+        $('successCustomer').textContent = order.customerName;
+        $('successWhatsapp').textContent = order.whatsapp;
+        $('successFlavor').textContent = order.flavor;
+        $('successSize').textContent = size?.name || '—';
+        $('successPrice').textContent = size ? brl(size.price) : '—';
+        $('successDelivery').textContent = formatDate(order.date);
+        $('successPayment').textContent = payment?.name || order.payment || '—';
+        const details = $('successPaymentDetails');
+        details.innerHTML = `<h3>Dados para pagamento</h3>`;
+        renderPaymentDetails(details, payment);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+
+      async function copyText(value, feedback) {
+        try { await navigator.clipboard.writeText(value); }
+        catch (_) {
+          const helper = document.createElement('textarea');
+          helper.value = value; helper.style.position = 'fixed'; helper.style.opacity = '0';
+          document.body.appendChild(helper); helper.select(); document.execCommand('copy'); helper.remove();
+        }
+        showToast(feedback);
+      }
+
+      function renderAvailabilityEditor() {
+        const availability = config.availability;
+        $('availabilityEnabled').checked = availability.enabled !== false;
+        $('availabilityDays').innerHTML = WEEK_DAYS.map(([key, label]) => `<div class="admin-toggle-row"><label for="day-${key}">${label}<small>Pedidos ${availability.days[key] ? 'abertos' : 'fechados'}</small></label><input id="day-${key}" type="checkbox" data-availability-day="${key}" ${availability.days[key] ? 'checked' : ''}></div>`).join('');
+        $('deliveryDaySelect').innerHTML = WEEK_DAYS.map(([key, label]) => `<option value="${key}" ${availability.deliveryDay === key ? 'selected' : ''}>${label}</option>`).join('');
+        $('paymentDeadlineDaySelect').innerHTML = WEEK_DAYS.map(([key, label]) => `<option value="${key}" ${availability.paymentDeadlineDay === key ? 'selected' : ''}>${label}</option>`).join('');
+        $('paymentDeadlineTime').value = availability.paymentDeadlineTime || '23:59:59';
+      }
+
+      function applyPublicAvailability() {
+        const open = isOrdersOpenToday();
+        const delivery = nextDeliveryDate();
+        $('deliveryDateBox').innerHTML = `Entrega:<strong>${formatLongDate(delivery)}</strong>`;
+        $('availabilityNotice').classList.toggle('show', !open);
+        qsa('#orderForm input, #orderForm select, #orderForm textarea, #submitOrderBtn').forEach(element => element.disabled = !open);
+        $('orderDate').value = toISODateLocal(delivery);
+        if (!open) $('submitOrderBtn').disabled = true;
       }
 
       function setMinDate() {
@@ -1133,6 +1383,7 @@
         const payment = $('paymentSelect').value;
         const size = config.sizes.find(item => item.id === selectedSizeId);
 
+        if (!isOrdersOpenToday()) return 'Os pedidos estão encerrados no momento.';
         if (!name) return 'Informe seu nome.';
         if (phoneDigits.length < 10) return 'Informe um WhatsApp válido.';
         if (!date) return 'Escolha a data desejada.';
@@ -1145,48 +1396,45 @@
 
       function makeOrderPayload() {
         const size = config.sizes.find(item => item.id === selectedSizeId);
+        const payment = config.payments.find(item => item.id === $('paymentSelect').value);
         return {
           action: 'createOrder',
-          createdAt: new Date().toISOString(),
           customerName: $('customerName').value.trim(),
           whatsapp: $('customerPhone').value.trim(),
           date: $('orderDate').value,
           time: $('pickupTime').value,
           flavor: $('flavorSelect').value,
           sizeId: size?.id || '',
-          size: size?.name || '',
-          servings: size?.description || '',
-          price: Number(size?.price || 0),
-          payment: $('paymentSelect').value,
+          payment: payment?.name || '',
           notes: $('notes').value.trim(),
-          source: 'web-order-form'
+          source: 'site'
         };
       }
 
-      async function postToAppsScript(payload) {
-        const endpoint = getEndpoint();
-        if (!endpoint) throw new Error('ENDPOINT_NOT_CONFIGURED');
+      async function apiGet(action) {
+        const url = new URL(APPS_SCRIPT_URL);
+        url.searchParams.set('action', action);
+        const response = await fetch(url.toString());
+        if (!response.ok) throw new Error(`HTTP_${response.status}`);
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.message || data.error || 'Erro na API');
+        return data;
+      }
 
-        const response = await fetch(endpoint, {
+      async function apiPost(payload) {
+        const response = await fetch(APPS_SCRIPT_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(payload)
         });
-
         if (!response.ok) throw new Error(`HTTP_${response.status}`);
-        const text = await response.text();
-        try { return JSON.parse(text); } catch (_) { return { ok: true, raw: text }; }
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.message || data.error || 'Erro na API');
+        return data;
       }
 
       function updateOrderStatus(orderId, status) {
-        return postToAppsScript({ action: 'updateOrderStatus', orderId, status });
-      }
-
-      function saveOrderLocal(order) {
-        const orders = loadJSON(STORAGE_KEYS.orders, []);
-        orders.unshift({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...order });
-        localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(orders.slice(0, 100)));
-        renderLocalOrders();
+        return apiPost({ action: 'updateOrderStatus', orderId, status });
       }
 
       async function submitOrder(event) {
@@ -1206,23 +1454,16 @@
         $('submitOrderBtn').textContent = 'Enviando...';
 
         try {
-          if (getEndpoint()) {
-            const result = await postToAppsScript(order);
-            if (result && result.ok === false) throw new Error(result.message || 'Erro ao registrar pedido.');
-            setMessage($('orderMessage'), 'success', 'Pedido enviado! Agora é só aguardar a confirmação da encomenda pelo WhatsApp.');
-          } else {
-            saveOrderLocal(order);
-            setMessage($('orderMessage'), 'info', 'Pedido salvo em modo de demonstração neste navegador. Conecte o Google Apps Script na Central de gestão para enviar à planilha.');
-          }
-
-          $('orderForm').reset();
-          selectedSizeId = '';
-          renderSizeChoices();
-          updateSummary();
+          const result = await apiPost(order);
+          const orderNumber = result.orderId || result.id;
+          const confirmation = orderNumber
+            ? `Pedido enviado com sucesso! Número: ${orderNumber}. Aguarde a confirmação pelo WhatsApp.`
+            : 'Pedido enviado com sucesso! Aguarde a confirmação pelo WhatsApp.';
+          setMessage($('orderMessage'), 'success', confirmation);
+          renderOrderSuccess(order, orderNumber);
         } catch (error) {
           console.error(error);
-          saveOrderLocal(order);
-          setMessage($('orderMessage'), 'error', 'Não foi possível falar com a planilha agora. O pedido ficou salvo localmente neste navegador para não perder as informações.');
+          setMessage($('orderMessage'), 'error', error.message || 'Não foi possível enviar o pedido. Tente novamente.');
         } finally {
           isSubmitting = false;
           $('submitOrderBtn').disabled = false;
@@ -1238,6 +1479,7 @@
         renderPaymentOptions();
         renderSizeChoices();
         updateSummary();
+        applyPublicAvailability();
       }
 
       function renderAdmin() {
@@ -1248,6 +1490,7 @@
 
       function switchAdminTab(tab) {
         const orders = tab === 'orders';
+        isOrdersOpen = orders;
         $('editAdminTab').classList.toggle('active', !orders);
         $('ordersAdminTab').classList.toggle('active', orders);
         $('editAdminTab').setAttribute('aria-selected', String(!orders));
@@ -1263,12 +1506,15 @@
         $('adminHeroTitle').value = config.heroTitle;
         $('adminHeroSubtitle').value = config.heroSubtitle;
         $('adminDescription').value = config.description;
-        $('appsScriptUrl').value = getEndpoint();
+        $('appsScriptUrl').value = APPS_SCRIPT_URL;
+        $('spreadsheetUrl').value = getSpreadsheetUrl();
         renderFlavorEditor();
         renderSizeEditor();
         renderPaymentEditor();
+        renderAvailabilityEditor();
         renderConnectionStatus();
-        renderLocalOrders();
+        renderLocalOrders([]);
+        if (isOrdersOpen) loadAdminOrders();
       }
 
       function renderFlavorEditor() {
@@ -1328,7 +1574,12 @@
       function renderPaymentEditor() {
         $('paymentEditor').innerHTML = config.payments.map((payment, index) => `
           <div class="list-row payment" data-payment-index="${index}">
-            <input class="control payment-input" value="${escapeHtml(payment)}" aria-label="Pagamento ${index + 1}">
+            <div style="display:grid;gap:8px">
+              <input class="control payment-name" value="${escapeHtml(payment.name)}" placeholder="Nome da forma" aria-label="Nome do pagamento ${index + 1}">
+              <input class="control payment-description" value="${escapeHtml(payment.description || '')}" placeholder="Descrição (ex.: Crédito ou débito)" aria-label="Descrição do pagamento ${index + 1}">
+              <input class="control payment-link" value="${escapeHtml(payment.paymentLink || '')}" placeholder="Payload PIX ou link de pagamento" aria-label="Link do pagamento ${index + 1}">
+            </div>
+            <label style="display:flex;align-items:center;gap:7px;font-size:13px"><input class="payment-active" type="checkbox" ${payment.active !== false ? 'checked' : ''}> Ativo</label>
             <button class="icon-btn remove-payment" type="button" title="Remover forma de pagamento">×</button>
           </div>
         `).join('') || '<div class="empty-state">Nenhuma forma de pagamento cadastrada.</div>';
@@ -1341,9 +1592,12 @@
       }
 
       function capturePaymentEditor() {
-        const inputs = qsa('.payment-input');
-        if (!inputs.length) return;
-        config.payments = inputs.map(input => input.value.trim()).filter(Boolean);
+        const rows = qsa('[data-payment-index]', $('paymentEditor'));
+        if (!rows.length) return;
+        config.payments = rows.map((row, index) => {
+          const old = config.payments[index] || {};
+          return { id: old.id || `payment-${index}`, type: old.type || (index === 0 ? 'pix' : 'card'), name: row.querySelector('.payment-name').value.trim(), description: row.querySelector('.payment-description').value.trim(), paymentLink: row.querySelector('.payment-link').value.trim(), active: row.querySelector('.payment-active').checked };
+        }).filter(item => item.name);
       }
 
       function applyConfigEverywhere() {
@@ -1353,46 +1607,37 @@
         if (!config.sizes.some(item => item.id === selectedSizeId)) selectedSizeId = '';
         renderSizeChoices();
         updateSummary();
-        saveConfigLocal();
+        if (isPublic) applyPublicAvailability();
       }
 
-      async function maybeSyncConfigRemote() {
-        if (!getEndpoint()) return;
-        try {
-          await postToAppsScript({ action: 'saveConfig', config });
-        } catch (error) {
-          console.warn('Configuração salva apenas localmente:', error);
-          showToast('Salvo localmente; sincronização pendente');
-        }
+      async function saveConfigRemote() {
+        await apiPost({ action: 'saveConfig', config });
+        await loadRemoteConfig();
+        showToast('Configurações salvas');
       }
 
       function renderConnectionStatus() {
         const status = $('connectionStatus');
-        if (getEndpoint()) {
-          status.className = 'status-pill on';
-          status.textContent = '● URL configurada';
-        } else {
-          status.className = 'status-pill off';
-          status.textContent = '● Não configurado';
-        }
+        status.className = 'status-pill on';
+        status.textContent = '● URL configurada';
       }
 
       async function loadRemoteConfig() {
-        const endpoint = getEndpoint();
-        if (!endpoint) return;
         try {
-          const url = new URL(endpoint);
-          url.searchParams.set('action', 'getConfig');
-          const response = await fetch(url.toString(), { method: 'GET' });
-          if (!response.ok) return;
-          const data = await response.json();
-          const remoteConfig = data.config || data;
+          const data = await apiGet('getConfig');
+          const remoteConfig = data.config;
           if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.sizes) && Array.isArray(remoteConfig.payments)) {
-            config = { ...config, ...remoteConfig };
+            config = normalizeConfig({ ...config, ...remoteConfig });
+            appState.config = config;
             applyConfigEverywhere();
+            if (!isPublic) renderAdminEditors();
           }
         } catch (error) {
-          console.warn('Usando configuração local:', error);
+          console.error('Falha ao carregar configurações:', error);
+          const message = isPublic
+            ? $('orderMessage')
+            : $('integrationMessage');
+          setMessage(message, 'error', 'Não foi possível carregar as opções no momento. Tente novamente.');
         }
       }
 
@@ -1411,37 +1656,34 @@
           return;
         }
 
-        localStorage.setItem(STORAGE_KEYS.endpoint, endpoint);
         renderConnectionStatus();
         setMessage($('integrationMessage'), 'info', 'Testando conexão...');
 
         try {
-          const url = new URL(endpoint);
-          url.searchParams.set('action', 'ping');
-          const response = await fetch(url.toString());
-          if (!response.ok) throw new Error('Falha HTTP');
+          await apiGet('ping');
           setMessage($('integrationMessage'), 'success', 'Conexão realizada. O endpoint respondeu corretamente.');
         } catch (error) {
-          setMessage($('integrationMessage'), 'error', 'A URL foi salva, mas o navegador não conseguiu validar a resposta. Verifique a implantação do Apps Script e a permissão de acesso.');
+          setMessage($('integrationMessage'), 'error', 'O navegador não conseguiu validar a resposta. Verifique a implantação do Apps Script e a permissão de acesso.');
         }
       }
 
       async function loadAdminOrders() {
         try {
-          const result = await postToAppsScript({ action: 'getOrders' });
+          const result = await apiGet('getOrders');
           const orders = Array.isArray(result) ? result : (result.orders || []);
-          renderLocalOrders(orders);
+          appState.orders = orders;
+          renderLocalOrders(orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
         } catch (error) {
-          renderLocalOrders();
-          setMessage($('integrationMessage'), 'error', 'Não foi possível carregar os pedidos da planilha. Exibindo os pedidos locais deste navegador.');
+          renderLocalOrders([]);
+          setMessage($('ordersMessage'), 'error', `Não foi possível carregar os pedidos: ${error.message}`);
         }
       }
 
-      function renderLocalOrders(orders = loadJSON(STORAGE_KEYS.orders, [])) {
+      function renderLocalOrders(orders = []) {
         const container = $('ordersContainer');
         if (!container) return;
         if (!orders.length) {
-          container.innerHTML = '<div class="empty-state">Ainda não há pedidos salvos localmente.</div>';
+          container.innerHTML = '<div class="empty-state">Ainda não há pedidos recebidos.</div>';
           return;
         }
 
@@ -1457,11 +1699,12 @@
                   <th>Sabor</th>
                   <th>Tamanho</th>
                   <th>Valor</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 ${orders.map(order => `
-                  <tr>
+                  <tr class="${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
                     <td>${escapeHtml(new Date(order.createdAt).toLocaleString('pt-BR'))}</td>
                     <td>${escapeHtml(order.customerName)}</td>
                     <td>${escapeHtml(order.whatsapp)}</td>
@@ -1469,12 +1712,30 @@
                     <td>${escapeHtml(order.flavor)}</td>
                     <td>${escapeHtml(order.size)}</td>
                     <td>${escapeHtml(brl(order.price))}</td>
+                    <td>
+                      <select class="control order-status" data-order-id="${escapeHtml(order.id || '')}">
+                        ${['Aguardando pagamento', 'Novo', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado', 'Pagamento não confirmado'].map(status => `<option ${status === (order.status || 'Aguardando pagamento') ? 'selected' : ''}>${status}</option>`).join('')}
+                      </select>
+                      ${isPaymentDeadlineExpired(order) ? '<small>Prazo encerrado</small>' : ''}
+                    </td>
                   </tr>
                 `).join('')}
               </tbody>
             </table>
           </div>
         `;
+        qsa('.order-status', container).forEach(select => select.addEventListener('change', async () => {
+          const nextStatus = select.value;
+          select.disabled = true;
+          try {
+            await updateOrderStatus(select.dataset.orderId, nextStatus);
+            await loadAdminOrders();
+            showToast('Status atualizado');
+          } catch (error) {
+            select.disabled = false;
+            setMessage($('ordersMessage'), 'error', `Não foi possível alterar o status: ${error.message}`);
+          }
+        }));
       }
 
       // Eventos principais
@@ -1501,9 +1762,11 @@
         config.heroTitle = $('adminHeroTitle').value.trim() || config.brandName;
         config.heroSubtitle = $('adminHeroSubtitle').value.trim();
         config.description = $('adminDescription').value.trim();
-        applyConfigEverywhere();
-        await maybeSyncConfigRemote();
-        showToast('Marca e textos salvos');
+        try {
+          await saveConfigRemote();
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
+        }
       });
 
       $('addFlavorBtn').addEventListener('click', () => {
@@ -1521,24 +1784,51 @@
       $('saveCatalogBtn').addEventListener('click', async () => {
         captureFlavorEditor();
         captureSizeEditor();
-        applyConfigEverywhere();
-        await maybeSyncConfigRemote();
-        renderAdminEditors();
-        showToast('Catálogo salvo');
+        try {
+          await saveConfigRemote();
+          renderAdminEditors();
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
+        }
       });
 
       $('addPaymentBtn').addEventListener('click', () => {
         capturePaymentEditor();
-        config.payments.push('Nova forma de pagamento');
+        config.payments.push({ id: `payment-${Date.now()}`, name: 'Nova forma de pagamento', type: 'card', active: true, paymentLink: '' });
         renderPaymentEditor();
       });
 
       $('savePaymentBtn').addEventListener('click', async () => {
         capturePaymentEditor();
-        applyConfigEverywhere();
-        await maybeSyncConfigRemote();
-        renderAdminEditors();
-        showToast('Pagamentos salvos');
+        try {
+          await saveConfigRemote();
+          renderAdminEditors();
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
+        }
+      });
+
+      $('saveAvailabilityBtn').addEventListener('click', async () => {
+        config.availability.enabled = $('availabilityEnabled').checked;
+        qsa('[data-availability-day]').forEach(input => { config.availability.days[input.dataset.availabilityDay] = input.checked; });
+        config.availability.deliveryDay = $('deliveryDaySelect').value;
+        config.availability.paymentDeadlineDay = $('paymentDeadlineDaySelect').value;
+        config.availability.paymentDeadlineTime = $('paymentDeadlineTime').value || '23:59:59';
+        try {
+          await saveConfigRemote();
+          renderAvailabilityEditor();
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', `Não foi possível salvar a disponibilidade: ${error.message}`);
+        }
+      });
+
+      $('openSpreadsheetBtn').addEventListener('click', () => {
+        const url = getSpreadsheetUrl();
+        if (!url) {
+          setMessage($('integrationMessage'), 'error', 'A URL da planilha ainda não foi configurada.');
+          return;
+        }
+        window.open(url, '_blank', 'noopener');
       });
 
       $('saveIntegrationBtn').addEventListener('click', () => {
@@ -1548,23 +1838,36 @@
             setMessage($('integrationMessage'), 'error', 'Digite uma URL válida.');
             return;
           }
-          localStorage.setItem(STORAGE_KEYS.endpoint, url);
-          setMessage($('integrationMessage'), 'success', 'URL salva neste navegador.');
+          setMessage($('integrationMessage'), 'success', 'A URL do Apps Script já está definida na aplicação.');
         } else {
-          localStorage.removeItem(STORAGE_KEYS.endpoint);
-          setMessage($('integrationMessage'), 'info', 'Integração removida. O formulário voltou ao modo de demonstração.');
+          setMessage($('integrationMessage'), 'error', 'A URL do Apps Script é necessária para a integração.');
         }
         renderConnectionStatus();
       });
 
-      $('testIntegrationBtn').addEventListener('click', testConnection);
-
-      $('clearLocalOrdersBtn').addEventListener('click', () => {
-        if (!confirm('Deseja apagar todos os pedidos salvos neste navegador?')) return;
-        localStorage.removeItem(STORAGE_KEYS.orders);
-        renderLocalOrders();
-        showToast('Pedidos locais removidos');
+      $('saveSpreadsheetBtn').addEventListener('click', async () => {
+        const url = $('spreadsheetUrl').value.trim();
+        if (!url) {
+          setMessage($('integrationMessage'), 'error', 'Digite a URL da planilha de pedidos.');
+          return;
+        }
+        try {
+          new URL(url);
+        } catch (_) {
+          setMessage($('integrationMessage'), 'error', 'Digite uma URL válida para a planilha.');
+          return;
+        }
+        config.spreadsheetUrl = url;
+        localStorage.setItem(SPREADSHEET_STORAGE_KEY, url);
+        try {
+          await saveConfigRemote();
+          setMessage($('integrationMessage'), 'success', 'URL da planilha salva.');
+        } catch (error) {
+          setMessage($('integrationMessage'), 'error', `URL salva neste navegador, mas não foi possível sincronizar: ${error.message}`);
+        }
       });
+
+      $('testIntegrationBtn').addEventListener('click', testConnection);
 
       // Inicialização: a Central é o modo padrão; public=1 abre somente o pedido.
       setMinDate();
