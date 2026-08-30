@@ -360,6 +360,12 @@
       border: 1px solid var(--line);
     }
 
+    .secondary-btn:disabled, .ghost-btn:disabled {
+      opacity: .62;
+      cursor: wait;
+      transform: none;
+    }
+
     .danger-btn {
       background: #fff4f4;
       color: var(--danger);
@@ -1155,6 +1161,21 @@
         element.textContent = '';
       }
 
+      async function withSavingState(button, action, savingText = 'Salvando...') {
+        if (!button || button.disabled) return;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        button.textContent = savingText;
+        try {
+          return await action();
+        } finally {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          button.textContent = originalText;
+        }
+      }
+
       const WEEK_DAYS = [
         ['monday', 'Segunda-feira'], ['tuesday', 'Terça-feira'], ['wednesday', 'Quarta-feira'],
         ['thursday', 'Quinta-feira'], ['friday', 'Sexta-feira'], ['saturday', 'Sábado'], ['sunday', 'Domingo']
@@ -1903,7 +1924,7 @@
         });
       });
 
-      $('saveBrandBtn').addEventListener('click', async () => {
+      $('saveBrandBtn').addEventListener('click', () => withSavingState($('saveBrandBtn'), async () => {
         config.brandName = $('adminBrandName').value.trim() || DEFAULT_CONFIG.brandName;
         config.heroTitle = $('adminHeroTitle').value.trim() || config.brandName;
         config.heroSubtitle = $('adminHeroSubtitle').value.trim();
@@ -1913,7 +1934,7 @@
         } catch (error) {
           setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
         }
-      });
+      }));
 
       $('addFlavorBtn').addEventListener('click', () => {
         captureFlavorEditor();
@@ -1927,7 +1948,7 @@
         renderSizeEditor();
       });
 
-      $('saveCatalogBtn').addEventListener('click', async () => {
+      $('saveCatalogBtn').addEventListener('click', () => withSavingState($('saveCatalogBtn'), async () => {
         captureFlavorEditor();
         captureSizeEditor();
         try {
@@ -1936,7 +1957,7 @@
         } catch (error) {
           setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
         }
-      });
+      }));
 
       $('addPaymentBtn').addEventListener('click', () => {
         capturePaymentEditor();
@@ -1951,7 +1972,7 @@
         renderPaymentEditor();
       });
 
-      $('savePaymentBtn').addEventListener('click', async () => {
+      $('savePaymentBtn').addEventListener('click', () => withSavingState($('savePaymentBtn'), async () => {
         capturePaymentEditor();
         try {
           await saveConfigRemote();
@@ -1959,9 +1980,9 @@
         } catch (error) {
           setMessage($('integrationMessage'), 'error', `Não foi possível salvar as configurações: ${error.message}`);
         }
-      });
+      }));
 
-      $('saveAvailabilityBtn').addEventListener('click', async () => {
+      $('saveAvailabilityBtn').addEventListener('click', () => withSavingState($('saveAvailabilityBtn'), async () => {
         config.availability.enabled = $('availabilityEnabled').checked;
         qsa('[data-availability-day]').forEach(input => { config.availability.days[input.dataset.availabilityDay] = input.checked; });
         config.availability.deliveryDay = $('deliveryDaySelect').value;
@@ -1973,7 +1994,7 @@
         } catch (error) {
           setMessage($('integrationMessage'), 'error', `Não foi possível salvar a disponibilidade: ${error.message}`);
         }
-      });
+      }));
 
       $('openSpreadsheetBtn').addEventListener('click', () => {
         const url = getSpreadsheetUrl();
@@ -1984,7 +2005,7 @@
         window.open(url, '_blank', 'noopener');
       });
 
-      $('saveIntegrationBtn').addEventListener('click', () => {
+      $('saveIntegrationBtn').addEventListener('click', () => withSavingState($('saveIntegrationBtn'), async () => {
         const url = $('appsScriptUrl').value.trim();
         if (url) {
           try { new URL(url); } catch (_) {
@@ -1996,9 +2017,9 @@
           setMessage($('integrationMessage'), 'error', 'A URL do Apps Script é necessária para a integração.');
         }
         renderConnectionStatus();
-      });
+      }));
 
-      $('saveSpreadsheetBtn').addEventListener('click', async () => {
+      $('saveSpreadsheetBtn').addEventListener('click', () => withSavingState($('saveSpreadsheetBtn'), async () => {
         const url = $('spreadsheetUrl').value.trim();
         if (!url) {
           setMessage($('integrationMessage'), 'error', 'Digite a URL da planilha de pedidos.');
@@ -2018,7 +2039,7 @@
         } catch (error) {
           setMessage($('integrationMessage'), 'error', `URL salva neste navegador, mas não foi possível sincronizar: ${error.message}`);
         }
-      });
+      }));
 
       $('testIntegrationBtn').addEventListener('click', testConnection);
 
