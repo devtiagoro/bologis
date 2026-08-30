@@ -436,6 +436,27 @@
     }
 
     .admin-content { padding: 28px; }
+    .admin-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+    }
+
+    .admin-heading-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .admin-heading-actions .ghost-btn {
+      min-height: 40px;
+      padding: 9px 13px;
+      flex: 0 0 auto;
+    }
+
     .admin-tabs {
       display: inline-flex;
       gap: 6px;
@@ -615,6 +636,8 @@
       .app-shell { width: min(100% - 20px, 1180px); padding-top: 14px; }
       .topbar { align-items: flex-start; flex-direction: column; margin-bottom: 14px; }
       .order-card, .admin-content { padding: 22px 18px; border-radius: 22px; }
+      .admin-heading { flex-direction: column; }
+      .admin-heading-actions { width: 100%; justify-content: flex-start; }
       .summary-card { padding: 20px; border-radius: 22px; }
       .form-grid, .choice-grid, .admin-grid { grid-template-columns: 1fr; }
       .admin-tabs { width: 100%; }
@@ -768,8 +791,15 @@
     <!-- CENTRAL DE GESTÃO -->
     <main id="adminView" class="hidden">
       <section class="card admin-content">
-        <h1>Central de gestão</h1>
-        <p>Edite o que aparece no formulário e acompanhe os pedidos recebidos.</p>
+        <div class="admin-heading">
+          <div>
+            <h1>Central de gestão</h1>
+            <p>Edite o que aparece no formulário e acompanhe os pedidos recebidos.</p>
+          </div>
+          <div class="admin-heading-actions">
+            <button id="copyPublicLinkBtn" class="ghost-btn" type="button">Copiar link público</button>
+          </div>
+        </div>
         <div class="admin-tabs" role="tablist" aria-label="Seções da Central">
           <button id="editAdminTab" class="active" type="button" role="tab" aria-selected="true">Editar</button>
           <button id="ordersAdminTab" type="button" role="tab" aria-selected="false">Pedidos</button>
@@ -886,7 +916,6 @@
           </div>
         </div>
       </section>
-      </div>
     </main>
   </div>
 
@@ -924,7 +953,7 @@
       };
 
       const params = new URLSearchParams(window.location.search);
-      const isAdmin = params.get('admin') === '1';
+      const isPublic = params.get('public') === '1';
       let config = loadJSON(STORAGE_KEYS.config, DEFAULT_CONFIG);
       let selectedSizeId = '';
       let isSubmitting = false;
@@ -1003,6 +1032,35 @@
       function clearMessage(element) {
         element.className = 'message';
         element.textContent = '';
+      }
+
+      function getPublicUrl() {
+        const url = new URL(window.location.href);
+        url.search = '';
+        url.searchParams.set('public', '1');
+        return url.toString();
+      }
+
+      async function copyPublicUrl() {
+        const publicUrl = getPublicUrl();
+        try {
+          if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
+          await Promise.race([
+            navigator.clipboard.writeText(publicUrl),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('CLIPBOARD_TIMEOUT')), 700))
+          ]);
+        } catch (_) {
+          const helper = document.createElement('textarea');
+          helper.value = publicUrl;
+          helper.setAttribute('readonly', '');
+          helper.style.position = 'fixed';
+          helper.style.opacity = '0';
+          document.body.appendChild(helper);
+          helper.select();
+          document.execCommand('copy');
+          helper.remove();
+        }
+        showToast('Link copiado');
       }
 
       function renderBrand() {
@@ -1120,6 +1178,10 @@
         try { return JSON.parse(text); } catch (_) { return { ok: true, raw: text }; }
       }
 
+      function updateOrderStatus(orderId, status) {
+        return postToAppsScript({ action: 'updateOrderStatus', orderId, status });
+      }
+
       function saveOrderLocal(order) {
         const orders = loadJSON(STORAGE_KEYS.orders, []);
         orders.unshift({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...order });
@@ -1192,7 +1254,7 @@
         $('ordersAdminTab').setAttribute('aria-selected', String(orders));
         $('adminEditView').classList.toggle('hidden', orders);
         $('adminOrdersView').classList.toggle('active', orders);
-        if (orders) renderLocalOrders();
+        if (orders) loadAdminOrders();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
@@ -1364,10 +1426,20 @@
         }
       }
 
-      function renderLocalOrders() {
+      async function loadAdminOrders() {
+        try {
+          const result = await postToAppsScript({ action: 'getOrders' });
+          const orders = Array.isArray(result) ? result : (result.orders || []);
+          renderLocalOrders(orders);
+        } catch (error) {
+          renderLocalOrders();
+          setMessage($('integrationMessage'), 'error', 'Não foi possível carregar os pedidos da planilha. Exibindo os pedidos locais deste navegador.');
+        }
+      }
+
+      function renderLocalOrders(orders = loadJSON(STORAGE_KEYS.orders, [])) {
         const container = $('ordersContainer');
         if (!container) return;
-        const orders = loadJSON(STORAGE_KEYS.orders, []);
         if (!orders.length) {
           container.innerHTML = '<div class="empty-state">Ainda não há pedidos salvos localmente.</div>';
           return;
@@ -1409,6 +1481,8 @@
       $('orderForm').addEventListener('submit', submitOrder);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
       ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+
+      $('copyPublicLinkBtn').addEventListener('click', copyPublicUrl);
 
       $('editAdminTab').addEventListener('click', () => switchAdminTab('edit'));
       $('ordersAdminTab').addEventListener('click', () => switchAdminTab('orders'));
@@ -1492,10 +1566,10 @@
         showToast('Pedidos locais removidos');
       });
 
-      // Inicialização: a URL pública não carrega controles administrativos.
+      // Inicialização: a Central é o modo padrão; public=1 abre somente o pedido.
       setMinDate();
-      if (isAdmin) renderAdmin();
-      else renderPublicOrderForm();
+      if (isPublic) renderPublicOrderForm();
+      else renderAdmin();
       loadRemoteConfig();
     })();
   </script>
