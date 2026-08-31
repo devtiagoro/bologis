@@ -1457,14 +1457,10 @@
 
         const isPix = payment.type === 'pix';
         const paymentName = payment.name || (isPix ? 'PIX' : 'Pagamento');
-        container.innerHTML = isPix
-          ? `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Use o QR Code ou copie o código abaixo.')}</p><div id="pixQr" class="pix-qr"></div><div class="payment-payload">${escapeHtml(paymentLink)}</div><button id="copyPixBtn" class="ghost-btn" type="button">Copiar PIX</button>`
-          : `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Acesse o link abaixo para efetuar o pagamento.')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(paymentLink)}" target="_blank" rel="noopener">Acessar pagamento</a><div class="payment-payload" style="margin-top:10px">${escapeHtml(paymentLink)}</div><button id="copyCardBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
+        const actionLabel = isPix ? 'Pagar com PIX' : 'Acessar pagamento';
+        container.innerHTML = `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Acesse o link abaixo para efetuar o pagamento.')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(paymentLink)}" target="_blank" rel="noopener">${actionLabel}</a><div class="payment-payload" style="margin-top:10px">${escapeHtml(paymentLink)}</div><button id="copyPaymentLinkBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
 
-        if (isPix && window.QRCode) new QRCode($('pixQr'), { text: paymentLink, width: 180, height: 180, colorDark: '#2f211a', colorLight: '#ffffff' });
-        else if (isPix) $('pixQr').textContent = 'Não foi possível gerar o QR Code. Copie o PIX abaixo.';
-        if (isPix) $('copyPixBtn').addEventListener('click', () => copyText(paymentLink, 'PIX copiado'));
-        else $('copyCardBtn').addEventListener('click', () => copyText(paymentLink, 'Link copiado'));
+        $('copyPaymentLinkBtn').addEventListener('click', () => copyText(paymentLink, 'Link copiado'));
       }
 
       function renderOrderSuccess(order, orderNumber) {
@@ -1694,7 +1690,7 @@
               <input class="control size-name" value="${escapeHtml(size.name)}" placeholder="Nome do tamanho" aria-label="Nome do tamanho ${index + 1}">
               <input class="control size-price" type="number" min="0" step="0.01" value="${Number(size.price || 0)}" placeholder="Preço" aria-label="Preço do tamanho ${index + 1}">
               <input class="control size-description" style="grid-column:1 / -1" value="${escapeHtml(size.description || '')}" placeholder="Ex.: Serve aproximadamente 15 pessoas" aria-label="Descrição do tamanho ${index + 1}">
-              <input class="control size-pix-link" style="grid-column:1 / -1" value="${escapeHtml(getSizeLink('pix', size.id))}" placeholder="Link / payload PIX deste tamanho" aria-label="Link PIX do tamanho ${index + 1}">
+              <input class="control size-pix-link" style="grid-column:1 / -1" value="${escapeHtml(getSizeLink('pix', size.id))}" placeholder="Link de checkout PIX deste tamanho" aria-label="Link de checkout PIX do tamanho ${index + 1}">
               <input class="control size-card-link" style="grid-column:1 / -1" value="${escapeHtml(getSizeLink('card', size.id))}" placeholder="Link de crédito/débito deste tamanho" aria-label="Link de crédito ou débito do tamanho ${index + 1}">
             </div>
             <button class="icon-btn remove-size" type="button" title="Remover tamanho">×</button>
