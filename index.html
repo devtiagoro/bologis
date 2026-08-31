@@ -1458,7 +1458,11 @@
         const isPix = payment.type === 'pix';
         const paymentName = payment.name || (isPix ? 'PIX' : 'Pagamento');
         const actionLabel = isPix ? 'Pagar com PIX' : 'Acessar pagamento';
-        container.innerHTML = `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Acesse o link abaixo para efetuar o pagamento.')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(paymentLink)}" target="_blank" rel="noopener">${actionLabel}</a><div class="payment-payload" style="margin-top:10px">${escapeHtml(paymentLink)}</div><button id="copyPaymentLinkBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
+        const visibleLink = isPix
+          ? ''
+          : `<div class="payment-payload" style="margin-top:10px">${escapeHtml(paymentLink)}</div>`;
+
+        container.innerHTML = `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Acesse o link abaixo para efetuar o pagamento.')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(paymentLink)}" target="_blank" rel="noopener">${actionLabel}</a>${visibleLink}<button id="copyPaymentLinkBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
 
         $('copyPaymentLinkBtn').addEventListener('click', () => copyText(paymentLink, 'Link copiado'));
       }
