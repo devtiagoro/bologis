@@ -15,7 +15,6 @@ source = source.replace(
         renderStatusOptions,
         renderLocalOrders,
         renderFlavorEditor,
-        renderSizeEditor,
         renderPricingEditor,
         renderPaymentEditor,
         renderOrderSuccess,
@@ -204,11 +203,9 @@ test('catálogo distingue ativos e inativos e oferece reativação', () => {
     payments: [{ id: 'pix', name: 'PIX', type: 'pix', active: false }]
   });
   runtime.window.__uxTest.renderFlavorEditor();
-  runtime.window.__uxTest.renderSizeEditor();
   runtime.window.__uxTest.renderPaymentEditor();
   assert.match(runtime.get('flavorEditor').innerHTML, /Pausado/);
   assert.match(runtime.get('flavorEditor').innerHTML, /Reativar/);
-  assert.match(runtime.get('sizeEditor').innerHTML, /Inativo/);
   assert.match(runtime.get('paymentEditor').innerHTML, /Reativar/);
 });
 
@@ -595,6 +592,39 @@ test('editor administrativo exige uma modalidade e taxa explícita para entrega'
   assert.equal(payload.fulfillment.deliveryFee, 8.5);
   assert.equal(payload.fulfillment.deliveryEnabled, true);
   assert.equal(payload.fulfillment.pickupEnabled, false);
+});
+
+// ---- Etapa 9.1: catálogo e preços separados ----
+
+test('catálogo administra somente sabores, sem tamanhos, preços ou links antigos', () => {
+  const catalog = html.slice(html.indexOf('<div id="catalogPanel"'), html.indexOf('<div id="pricingPanel"'));
+  assert.ok(catalog.length > 100);
+  assert.match(catalog, /Catálogo de sabores/);
+  assert.match(catalog, /id="flavorEditor"/);
+  assert.match(catalog, /id="addFlavorBtn"/);
+  assert.match(catalog, /id="saveCatalogBtn"/);
+  assert.doesNotMatch(catalog, /Tamanhos históricos|sizeEditor|addSizeBtn|size-price|Link de checkout|crédito\/débito/);
+  assert.doesNotMatch(html, /size-pix-link|size-card-link|id="sizeEditor"/);
+});
+
+test('preços continua sendo a única configuração de preço dos bolos', () => {
+  for (const id of ['adminFirstSlicePrice', 'adminAdditionalSlicePrice', 'pricingAdminPreview', 'savePricingBtn']) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  assert.equal((html.match(/type="number"[^>]*step="0\.01"/g) || []).length, 3, 'apenas primeira fatia, fatia adicional e taxa de entrega');
+});
+
+test('salvar catálogo envia somente sabores', () => {
+  const api = createRuntime().window.__uxTest;
+  api.setConfig({
+    flavorItems: [{ id: 'a', name: 'Chocolate', active: true }],
+    sizes: [{ id: 'p', name: 'Pequeno', price: 89 }],
+    payments: [{ id: 'pix', name: 'PIX', type: 'pix', paymentLink: 'https://pay.example/legado' }]
+  });
+  const payload = JSON.parse(JSON.stringify(api.configDomainPayload('flavors')));
+  assert.deepEqual(Object.keys(payload), ['flavorItems']);
+  assert.equal(payload.flavorItems[0].name, 'Chocolate');
+  assert.throws(() => api.configDomainPayload('catalog'), /inválido/);
 });
 
 (async () => {

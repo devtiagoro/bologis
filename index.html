@@ -1499,22 +1499,12 @@
 
           <div id="catalogPanel" class="admin-panel">
             <div class="admin-section">
-              <h2>Sabores</h2>
-              <p class="help">Cadastre sabores e escolha quais ficam disponíveis, sem apagar o histórico.</p>
+              <h2>Catálogo de sabores</h2>
+              <p class="help">Cadastre e organize os sabores disponíveis para encomenda. Sabores desativados saem do formulário, mas permanecem no histórico. Os preços são definidos em Preços.</p>
               <div id="flavorCatalogSummary" class="catalog-summary"></div>
               <div id="flavorEditor" class="list-editor"></div>
               <div class="editor-actions">
                 <button id="addFlavorBtn" class="ghost-btn" type="button">+ Adicionar sabor</button>
-              </div>
-            </div>
-
-            <div class="admin-section">
-              <h2>Tamanhos históricos e links</h2>
-              <p class="help">Mantidos para compatibilidade com pedidos e links antigos. O formulário público utiliza preços progressivos por fatia.</p>
-              <div id="sizeCatalogSummary" class="catalog-summary"></div>
-              <div id="sizeEditor" class="list-editor"></div>
-              <div class="editor-actions">
-                <button id="addSizeBtn" class="ghost-btn" type="button">+ Adicionar tamanho</button>
                 <button id="saveCatalogBtn" class="secondary-btn" type="button">Salvar catálogo</button>
               </div>
               <div id="catalogSaveMessage" class="message" role="status"></div>
@@ -2006,47 +1996,6 @@
         if (normalizedName.includes('credito') || normalizedName.includes('debito') || normalizedName.includes('cartao')) return 'card';
         if (!normalizedName && (normalizedType === 'pix' || normalizedType === 'card')) return normalizedType;
         return 'other';
-      }
-
-      function parseSizeLinkMap(value) {
-        const raw = String(value || '').trim();
-        if (!raw) return {};
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.__sizeLinks === true && parsed.links && typeof parsed.links === 'object') {
-            return { ...parsed.links };
-          }
-        } catch (_) {}
-        return { __legacy: raw };
-      }
-
-      function serializeSizeLinkMap(links) {
-        return JSON.stringify({ __sizeLinks: true, links });
-      }
-
-      function getSizeLink(type, sizeId) {
-        const matching = config.payments.filter(payment => payment.type === type);
-        for (const payment of matching) {
-          const links = parseSizeLinkMap(payment.paymentLink);
-          if (links[sizeId]) return String(links[sizeId]);
-          if (links.__legacy) return String(links.__legacy);
-        }
-        return '';
-      }
-
-      function setSizeLinkMaps(pixLinks, cardLinks) {
-        const pixPayload = serializeSizeLinkMap(pixLinks);
-        const cardPayload = serializeSizeLinkMap(cardLinks);
-        config.payments.forEach(payment => {
-          if (payment.type === 'pix') payment.paymentLink = pixPayload;
-          if (payment.type === 'card') payment.paymentLink = cardPayload;
-        });
-      }
-
-      function resolvePaymentLinkForSize(payment, sizeId) {
-        if (!payment || !sizeId) return '';
-        if (payment.type !== 'pix' && payment.type !== 'card') return '';
-        return getSizeLink(payment.type, sizeId);
       }
 
       function normalizeConfig(value) {
@@ -2847,7 +2796,6 @@
         $('appsScriptUrl').value = APPS_SCRIPT_URL;
         $('spreadsheetUrl').value = getSpreadsheetUrl();
         renderFlavorEditor();
-        renderSizeEditor();
         renderPricingEditor();
         renderPaymentEditor();
         renderAvailabilityEditor();
@@ -2871,7 +2819,7 @@
         qsa('.toggle-flavor').forEach((button, index) => button.addEventListener('click', () => {
           captureFlavorEditor();
           config.flavorItems[index].active = !config.flavorItems[index].active;
-          markConfigDirty('catalog');
+          markConfigDirty('flavors');
           renderFlavorEditor();
         }));
       }
@@ -2902,58 +2850,6 @@
           };
         }).filter(item => item.name);
         config.flavors = config.flavorItems.filter(item => item.active).map(item => item.name);
-      }
-
-      function renderSizeEditor() {
-        renderCatalogSummary('sizeCatalogSummary', config.sizes);
-        $('sizeEditor').innerHTML = config.sizes.map((size, index) => `
-          <div class="list-row ${size.active === false ? 'is-inactive' : ''}" data-size-index="${index}" style="grid-template-columns:minmax(0,1fr) auto">
-            <div style="display:grid;grid-template-columns:minmax(0,1fr) 125px;gap:8px">
-              <input class="control size-name" value="${escapeHtml(size.name)}" placeholder="Nome do tamanho" aria-label="Nome do tamanho ${index + 1}">
-              <input class="control size-price" type="number" min="0" step="0.01" value="${Number(size.price || 0)}" placeholder="Preço" aria-label="Preço do tamanho ${index + 1}">
-              <input class="control size-description" style="grid-column:1 / -1" value="${escapeHtml(size.description || '')}" placeholder="Ex.: Serve aproximadamente 15 pessoas" aria-label="Descrição do tamanho ${index + 1}">
-              <input class="control size-pix-link" style="grid-column:1 / -1" value="${escapeHtml(getSizeLink('pix', size.id))}" placeholder="Link de checkout PIX deste tamanho" aria-label="Link de checkout PIX do tamanho ${index + 1}">
-              <input class="control size-card-link" style="grid-column:1 / -1" value="${escapeHtml(getSizeLink('card', size.id))}" placeholder="Link de crédito/débito deste tamanho" aria-label="Link de crédito ou débito do tamanho ${index + 1}">
-              <span class="item-state ${size.active !== false ? 'active' : 'inactive'}">${size.active !== false ? '● Ativo no formulário' : '○ Inativo'}</span>
-              <input class="size-active hidden" type="checkbox" ${size.active !== false ? 'checked' : ''} tabindex="-1">
-            </div>
-            <button class="icon-btn toggle-item-btn toggle-size" type="button">${size.active !== false ? 'Desativar' : 'Reativar'}</button>
-          </div>
-        `).join('') || '<div class="empty-state">Nenhum tamanho cadastrado.</div>';
-
-        qsa('.toggle-size').forEach((button, index) => button.addEventListener('click', () => {
-          captureSizeEditor();
-          config.sizes[index].active = !config.sizes[index].active;
-          markConfigDirty('catalog');
-          renderSizeEditor();
-        }));
-      }
-
-      function captureSizeEditor() {
-        const rows = qsa('[data-size-index]', $('sizeEditor'));
-        if (!rows.length) return;
-
-        const pixLinks = {};
-        const cardLinks = {};
-
-        config.sizes = rows.map((row, index) => {
-          const old = config.sizes[index] || {};
-          const id = old.id || `size-${Date.now()}-${index}`;
-          const pixLink = row.querySelector('.size-pix-link').value.trim();
-          const cardLink = row.querySelector('.size-card-link').value.trim();
-          if (pixLink) pixLinks[id] = pixLink;
-          if (cardLink) cardLinks[id] = cardLink;
-          return {
-            id,
-            name: row.querySelector('.size-name').value.trim(),
-            description: row.querySelector('.size-description').value.trim(),
-            price: Number(row.querySelector('.size-price').value || 0),
-            active: row.querySelector('.size-active').checked,
-            order: old.order || index + 1
-          };
-        }).filter(item => item.name);
-
-        setSizeLinkMaps(pixLinks, cardLinks);
       }
 
       function renderPaymentEditor() {
@@ -3022,7 +2918,7 @@
 
       const DOMAIN_MESSAGES = {
         brand: 'brandSaveMessage',
-        catalog: 'catalogSaveMessage',
+        flavors: 'catalogSaveMessage',
         pricing: 'pricingSaveMessage',
         payments: 'paymentSaveMessage',
         availability: 'availabilitySaveMessage',
@@ -3042,11 +2938,7 @@
           heroSubtitle: config.heroSubtitle,
           description: config.description
         };
-        if (domain === 'catalog') return {
-          flavorItems: config.flavorItems,
-          sizes: config.sizes,
-          payments: config.payments
-        };
+        if (domain === 'flavors') return { flavorItems: config.flavorItems };
         if (domain === 'pricing') return { progressivePricing: config.progressivePricing };
         if (domain === 'payments') return { payments: config.payments };
         if (domain === 'availability') return { availability: config.availability };
@@ -3070,11 +2962,9 @@
         const remote = normalizeConfig(remoteValue);
         if (domain === 'brand') {
           ['brandName', 'heroTitle', 'heroSubtitle', 'description'].forEach(key => { config[key] = remote[key]; });
-        } else if (domain === 'catalog') {
+        } else if (domain === 'flavors') {
           config.flavorItems = remote.flavorItems;
           config.flavors = remote.flavors;
-          config.sizes = remote.sizes;
-          config.payments = remote.payments;
         } else if (domain === 'pricing') {
           config.progressivePricing = remote.progressivePricing;
         } else if (domain === 'payments') {
@@ -3613,7 +3503,7 @@
       $('adminEditView').addEventListener('input', event => {
         const panel = event.target.closest?.('.admin-panel');
         const domain = panel?.id === 'brandPanel' ? 'brand'
-          : panel?.id === 'catalogPanel' ? 'catalog'
+          : panel?.id === 'catalogPanel' ? 'flavors'
             : panel?.id === 'pricingPanel' ? 'pricing'
               : panel?.id === 'paymentPanel' ? 'payments'
                 : panel?.id === 'availabilityPanel' ? 'availability'
@@ -3624,7 +3514,7 @@
 
       $('adminEditView').addEventListener('change', event => {
         const panel = event.target.closest?.('.admin-panel');
-        const domain = panel?.id === 'catalogPanel' ? 'catalog'
+        const domain = panel?.id === 'catalogPanel' ? 'flavors'
           : panel?.id === 'pricingPanel' ? 'pricing'
             : panel?.id === 'paymentPanel' ? 'payments'
               : panel?.id === 'availabilityPanel' ? 'availability'
@@ -3680,26 +3570,18 @@
         captureFlavorEditor();
         config.flavorItems.push({ id: `flavor-${Date.now()}`, name: 'Novo sabor', active: true, order: config.flavorItems.length + 1 });
         config.flavors = config.flavorItems.filter(item => item.active).map(item => item.name);
-        markConfigDirty('catalog');
+        markConfigDirty('flavors');
         renderFlavorEditor();
       });
 
-      $('addSizeBtn').addEventListener('click', () => {
-        captureSizeEditor();
-        config.sizes.push({ id: `size-${Date.now()}`, name: 'Novo tamanho', description: 'Descrição do tamanho', price: 0, active: true, order: config.sizes.length + 1 });
-        markConfigDirty('catalog');
-        renderSizeEditor();
-      });
-
+      // Salva somente a aba Sabores: tamanhos históricos e links antigos não trafegam neste salvamento.
       $('saveCatalogBtn').addEventListener('click', () => withSavingState($('saveCatalogBtn'), async () => {
         captureFlavorEditor();
-        captureSizeEditor();
         try {
-          await saveConfigRemote('catalog');
+          await saveConfigRemote('flavors');
           renderFlavorEditor();
-          renderSizeEditor();
         } catch (error) {
-          showConfigSaveError('catalog', error);
+          showConfigSaveError('flavors', error);
         }
       }));
 

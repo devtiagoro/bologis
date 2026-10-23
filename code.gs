@@ -1136,8 +1136,13 @@ function saveConfigDomain_(domain, data, expectedRevision) {
 
 function applyConfigDomain_(ss, domain, data) {
   if (domain === 'brand' || domain === 'all') writeBrandConfig_(ss, data);
-  if (domain === 'flavors' || domain === 'catalog' || domain === 'all') writeFlavorConfig_(ss, data);
-  if (domain === 'sizes' || domain === 'catalog' || domain === 'all') writeSizeConfig_(ss, data);
+  // Listas ausentes nunca são tratadas como vazias: isso desativaria sabores ou tamanhos históricos.
+  const hasFlavorList = Array.isArray(data.flavorItems) || Array.isArray(data.flavors);
+  if (domain === 'flavors' && !hasFlavorList) {
+    throw apiError_('FLAVOR_LIST_REQUIRED', 'A lista de sabores não foi enviada. Recarregue a central e tente novamente.');
+  }
+  if (domain === 'flavors' || ((domain === 'catalog' || domain === 'all') && hasFlavorList)) writeFlavorConfig_(ss, data);
+  if (domain === 'sizes' || ((domain === 'catalog' || domain === 'all') && Array.isArray(data.sizes))) writeSizeConfig_(ss, data);
   if (domain === 'pricing' || (domain === 'all' && data.progressivePricing)) writePricingConfig_(ss, data);
   if (domain === 'catalog' && Array.isArray(data.payments)) writePaymentConfig_(ss, data);
   if (domain === 'payments' || domain === 'all') writePaymentConfig_(ss, data);

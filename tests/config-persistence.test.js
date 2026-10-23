@@ -419,6 +419,56 @@ test('setupProject pode ser repetido: colunas e chaves sao acrescentadas sem sob
   assert.equal(h.rows('Configuracoes').find(row => row[0] === 'deliveryEnabled')[1], true, 'valor existente preservado');
 });
 
+// ---- Etapa 9.1: catálogo de sabores separado dos tamanhos históricos ----
+
+test('catalogo de sabores cadastra, edita e desativa sem tocar tamanhos nem links', () => {
+  const h = createHarness();
+  const sizesBefore = h.rows('Tamanhos');
+  const paymentsBefore = h.rows('Pagamentos');
+  const result = h.context.saveConfigDomain_('flavors', {
+    flavorItems: [
+      { id: 'chocolate', name: 'Chocolate Belga', active: true, order: 1 },
+      { id: 'ninho', name: 'Ninho', active: false, order: 2 },
+      { id: '', name: 'Choconinho', active: true, order: 3 }
+    ]
+  }, '1');
+  assert.equal(result.revision, '2');
+  const flavors = result.config.flavorItems;
+  assert.equal(flavors.find(item => item.id === 'chocolate').name, 'Chocolate Belga');
+  assert.equal(flavors.find(item => item.id === 'ninho').active, false);
+  assert.ok(flavors.some(item => item.name === 'Choconinho' && item.active));
+  assert.deepEqual(result.config.flavors.slice().sort(), ['Chocolate Belga', 'Choconinho']);
+  assert.deepEqual(h.rows('Tamanhos'), sizesBefore, 'tamanhos históricos intactos');
+  assert.deepEqual(h.rows('Pagamentos'), paymentsBefore, 'links antigos intactos');
+  const backup = h.sheets.get('_ConfigBackups').data[1];
+  assert.equal(backup[3], 'flavors');
+  assert.equal(backup[5], 'committed');
+});
+
+test('salvamento de sabores sem lista e recusado sem desativar o catalogo', () => {
+  const h = createHarness();
+  const before = h.rows('Sabores');
+  assert.throws(() => h.context.saveConfigDomain_('flavors', {}, '1'), error => error.code === 'FLAVOR_LIST_REQUIRED');
+  assert.deepEqual(h.rows('Sabores'), before);
+  assert.equal(h.context.getConfigRevision_(), '1');
+});
+
+test('catalogo legado sem tamanhos nao desativa tamanhos historicos', () => {
+  const h = createHarness();
+  const sizesBefore = h.rows('Tamanhos');
+  h.context.saveConfigDomain_('catalog', { flavorItems: [{ id: 'chocolate', name: 'Chocolate', active: true }, { id: 'ninho', name: 'Ninho', active: true }] }, '1');
+  assert.deepEqual(h.rows('Tamanhos'), sizesBefore);
+  assert.equal(h.config().sizes.every(size => size.active), true);
+});
+
+test('salvamento de sabores respeita revisao otimista e snapshot completo', () => {
+  const h = createHarness();
+  h.context.saveConfigDomain_('flavors', { flavorItems: [{ id: 'chocolate', name: 'Chocolate', active: true }, { id: 'ninho', name: 'Ninho', active: true }] }, '1');
+  assert.throws(() => h.context.saveConfigDomain_('flavors', { flavorItems: [] }, '1'), error => error.code === 'CONFIG_CONFLICT');
+  const snapshot = JSON.parse(h.sheets.get('_ConfigBackups').data[1][4]);
+  assert.ok(snapshot.sheets.Tamanhos.length >= 3, 'snapshot preserva tamanhos para restauração');
+});
+
 (async () => {
   let failed = 0;
   for (const { name, fn } of tests) {
