@@ -272,7 +272,7 @@ test('tentativas repetidas preservam erro generico e aplicam atraso', () => {
   assert.ok(h.sleeps >= 2);
 });
 
-test('links inseguros sao omitidos no publico e rejeitados ao salvar', () => {
+test('links de tamanho nao sao expostos no publico e links inseguros sao rejeitados', () => {
   const h = createHarness();
   h.configure();
   h.context.getConfig_ = () => ({
@@ -284,8 +284,9 @@ test('links inseguros sao omitidos no publico e rejeitados ao salvar', () => {
     availability: {}, spreadsheetUrl: 'private'
   });
   const publicConfig = h.get('getPublicConfig').config;
-  assert.equal(publicConfig.payments[0].paymentLink, 'https://checkout.example/ok');
-  assert.equal(publicConfig.payments[1].paymentLink, '');
+  assert.equal(Object.hasOwn(publicConfig, 'sizes'), false);
+  assert.equal(Object.hasOwn(publicConfig.payments[0], 'paymentLink'), false);
+  assert.equal(Object.hasOwn(publicConfig.payments[1], 'paymentLink'), false);
   for (const unsafe of ['javascript:alert(1)', 'data:text/html,x', 'http://checkout.example']) {
     assert.throws(() => h.context.validatePaymentUrl_(unsafe, true), error => error.code === 'INVALID_PAYMENT_URL');
   }

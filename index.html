@@ -290,6 +290,21 @@
 
     .add-item-btn { width: 100%; }
 
+    .pricing-estimate {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 12px;
+      padding: 13px 15px;
+      border-radius: 14px;
+      background: #fff9f5;
+      border: 1px solid var(--accent-soft);
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .pricing-estimate strong { color: var(--accent-strong); }
+    .economy { color: var(--success); font-weight: 800; }
+
     .order-items {
       display: grid;
       gap: 10px;
@@ -1132,7 +1147,7 @@
             <div class="eyebrow">Produção artesanal · encomendas limitadas</div>
             <h1 id="heroTitle">Primeira Fornada 🍰</h1>
             <p class="lead" id="heroSubtitle">Estamos começando uma nova fase por aqui. 💛</p>
-            <p class="description" id="heroDescription">Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seu sabor, tamanho e a melhor forma de pagamento.</p>
+            <p class="description" id="heroDescription">Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seus sabores, a quantidade de fatias e a forma de pagamento.</p>
             <div id="availabilityNotice" class="availability-notice"><strong>Pedidos encerrados por enquanto 🍰</strong><span id="availabilityMessage">Consulte novamente o período de encomendas.</span></div>
           </div>
 
@@ -1174,7 +1189,7 @@
               <div class="section-heading">
                 <div>
                   <h2><span class="step-number" aria-hidden="true">2</span>Escolha o bolo</h2>
-                  <p>Primeiro o sabor, depois o tamanho.</p>
+                  <p>Escolha o sabor e quantas fatias deseja.</p>
                 </div>
               </div>
 
@@ -1185,18 +1200,15 @@
                 </select>
               </div>
 
-              <div class="field full">
-                <label>Qual tamanho?</label>
-                <div id="sizeChoices" class="choice-grid"></div>
-              </div>
-
               <div class="item-builder-actions">
                 <div class="field">
-                  <label for="itemQuantity">Quantidade</label>
+                  <label for="itemQuantity">Quantidade de fatias</label>
                   <input class="control" id="itemQuantity" type="number" min="1" max="20" step="1" value="1" inputmode="numeric" />
                 </div>
                 <button id="addOrderItemBtn" class="secondary-btn add-item-btn" type="button">Adicionar à encomenda</button>
               </div>
+
+              <div id="pricingEstimate" class="pricing-estimate" aria-live="polite"></div>
 
               <div id="orderItems" class="order-items" aria-live="polite"></div>
             </div>
@@ -1238,8 +1250,8 @@
           <p>Confira os principais detalhes antes de enviar.</p>
 
           <div class="summary-list">
-            <div class="summary-row"><span>Bolos</span><strong id="summaryQuantity">0</strong></div>
-            <div class="summary-row"><span>Itens</span><div id="summaryItems" class="compact-item-list"><span>Adicione seu primeiro bolo</span></div></div>
+            <div class="summary-row"><span>Fatias</span><strong id="summaryQuantity">0</strong></div>
+            <div class="summary-row"><span>Itens</span><div id="summaryItems" class="compact-item-list"><span>Adicione seu primeiro sabor</span></div></div>
             <div class="summary-row"><span>Data</span><strong id="summaryDate">—</strong></div>
             <div class="summary-row"><span>Pagamento</span><strong id="summaryPayment">—</strong></div>
           </div>
@@ -1267,7 +1279,7 @@
         <div class="success-summary">
           <div class="summary-row"><span>Cliente</span><strong id="successCustomer">—</strong></div>
           <div class="summary-row"><span>WhatsApp</span><strong id="successWhatsapp">—</strong></div>
-          <div class="summary-row"><span>Bolos</span><strong id="successQuantity">—</strong></div>
+          <div class="summary-row"><span>Quantidade</span><strong id="successQuantity">—</strong></div>
           <div class="summary-row"><span>Itens</span><div id="successItems" class="compact-item-list"></div></div>
           <div class="summary-row"><span>Total</span><strong id="successPrice">—</strong></div>
           <div class="summary-row"><span>Entrega</span><strong id="successDelivery">—</strong></div>
@@ -1327,6 +1339,7 @@
             <button id="ordersAdminTab" type="button" class="admin-area-btn nav-priority active" data-view="orders"><span>Pedidos</span><span id="ordersNavCount" class="nav-count">0</span></button>
             <h3>Configurações</h3>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="catalogPanel">Catálogo</button>
+            <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="pricingPanel">Preços</button>
             <button id="editAdminTab" type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="brandPanel">Marca e textos</button>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="paymentPanel">Pagamentos</button>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="availabilityPanel">Disponibilidade</button>
@@ -1377,8 +1390,8 @@
             </div>
 
             <div class="admin-section">
-              <h2>Tamanhos e preços</h2>
-              <p class="help">Cada tamanho aparece como uma opção visual no formulário do cliente.</p>
+              <h2>Tamanhos históricos e links</h2>
+              <p class="help">Mantidos para compatibilidade com pedidos e links antigos. O formulário público utiliza preços progressivos por fatia.</p>
               <div id="sizeCatalogSummary" class="catalog-summary"></div>
               <div id="sizeEditor" class="list-editor"></div>
               <div class="editor-actions">
@@ -1386,6 +1399,26 @@
                 <button id="saveCatalogBtn" class="secondary-btn" type="button">Salvar catálogo</button>
               </div>
               <div id="catalogSaveMessage" class="message" role="status"></div>
+            </div>
+          </div>
+
+          <div id="pricingPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Preços progressivos</h2>
+              <p class="help">Defina o preço da primeira fatia e o valor de cada fatia adicional. O servidor aplicará estes valores separadamente a cada sabor.</p>
+              <div class="admin-grid">
+                <div class="field">
+                  <label for="adminFirstSlicePrice">Primeira fatia</label>
+                  <input class="control" id="adminFirstSlicePrice" type="number" min="0.01" step="0.01" inputmode="decimal" />
+                </div>
+                <div class="field">
+                  <label for="adminAdditionalSlicePrice">Cada fatia adicional</label>
+                  <input class="control" id="adminAdditionalSlicePrice" type="number" min="0" step="0.01" inputmode="decimal" />
+                </div>
+              </div>
+              <div id="pricingAdminPreview" class="pricing-estimate"></div>
+              <div class="editor-actions"><button id="savePricingBtn" class="secondary-btn" type="button">Salvar preços</button></div>
+              <div id="pricingSaveMessage" class="message" role="status"></div>
             </div>
           </div>
 
@@ -1524,7 +1557,7 @@
         brandName: 'Primeira Fornada',
         heroTitle: 'Primeira Fornada 🍰',
         heroSubtitle: 'Estamos começando uma nova fase por aqui. 💛',
-        description: 'Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seu sabor, tamanho e a melhor forma de pagamento.',
+        description: 'Bolos feitos artesanalmente, com produção limitada e preparados somente por encomenda. Escolha seus sabores, a quantidade de fatias e a forma de pagamento.',
         flavors: [
           'Chocolate com brigadeiro',
           'Ninho com morango',
@@ -1542,6 +1575,7 @@
           { id: 'pix', name: 'PIX', type: 'pix', description: 'Pagamento via PIX', active: true, paymentLink: '' },
           { id: 'card', name: 'Cartão', type: 'card', description: 'Crédito ou débito', active: true, paymentLink: '' }
         ],
+        progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
         availability: {
           enabled: true,
           days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: false, saturday: false, sunday: false },
@@ -1554,13 +1588,12 @@
         orderWindow: null
       };
 
-      const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxGo2UNf4RqgkJ9vAeWu0plD9RrjltOv2lJSSIWiVf6-SprYIGtapMgevX0MWm5aVd7/exec';
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz4p5noLyaHwFwCDJ7oJKUFk67PJFvN8O1WTi_05PuKT0LDjJbd4V8PpciFe7CeuN8p/exec';
       const ORDERS_SPREADSHEET_URL = '';
       const params = new URLSearchParams(window.location.search);
       const isPublic = params.get('public') === '1';
       let config = normalizeConfig(DEFAULT_CONFIG);
       const appState = { config, orders: [] };
-      let selectedSizeId = '';
       let orderItems = [];
       let isSubmitting = false;
       let pendingOrderAttempt = null;
@@ -1580,6 +1613,29 @@
 
       function brl(value) {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+      }
+
+      function moneyToCents(value) {
+        return Math.round((Number(value) || 0) * 100);
+      }
+
+      function progressivePriceDetails(quantity, pricing = config.progressivePricing) {
+        const slices = Number(quantity);
+        const firstSliceCents = moneyToCents(pricing?.firstSlicePrice);
+        const additionalSliceCents = moneyToCents(pricing?.additionalSlicePrice);
+        if (!Number.isInteger(slices) || slices < 1) {
+          return { quantity: 0, subtotal: 0, savings: 0, firstSlicePrice: firstSliceCents / 100, additionalSlicePrice: additionalSliceCents / 100 };
+        }
+        const subtotalCents = firstSliceCents + (slices - 1) * additionalSliceCents;
+        const savingsCents = Math.max(0, slices * firstSliceCents - subtotalCents);
+        return {
+          quantity: slices,
+          subtotal: subtotalCents / 100,
+          savings: savingsCents / 100,
+          firstSlicePrice: firstSliceCents / 100,
+          additionalSlicePrice: additionalSliceCents / 100,
+          pricingModel: 'progressive-v1'
+        };
       }
 
       function escapeHtml(value = '') {
@@ -1833,6 +1889,9 @@
         const next = { ...DEFAULT_CONFIG, ...(value || {}) };
         next.availability = { ...DEFAULT_CONFIG.availability, ...(value?.availability || {}) };
         next.availability.days = { ...DEFAULT_CONFIG.availability.days, ...(value?.availability?.days || {}) };
+        next.progressivePricing = { ...DEFAULT_CONFIG.progressivePricing, ...(value?.progressivePricing || {}) };
+        next.progressivePricing.firstSlicePrice = Math.round(Number(next.progressivePricing.firstSlicePrice || 0) * 100) / 100;
+        next.progressivePricing.additionalSlicePrice = Math.round(Number(next.progressivePricing.additionalSlicePrice || 0) * 100) / 100;
 
         const rawFlavorItems = Array.isArray(value?.flavorItems)
           ? value.flavorItems
@@ -1973,39 +2032,15 @@
         updatePaymentPreview();
       }
 
-      function renderSizeChoices() {
-        const container = $('sizeChoices');
-        container.innerHTML = config.sizes.filter(size => size.active !== false).map(size => `
-          <label class="choice ${selectedSizeId === size.id ? 'selected' : ''}" data-size-id="${escapeHtml(size.id)}">
-            <input type="radio" name="size" value="${escapeHtml(size.id)}" ${selectedSizeId === size.id ? 'checked' : ''}>
-            <div class="choice-title">
-              <span>${escapeHtml(size.name)}</span>
-              <span class="price">${brl(size.price)}</span>
-            </div>
-            <div class="choice-subtitle">${escapeHtml(size.description || '')}</div>
-          </label>
-        `).join('');
-
-        qsa('.choice', container).forEach(choice => {
-          choice.addEventListener('click', () => {
-            selectedSizeId = choice.dataset.sizeId;
-            renderSizeChoices();
-            updateSummary();
-          });
-        });
-      }
-
       function normalizeClientOrderItems(items) {
         const grouped = new Map();
         (Array.isArray(items) ? items : []).forEach(item => {
           const flavor = String(item?.flavor || '').trim();
-          const sizeId = String(item?.sizeId || '').trim();
           const quantity = Number(item?.quantity);
-          if (!flavor || !sizeId || !Number.isInteger(quantity) || quantity < 1) return;
-          const key = `${flavor}\u0000${sizeId}`;
-          const current = grouped.get(key) || { flavor, sizeId, quantity: 0 };
+          if (!flavor || !Number.isInteger(quantity) || quantity < 1) return;
+          const current = grouped.get(flavor) || { flavor, quantity: 0 };
           current.quantity += quantity;
-          grouped.set(key, current);
+          grouped.set(flavor, current);
         });
         return [...grouped.values()];
       }
@@ -2013,20 +2048,20 @@
       function addSelectedOrderItem() {
         clearFieldErrors();
         const flavor = $('flavorSelect').value;
-        const size = config.sizes.find(item => item.id === selectedSizeId && item.active !== false);
         const quantity = Number($('itemQuantity').value);
         if (!flavor) return showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
-        if (!size) return showFieldError('sizeChoices', 'Escolha o tamanho do bolo.');
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
-          return showFieldError('itemQuantity', 'Informe uma quantidade entre 1 e 20.');
+          return showFieldError('itemQuantity', 'Informe uma quantidade de fatias entre 1 e 20.');
         }
-        const existing = orderItems.find(item => item.flavor === flavor && item.sizeId === size.id);
+        const currentTotal = orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+        if (currentTotal + quantity > 50) return showFieldError('itemQuantity', 'A encomenda aceita até 50 fatias no total.');
+        const existing = orderItems.find(item => item.flavor === flavor);
         if (existing) {
-          if (existing.quantity + quantity > 20) return showFieldError('itemQuantity', 'A quantidade deste item não pode passar de 20.');
+          if (existing.quantity + quantity > 20) return showFieldError('itemQuantity', 'Este sabor não pode passar de 20 fatias.');
           existing.quantity += quantity;
         } else {
-          if (orderItems.length >= 12) return showFieldError('orderItems', 'A encomenda aceita até 12 itens diferentes.');
-          orderItems.push({ flavor, sizeId: size.id, quantity });
+          if (orderItems.length >= 12) return showFieldError('orderItems', 'A encomenda aceita até 12 sabores diferentes.');
+          orderItems.push({ flavor, quantity });
         }
         $('itemQuantity').value = '1';
         renderOrderItems();
@@ -2038,6 +2073,8 @@
         const quantity = Number(value);
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) return false;
         if (!orderItems[index]) return false;
+        const otherSlices = orderItems.reduce((sum, item, itemIndex) => sum + (itemIndex === index ? 0 : Number(item.quantity || 0)), 0);
+        if (otherSlices + quantity > 50) return false;
         orderItems[index].quantity = quantity;
         renderOrderItems();
         updateSummary();
@@ -2051,34 +2088,56 @@
       }
 
       function itemDetails(item) {
-        const size = config.sizes.find(option => option.id === item.sizeId);
-        const unitPrice = Number(size?.price || item.unitPrice || 0);
+        if (item?.pricingModel && item.pricingModel !== 'progressive-v1') {
+          return { ...item, savings: Number(item.savings || 0) };
+        }
+        if (item?.sizeId && !item?.pricingModel) {
+          return { ...item, savings: Number(item.savings || 0), pricingModel: 'legacy-size' };
+        }
+        const appliedPricing = item?.pricingModel === 'progressive-v1'
+          ? {
+              firstSlicePrice: Number.isFinite(Number(item.firstSlicePrice)) ? Number(item.firstSlicePrice) : config.progressivePricing.firstSlicePrice,
+              additionalSlicePrice: Number.isFinite(Number(item.additionalSlicePrice)) ? Number(item.additionalSlicePrice) : config.progressivePricing.additionalSlicePrice
+            }
+          : config.progressivePricing;
+        const pricing = progressivePriceDetails(Number(item.quantity || 0), appliedPricing);
         return {
           ...item,
-          size: item.size || size?.name || 'Tamanho indisponível',
-          unitPrice,
-          subtotal: Number.isFinite(Number(item.subtotal)) ? Number(item.subtotal) : unitPrice * Number(item.quantity || 0)
+          ...pricing,
+          subtotal: Number.isFinite(Number(item.subtotal)) ? Number(item.subtotal) : pricing.subtotal,
+          savings: Number.isFinite(Number(item.savings)) ? Number(item.savings) : pricing.savings
         };
+      }
+
+      function renderPricingEstimate() {
+        const quantity = Number($('itemQuantity').value);
+        const details = progressivePriceDetails(quantity);
+        const target = $('pricingEstimate');
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+          target.innerHTML = '<span>Informe de 1 a 20 fatias.</span>';
+          return;
+        }
+        target.innerHTML = `<span>${quantity} ${quantity === 1 ? 'fatia' : 'fatias'} · primeira ${brl(details.firstSlicePrice)}${quantity > 1 ? ` + ${quantity - 1} × ${brl(details.additionalSlicePrice)}` : ''}</span><strong>${brl(details.subtotal)}${details.savings > 0 ? `<br><span class="economy">Economia ${brl(details.savings)}</span>` : ''}</strong>`;
       }
 
       function renderOrderItems() {
         const container = $('orderItems');
         if (!orderItems.length) {
-          container.innerHTML = '<div class="order-items-empty">Nenhum bolo adicionado. Escolha sabor, tamanho e quantidade acima.</div>';
+          container.innerHTML = '<div class="order-items-empty">Nenhum sabor adicionado. Escolha o sabor e a quantidade de fatias acima.</div>';
           return;
         }
         container.innerHTML = orderItems.map((raw, index) => {
           const item = itemDetails(raw);
           return `<div class="order-item" data-order-item="${index}">
-            <div class="order-item-copy"><strong>${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</strong><small>${brl(item.unitPrice)} cada · subtotal ${brl(item.subtotal)}</small></div>
-            <input class="control order-item-quantity" type="number" min="1" max="20" step="1" value="${item.quantity}" data-item-quantity="${index}" aria-label="Quantidade de ${escapeHtml(item.flavor)} ${escapeHtml(item.size)}">
+            <div class="order-item-copy"><strong>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</strong><small>Total do sabor ${brl(item.subtotal)}${item.savings > 0 ? ` · <span class="economy">economia de ${brl(item.savings)}</span>` : ''}</small></div>
+            <input class="control order-item-quantity" type="number" min="1" max="20" step="1" value="${item.quantity}" data-item-quantity="${index}" aria-label="Quantidade de fatias de ${escapeHtml(item.flavor)}">
             <button class="danger-btn order-item-remove" type="button" data-remove-item="${index}">Remover</button>
           </div>`;
         }).join('');
         qsa('[data-item-quantity]', container).forEach(input => input.addEventListener('change', () => {
           if (!updateOrderItemQuantity(Number(input.dataset.itemQuantity), input.value)) {
             input.value = String(orderItems[Number(input.dataset.itemQuantity)]?.quantity || 1);
-            setMessage($('orderMessage'), 'error', 'A quantidade deve ser um número inteiro entre 1 e 20.');
+            setMessage($('orderMessage'), 'error', 'Use de 1 a 20 fatias por sabor e até 50 fatias na encomenda.');
           }
         }));
         qsa('[data-remove-item]', container).forEach(button => button.addEventListener('click', () => removeOrderItem(Number(button.dataset.removeItem))));
@@ -2090,12 +2149,13 @@
         const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
         $('summaryQuantity').textContent = String(totalQuantity);
         $('summaryItems').innerHTML = detailedItems.length
-          ? detailedItems.map(item => `<div class="compact-item"><span>${item.quantity}× ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
-          : '<span>Adicione seu primeiro bolo</span>';
+          ? detailedItems.map(item => `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
+          : '<span>Adicione seu primeiro sabor</span>';
         $('summaryDate').textContent = formatDate($('orderDate').value);
         const payment = config.payments.find(item => item.id === $('paymentSelect').value);
         $('summaryPayment').textContent = payment?.name || '—';
         $('summaryTotal').textContent = brl(total);
+        renderPricingEstimate();
         updatePaymentPreview();
       }
 
@@ -2112,8 +2172,9 @@
         const detailedItems = (Array.isArray(items) ? items : []).map(itemDetails);
         const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
         const isSingleUnit = detailedItems.length === 1 && detailedItems[0].quantity === 1;
-        if (!isSingleUnit) {
-          container.innerHTML = `<h4>${escapeHtml(payment.name || 'Pagamento')}</h4><p>O valor integral desta encomenda é <strong>${brl(total)}</strong>. Como os links disponíveis são vinculados a tamanhos individuais, a Primeira Fornada enviará as instruções seguras de pagamento e confirmará a reserva manualmente.</p>`;
+        const usesProgressivePricing = detailedItems.some(item => item.pricingModel === 'progressive-v1' || !item.sizeId);
+        if (usesProgressivePricing || !isSingleUnit) {
+          container.innerHTML = `<h4>${escapeHtml(payment.name || 'Pagamento')}</h4><p>O valor integral desta encomenda é <strong>${brl(total)}</strong>. Os links antigos são vinculados a tamanhos e não representam este total. A Primeira Fornada enviará as instruções seguras de pagamento e confirmará a reserva manualmente.</p>`;
           return;
         }
 
@@ -2158,8 +2219,12 @@
         $('successOrderNumber').textContent = `Nº do pedido: ${orderNumber || 'aguardando identificação'}`;
         $('successCustomer').textContent = order.customerName;
         $('successWhatsapp').textContent = order.whatsapp;
-        $('successQuantity').textContent = `${totalQuantity} ${totalQuantity === 1 ? 'bolo' : 'bolos'}`;
-        $('successItems').innerHTML = items.map(item => `<div class="compact-item"><span>${item.quantity}× ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><strong>${brl(item.unitPrice)} cada · ${brl(item.subtotal)}</strong></div>`).join('');
+        const progressiveOrder = items.some(item => item.pricingModel === 'progressive-v1' || !item.sizeId);
+        $('successQuantity').textContent = `${totalQuantity} ${progressiveOrder ? (totalQuantity === 1 ? 'fatia' : 'fatias') : (totalQuantity === 1 ? 'bolo' : 'bolos')}`;
+        $('successItems').innerHTML = items.map(item => item.pricingModel === 'progressive-v1' || !item.sizeId
+          ? `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</span><strong>${brl(item.subtotal)}${item.savings > 0 ? ` · economia ${brl(item.savings)}` : ''}</strong></div>`
+          : `<div class="compact-item"><span>${item.quantity}× ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><strong>${brl(item.unitPrice)} cada · ${brl(item.subtotal)}</strong></div>`
+        ).join('');
         $('successPrice').textContent = brl(total);
         $('successDelivery').textContent = formatDate(order.deliveryDate || order.date);
         $('successPayment').textContent = order.payment || payment?.name || '—';
@@ -2181,7 +2246,6 @@
 
       function startAnotherOrder() {
         $('orderForm').reset();
-        selectedSizeId = '';
         orderItems = [];
         pendingOrderAttempt = null;
         clearMessage($('orderMessage'));
@@ -2190,7 +2254,6 @@
         $('orderLayout').classList.remove('hidden');
         renderFlavorOptions();
         renderPaymentOptions();
-        renderSizeChoices();
         renderOrderItems();
         applyPublicAvailability();
         updateSummary();
@@ -2255,8 +2318,8 @@
         if (!/^\d{10,11}$/.test(phoneDigits)) return { message: 'Informe um WhatsApp válido com DDD.', field: 'customerPhone' };
         if (!date) return { message: 'Escolha a data desejada.', field: 'orderDate' };
         if (!time) return { message: 'Escolha o horário preferido.', field: 'pickupTime' };
-        if (!orderItems.length) return { message: 'Adicione pelo menos um bolo à encomenda.', field: 'orderItems' };
-        if (orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) > 50) return { message: 'A encomenda aceita até 50 bolos.', field: 'orderItems' };
+        if (!orderItems.length) return { message: 'Adicione pelo menos um sabor à encomenda.', field: 'orderItems' };
+        if (orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) > 50) return { message: 'A encomenda aceita até 50 fatias.', field: 'orderItems' };
         if (!payment) return { message: 'Escolha a forma de pagamento.', field: 'paymentSelect' };
         if ($('notes').value.trim().length > 500) return { message: 'As observações devem ter no máximo 500 caracteres.', field: 'notes' };
         return null;
@@ -2275,7 +2338,7 @@
         error.className = 'field-error show';
         error.setAttribute('role', 'alert');
         error.textContent = message;
-        const anchor = fieldId === 'sizeChoices' ? field : field.closest?.('.field') || field;
+        const anchor = field.closest?.('.field') || field;
         anchor.insertAdjacentElement?.('afterend', error);
         if (field.type !== 'hidden') field.focus();
       }
@@ -2303,7 +2366,7 @@
           whatsapp: $('customerPhone').value.trim(),
           date: $('orderDate').value,
           time: $('pickupTime').value,
-          items: orderItems.map(item => ({ flavor: item.flavor, sizeId: item.sizeId, quantity: item.quantity })),
+          items: orderItems.map(item => ({ flavor: item.flavor, quantity: item.quantity })),
           payment: payment?.name || '',
           notes: $('notes').value.trim(),
           source: 'site',
@@ -2398,7 +2461,6 @@
         renderBrand();
         renderFlavorOptions();
         renderPaymentOptions();
-        renderSizeChoices();
         renderOrderItems();
         updateSummary();
         applyPublicAvailability();
@@ -2445,6 +2507,7 @@
         $('spreadsheetUrl').value = getSpreadsheetUrl();
         renderFlavorEditor();
         renderSizeEditor();
+        renderPricingEditor();
         renderPaymentEditor();
         renderAvailabilityEditor();
         renderConnectionStatus();
@@ -2469,6 +2532,19 @@
           markConfigDirty('catalog');
           renderFlavorEditor();
         }));
+      }
+
+      function renderPricingEditor() {
+        $('adminFirstSlicePrice').value = Number(config.progressivePricing.firstSlicePrice || 0).toFixed(2);
+        $('adminAdditionalSlicePrice').value = Number(config.progressivePricing.additionalSlicePrice || 0).toFixed(2);
+        renderPricingAdminPreview();
+      }
+
+      function renderPricingAdminPreview() {
+        const first = Number($('adminFirstSlicePrice').value || 0);
+        const additional = Number($('adminAdditionalSlicePrice').value || 0);
+        const preview = progressivePriceDetails(4, { firstSlicePrice: first, additionalSlicePrice: additional });
+        $('pricingAdminPreview').innerHTML = `<span>Exemplo com 4 fatias<br>1 × ${brl(first)} + 3 × ${brl(additional)}</span><strong>${brl(preview.subtotal)}<br><span class="economy">Economia ${brl(preview.savings)}</span></strong>`;
       }
 
       function captureFlavorEditor() {
@@ -2599,8 +2675,6 @@
         renderBrand();
         renderFlavorOptions();
         renderPaymentOptions();
-        if (!config.sizes.some(item => item.id === selectedSizeId)) selectedSizeId = '';
-        renderSizeChoices();
         updateSummary();
         if (isPublic) applyPublicAvailability();
       }
@@ -2608,6 +2682,7 @@
       const DOMAIN_MESSAGES = {
         brand: 'brandSaveMessage',
         catalog: 'catalogSaveMessage',
+        pricing: 'pricingSaveMessage',
         payments: 'paymentSaveMessage',
         availability: 'availabilitySaveMessage'
       };
@@ -2630,6 +2705,7 @@
           sizes: config.sizes,
           payments: config.payments
         };
+        if (domain === 'pricing') return { progressivePricing: config.progressivePricing };
         if (domain === 'payments') return { payments: config.payments };
         if (domain === 'availability') return { availability: config.availability };
         throw new Error('Domínio de configuração inválido.');
@@ -2644,6 +2720,8 @@
           config.flavors = remote.flavors;
           config.sizes = remote.sizes;
           config.payments = remote.payments;
+        } else if (domain === 'pricing') {
+          config.progressivePricing = remote.progressivePricing;
         } else if (domain === 'payments') {
           config.payments = remote.payments;
         } else if (domain === 'availability') {
@@ -2710,7 +2788,7 @@
           if (revisionAtStart !== configRevision) return false;
 
           const remoteConfig = data.config;
-          if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.sizes) && Array.isArray(remoteConfig.payments)) {
+          if (remoteConfig && Array.isArray(remoteConfig.flavors) && Array.isArray(remoteConfig.payments) && remoteConfig.progressivePricing) {
             // Google Sheets é a fonte de verdade. Não mesclar com o estado local antigo.
             config = normalizeConfig(remoteConfig);
             appState.config = config;
@@ -2830,10 +2908,16 @@
         return Number.isFinite(Number(order.total)) ? Number(order.total) : Number(order.price || 0);
       }
 
+      function orderUsesProgressivePricing(order) {
+        return orderDisplayItems(order).some(item => item.pricingModel === 'progressive-v1');
+      }
+
       function renderAdminOrderItems(order) {
-        return `<div class="admin-item-list">${orderDisplayItems(order).map(item =>
-          `<div class="admin-item-line"><span><strong>${item.quantity}×</strong> ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><small>${brl(item.subtotal)}</small></div>`
-        ).join('')}<small>${orderTotalQuantity(order)} ${orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos'} no total</small></div>`;
+        const progressive = orderUsesProgressivePricing(order);
+        return `<div class="admin-item-list">${orderDisplayItems(order).map(item => item.pricingModel === 'progressive-v1'
+          ? `<div class="admin-item-line"><span><strong>${item.quantity}×</strong> ${escapeHtml(item.flavor)}</span><small>${brl(item.subtotal)}${item.savings > 0 ? ` · economia ${brl(item.savings)}` : ''}</small></div>`
+          : `<div class="admin-item-line"><span><strong>${item.quantity}×</strong> ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><small>${brl(item.subtotal)}</small></div>`
+        ).join('')}<small>${orderTotalQuantity(order)} ${progressive ? (orderTotalQuantity(order) === 1 ? 'fatia' : 'fatias') : (orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos')} no total</small></div>`;
       }
 
       function filterAndSortOrders(orders = appState.orders, state = orderViewState) {
@@ -2955,7 +3039,7 @@
                   <div><span class="order-id">#${escapeHtml(order.id || '—')}</span><h3>${escapeHtml(order.customerName || 'Cliente não informado')}</h3></div>
                   <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                 </div>
-                <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${orderTotalQuantity(order)} ${orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos'}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(orderTotal(order)))}</strong></div>
+                <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${orderTotalQuantity(order)} ${orderUsesProgressivePricing(order) ? (orderTotalQuantity(order) === 1 ? 'fatia' : 'fatias') : (orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos')}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(orderTotal(order)))}</strong></div>
                 <details class="order-details"><summary>Ver detalhes</summary><div class="order-details-grid">
                   <div><span>Itens</span>${renderAdminOrderItems(order)}</div>
                   <div><span>WhatsApp</span>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</div>
@@ -2996,6 +3080,7 @@
       $('endAdminSessionBtn').addEventListener('click', endAdminAccess);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
       ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+      $('itemQuantity').addEventListener('input', renderPricingEstimate);
       $('addOrderItemBtn').addEventListener('click', addSelectedOrderItem);
 
       $('copyPublicLinkBtn').addEventListener('click', copyPublicUrl);
@@ -3037,8 +3122,9 @@
         const panel = event.target.closest?.('.admin-panel');
         const domain = panel?.id === 'brandPanel' ? 'brand'
           : panel?.id === 'catalogPanel' ? 'catalog'
-            : panel?.id === 'paymentPanel' ? 'payments'
-              : panel?.id === 'availabilityPanel' ? 'availability'
+            : panel?.id === 'pricingPanel' ? 'pricing'
+              : panel?.id === 'paymentPanel' ? 'payments'
+                : panel?.id === 'availabilityPanel' ? 'availability'
                 : '';
         if (domain) markConfigDirty(domain);
       });
@@ -3046,9 +3132,10 @@
       $('adminEditView').addEventListener('change', event => {
         const panel = event.target.closest?.('.admin-panel');
         const domain = panel?.id === 'catalogPanel' ? 'catalog'
-          : panel?.id === 'paymentPanel' ? 'payments'
-            : panel?.id === 'availabilityPanel' ? 'availability'
-              : panel?.id === 'brandPanel' ? 'brand' : '';
+          : panel?.id === 'pricingPanel' ? 'pricing'
+            : panel?.id === 'paymentPanel' ? 'payments'
+              : panel?.id === 'availabilityPanel' ? 'availability'
+                : panel?.id === 'brandPanel' ? 'brand' : '';
         if (domain) markConfigDirty(domain);
       });
 
@@ -3074,6 +3161,24 @@
           await saveConfigRemote('brand');
         } catch (error) {
           showConfigSaveError('brand', error);
+        }
+      }));
+
+      ['adminFirstSlicePrice', 'adminAdditionalSlicePrice'].forEach(id => $(id).addEventListener('input', renderPricingAdminPreview));
+
+      $('savePricingBtn').addEventListener('click', () => withSavingState($('savePricingBtn'), async () => {
+        const firstSlicePrice = Number($('adminFirstSlicePrice').value);
+        const additionalSlicePrice = Number($('adminAdditionalSlicePrice').value);
+        if (!Number.isFinite(firstSlicePrice) || firstSlicePrice <= 0 || !Number.isFinite(additionalSlicePrice) || additionalSlicePrice < 0 || additionalSlicePrice > firstSlicePrice) {
+          setMessage($('pricingSaveMessage'), 'error', 'Informe preços válidos; a fatia adicional não pode custar mais que a primeira.');
+          return;
+        }
+        config.progressivePricing = { firstSlicePrice, additionalSlicePrice };
+        try {
+          await saveConfigRemote('pricing');
+          renderPricingEditor();
+        } catch (error) {
+          showConfigSaveError('pricing', error);
         }
       }));
 

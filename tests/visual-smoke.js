@@ -24,6 +24,7 @@ const publicConfig = {
     { id: 'm', name: 'Médio', description: 'Serve aproximadamente 15 pessoas', price: 129 }
   ],
   payments: [{ id: 'pix', name: 'PIX', type: 'pix', description: 'Pagamento via PIX', paymentLink: '', active: true }],
+  progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
   availability: {
     enabled: true,
     days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: true, sunday: true },
@@ -107,7 +108,10 @@ const server = http.createServer((request, response) => {
     assert.equal(classListFor(adminDom, 'adminView').includes('hidden'), true);
     assert.equal(classListFor(publicDom, 'customerView').includes('hidden'), false);
     assert.equal(classListFor(publicDom, 'adminAuthView').includes('hidden'), true);
+    assert.match(publicDom, /id="pricingEstimate"/);
+    assert.doesNotMatch(publicDom, /id="sizeChoices"/);
     assert.equal(classListFor(previewDom, 'adminView').includes('hidden'), false);
+    assert.match(previewDom, /id="pricingPanel"/);
     assert.match(previewDom, /order-mobile-card/);
     assert.match(previewDom, /PF-HML-101/);
     console.log('PASS central protegida sem sessão');

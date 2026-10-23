@@ -16,14 +16,17 @@ source = source.replace(
         renderLocalOrders,
         renderFlavorEditor,
         renderSizeEditor,
+        renderPricingEditor,
         renderPaymentEditor,
         renderOrderSuccess,
         normalizeClientOrderItems,
+        progressivePriceDetails,
         itemDetails,
         orderDisplayItems,
         orderTotalQuantity,
         orderTotal,
         renderAdminOrderItems,
+        configDomainPayload,
         updateOrderItemQuantity,
         removeOrderItem,
         changeOrderStatus,
@@ -211,22 +214,32 @@ test('confirmação destaca número e só mostra WhatsApp comercial válido', ()
   assert.match(html, /id="newOrderBtn"/);
 });
 
-test('frontend agrupa repetição do mesmo sabor e tamanho', () => {
+test('frontend agrupa repetição do mesmo sabor', () => {
   const api = createRuntime().window.__uxTest;
   const items = api.normalizeClientOrderItems([
-    { flavor: 'Chocolate', sizeId: 'm', quantity: 2 },
-    { flavor: 'Chocolate', sizeId: 'm', quantity: 3 },
-    { flavor: 'Chocolate', sizeId: 'g', quantity: 1 }
+    { flavor: 'Chocolate', quantity: 2 },
+    { flavor: 'Chocolate', quantity: 3 }
   ]);
-  assert.equal(items.length, 2);
+  assert.equal(items.length, 1);
   assert.equal(items[0].quantity, 5);
+});
+
+test('estimativa progressiva usa centavos e calcula economia', () => {
+  const api = createRuntime().window.__uxTest;
+  api.setConfig({ progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 }, flavors: [], sizes: [], payments: [] });
+  assert.equal(api.progressivePriceDetails(1).subtotal, 19.97);
+  assert.equal(api.progressivePriceDetails(2).subtotal, 34.97);
+  assert.equal(api.progressivePriceDetails(4).subtotal, 64.97);
+  assert.equal(api.progressivePriceDetails(5).subtotal, 79.97);
+  assert.equal(api.progressivePriceDetails(20).subtotal, 304.97);
+  assert.equal(api.progressivePriceDetails(4).savings, 14.91);
 });
 
 test('frontend permite alterar quantidade e remover item', () => {
   const api = createRuntime().window.__uxTest;
   api.setOrderItems([
-    { flavor: 'Chocolate', sizeId: 'm', quantity: 1 },
-    { flavor: 'Cenoura', sizeId: 'g', quantity: 2 }
+    { flavor: 'Chocolate', quantity: 1 },
+    { flavor: 'Cenoura', quantity: 2 }
   ]);
   assert.equal(api.updateOrderItemQuantity(0, 4), true);
   assert.equal(api.getOrderItems()[0].quantity, 4);
@@ -250,6 +263,18 @@ test('central administrativa exibe itens quantidades subtotais e total', () => {
   assert.equal(api.orderTotal(order), 437);
 });
 
+test('central edita o dominio de precos progressivos', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({ progressivePricing: { firstSlicePrice: 21.5, additionalSlicePrice: 16 }, flavors: [], sizes: [], payments: [] });
+  api.renderPricingEditor();
+  assert.equal(runtime.get('adminFirstSlicePrice').value, '21.50');
+  assert.equal(runtime.get('adminAdditionalSlicePrice').value, '16.00');
+  const payload = api.configDomainPayload('pricing');
+  assert.equal(payload.progressivePricing.firstSlicePrice, 21.5);
+  assert.equal(payload.progressivePricing.additionalSlicePrice, 16);
+});
+
 test('confirmação pública usa itens e total definitivos do servidor', () => {
   const runtime = createRuntime();
   const api = runtime.window.__uxTest;
@@ -257,20 +282,22 @@ test('confirmação pública usa itens e total definitivos do servidor', () => {
     flavors: ['Chocolate', 'Cenoura'],
     sizes: [{ id: 'p', name: 'Pequeno', price: 89 }, { id: 'g', name: 'Grande', price: 169 }],
     payments: [{ id: 'pix', name: 'PIX', type: 'pix', active: true, paymentLink: 'https://pay.example/p' }],
+    progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
     businessWhatsapp: ''
   });
   runtime.get('paymentSelect').value = 'pix';
   api.renderOrderSuccess({
     customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25', payment: 'PIX',
-    status: 'Aguardando pagamento', totalQuantity: 3, total: 347,
+    status: 'Aguardando pagamento', totalQuantity: 3, total: 54.94,
     items: [
-      { flavor: 'Chocolate', sizeId: 'p', size: 'Pequeno', quantity: 2, unitPrice: 89, subtotal: 178 },
-      { flavor: 'Cenoura', sizeId: 'g', size: 'Grande', quantity: 1, unitPrice: 169, subtotal: 169 }
+      { flavor: 'Chocolate', quantity: 2, firstSlicePrice: 19.97, additionalSlicePrice: 15, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' },
+      { flavor: 'Cenoura', quantity: 1, firstSlicePrice: 19.97, additionalSlicePrice: 15, subtotal: 19.97, savings: 0, pricingModel: 'progressive-v1' }
     ]
   }, 'PF-MULTI-1');
   assert.match(runtime.get('successItems').innerHTML, /Chocolate/);
   assert.match(runtime.get('successItems').innerHTML, /Cenoura/);
-  assert.match(runtime.get('successPrice').textContent, /347,00/);
+  assert.match(runtime.get('successPrice').textContent, /54,94/);
+  assert.match(runtime.get('successItems').innerHTML, /economia/);
   assert.match(runtime.get('successPaymentDetails').innerHTML, /valor integral/);
 });
 

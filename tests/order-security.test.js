@@ -41,7 +41,7 @@ function createHarness(options = {}) {
     };
   }
   const sheet = makeSheet(rows, 18);
-  const itemSheet = makeSheet(itemRows, 8, true);
+  const itemSheet = makeSheet(itemRows, 12, true);
   const spreadsheet = {
     getSheetByName: name => name === 'PedidoItens' ? itemSheet : sheet,
     getSpreadsheetTimeZone: () => 'America/Sao_Paulo'
@@ -53,6 +53,7 @@ function createHarness(options = {}) {
       { id: 'pix', name: 'PIX', active: true },
       { id: 'off', name: 'Desativado', active: false }
     ],
+    progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
     availability: {
       enabled: true,
       days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: true, sunday: true },
@@ -118,7 +119,7 @@ function createHarness(options = {}) {
   function post(overrides = {}) {
     const payload = {
       action: 'createOrder', customerName: 'Cliente Ficticio', whatsapp: '(34) 99999-0000',
-      date: '2026-10-25', time: '00:00', items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 }],
+      date: '2026-10-25', time: '00:00', items: [{ flavor: 'Chocolate ficticio', quantity: 1 }],
       payment: 'PIX', notes: '', source: 'site', website: '',
       idempotencyKey: 'attempt-fictitious-00000001', ...overrides
     };
@@ -137,6 +138,7 @@ function businessConfig(availability = {}) {
     flavors: ['Chocolate ficticio'],
     sizes: [{ id: 'p', name: 'Pequeno', description: 'Serve 8 pessoas', price: 89 }],
     payments: [{ id: 'pix', name: 'PIX', active: true }],
+    progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
     availability: {
       enabled: true,
       days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: true, sunday: true },
@@ -149,21 +151,37 @@ function businessConfig(availability = {}) {
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
-test('pedido valido e publico usa preco do catalogo no servidor', () => {
+test('uma fatia usa o preco inicial configurado no servidor', () => {
   const h = createHarness();
   const result = h.post({ price: 0.01 });
   assert.equal(result.ok, true);
-  assert.equal(result.order.price, 89);
+  assert.equal(result.order.price, 19.97);
   assert.equal(h.rows.length, 1);
 });
 
-test('um item com quantidade maior calcula subtotal e quantidade total', () => {
+test('duas fatias aplicam uma vez o preco adicional', () => {
   const h = createHarness();
-  const result = h.post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 3 }] });
-  assert.equal(result.order.total, 267);
-  assert.equal(result.order.totalQuantity, 3);
-  assert.equal(result.order.items[0].subtotal, 267);
-  assert.equal(h.itemRows[0][5], 3);
+  const result = h.post({ items: [{ flavor: 'Chocolate ficticio', quantity: 2 }] });
+  assert.equal(result.order.total, 34.97);
+  assert.equal(result.order.items[0].savings, 4.97);
+});
+
+test('quatro fatias calculam R$ 64,97 em centavos inteiros', () => {
+  const h = createHarness();
+  const result = h.post({ items: [{ flavor: 'Chocolate ficticio', quantity: 4 }] });
+  assert.equal(result.order.total, 64.97);
+  assert.equal(result.order.items[0].subtotalCents, 6497);
+});
+
+test('cinco fatias calculam R$ 79,97', () => {
+  const result = createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: 5 }] });
+  assert.equal(result.order.total, 79.97);
+});
+
+test('vinte fatias respeitam o limite por sabor', () => {
+  const result = createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: 20 }] });
+  assert.equal(result.order.total, 304.97);
+  assert.equal(result.order.totalQuantity, 20);
 });
 
 test('dois sabores diferentes sao persistidos sob um unico pedido', () => {
@@ -171,44 +189,67 @@ test('dois sabores diferentes sao persistidos sob um unico pedido', () => {
   config.flavors.push('Cenoura ficticia');
   const h = createHarness({ config });
   const result = h.post({ items: [
-    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 },
-    { flavor: 'Cenoura ficticia', sizeId: 'p', quantity: 2 }
+    { flavor: 'Chocolate ficticio', quantity: 2 },
+    { flavor: 'Cenoura ficticia', quantity: 3 }
   ] });
   assert.equal(result.order.itemCount, 2);
-  assert.equal(result.order.totalQuantity, 3);
+  assert.equal(result.order.totalQuantity, 5);
+  assert.equal(result.order.total, 84.94);
   assert.equal(h.rows.length, 1);
   assert.equal(h.itemRows.length, 2);
 });
 
-test('mesmo sabor com tamanhos diferentes usa os precos corretos', () => {
-  const config = businessConfig();
-  config.sizes.push({ id: 'g', name: 'Grande', description: 'Serve 20 pessoas', price: 179 });
-  const h = createHarness({ config });
-  const result = h.post({ items: [
-    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 },
-    { flavor: 'Chocolate ficticio', sizeId: 'g', quantity: 2 }
-  ] });
-  assert.equal(result.order.total, 447);
-  assert.deepEqual(Array.from(result.order.items, item => item.subtotal), [89, 358]);
-});
-
-test('itens repetidos sao agrupados e o preco enviado pelo cliente e ignorado', () => {
+test('mesmo sabor adicionado novamente e agrupado antes do calculo', () => {
   const h = createHarness();
   const result = h.post({ items: [
-    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1, unitPrice: 0.01 },
-    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 2, subtotal: 0.03 }
-  ], total: 0.03 });
+    { flavor: 'Chocolate ficticio', quantity: 1 },
+    { flavor: 'Chocolate ficticio', quantity: 2 }
+  ] });
   assert.equal(result.order.items.length, 1);
   assert.equal(result.order.items[0].quantity, 3);
-  assert.equal(result.order.items[0].unitPrice, 89);
-  assert.equal(result.order.total, 267);
+  assert.equal(result.order.total, 49.97);
+});
+
+test('preco e total adulterados pelo navegador sao ignorados', () => {
+  const h = createHarness();
+  const result = h.post({ items: [
+    { flavor: 'Chocolate ficticio', quantity: 3, firstSlicePrice: 0.01, additionalSlicePrice: 0.01, subtotal: 0.03 }
+  ], total: 0.03 });
+  assert.equal(result.order.items[0].firstSlicePrice, 19.97);
+  assert.equal(result.order.items[0].additionalSlicePrice, 15);
+  assert.equal(result.order.total, 49.97);
+});
+
+test('economia e precos aplicados ficam rastreaveis em PedidoItens', () => {
+  const h = createHarness();
+  const result = h.post({ items: [{ flavor: 'Chocolate ficticio', quantity: 4 }] });
+  assert.equal(result.order.items[0].savings, 14.91);
+  assert.equal(h.itemRows[0][5], 4);
+  assert.equal(h.itemRows[0][8], 19.97);
+  assert.equal(h.itemRows[0][9], 15);
+  assert.equal(h.itemRows[0][10], 14.91);
+  assert.equal(h.itemRows[0][11], 'progressive-v1');
 });
 
 test('pedido sem itens e quantidades invalidas sao rejeitados', () => {
   assert.equal(createHarness().post({ items: [] }).code, 'ORDER_ITEMS_REQUIRED');
-  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 0 }] }).code, 'INVALID_ITEM_QUANTITY');
-  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1.5 }] }).code, 'INVALID_ITEM_QUANTITY');
-  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 21 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: 0 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: -1 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: 1.5 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', quantity: 21 }] }).code, 'INVALID_ITEM_QUANTITY');
+});
+
+test('limite total de cinquenta fatias e validado no servidor', () => {
+  const config = businessConfig();
+  config.flavors.push('Cenoura ficticia', 'Ninho ficticio');
+  const accepted = createHarness({ config }).post({ items: [
+    { flavor: 'Chocolate ficticio', quantity: 20 }, { flavor: 'Cenoura ficticia', quantity: 20 }, { flavor: 'Ninho ficticio', quantity: 10 }
+  ] });
+  assert.equal(accepted.ok, true);
+  const rejected = createHarness({ config }).post({ items: [
+    { flavor: 'Chocolate ficticio', quantity: 20 }, { flavor: 'Cenoura ficticia', quantity: 20 }, { flavor: 'Ninho ficticio', quantity: 11 }
+  ] });
+  assert.equal(rejected.code, 'ORDER_QUANTITY_LIMIT');
 });
 
 test('falha ao persistir itens remove o cabecalho incompleto', () => {
@@ -229,11 +270,13 @@ test('WhatsApp invalido e rejeitado', () => {
 });
 
 test('sabor inexistente e rejeitado', () => {
-  assert.equal(createHarness().post({ items: [{ flavor: 'Sabor inventado', sizeId: 'p', quantity: 1 }] }).code, 'INVALID_FLAVOR');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Sabor inventado', quantity: 1 }] }).code, 'INVALID_FLAVOR');
 });
 
-test('tamanho invalido e rejeitado', () => {
-  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'xx', quantity: 1 }] }).code, 'INVALID_SIZE');
+test('campo legado de tamanho nao interfere no preco progressivo', () => {
+  const result = createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'xx', quantity: 2 }] });
+  assert.equal(result.ok, true);
+  assert.equal(result.order.total, 34.97);
 });
 
 test('pagamento desativado e rejeitado', () => {
@@ -304,6 +347,19 @@ test('reenvio idempotente recupera pedido mesmo depois do fechamento da janela',
   const retry = h.post();
   assert.equal(first.orderId, retry.orderId);
   assert.equal(retry.duplicate, true);
+  assert.equal(h.rows.length, 1);
+});
+
+test('reenvio idempotente recupera pedido apos mudanca no catalogo', () => {
+  const config = businessConfig();
+  const h = createHarness({ config });
+  const first = h.post();
+  config.flavors = [];
+  config.payments[0].active = false;
+  const retry = h.post();
+  assert.equal(retry.ok, true);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.orderId, first.orderId);
   assert.equal(h.rows.length, 1);
 });
 

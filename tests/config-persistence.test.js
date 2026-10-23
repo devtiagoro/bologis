@@ -141,6 +141,38 @@ test('salvamento valido usa lock, cria backup e incrementa revisao', () => {
   assert.equal(backup.data[1][5], 'committed');
 });
 
+test('precos progressivos usam revisao backup e persistencia no dominio proprio', () => {
+  const h = createHarness();
+  const result = h.context.saveConfigDomain_('pricing', {
+    progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 }
+  }, '1');
+  assert.equal(result.revision, '2');
+  assert.equal(result.config.progressivePricing.firstSlicePrice, 19.97);
+  assert.equal(result.config.progressivePricing.additionalSlicePrice, 15);
+  assert.equal(h.sheets.get('_ConfigBackups').data[1][3], 'pricing');
+  assert.equal(h.sheets.get('_ConfigBackups').data[1][5], 'committed');
+});
+
+test('preco progressivo invalido restaura configuracao e revisao', () => {
+  const h = createHarness();
+  assert.throws(() => h.context.saveConfigDomain_('pricing', {
+    progressivePricing: { firstSlicePrice: 10, additionalSlicePrice: 15 }
+  }, '1'), error => error.code === 'INVALID_PROGRESSIVE_PRICE');
+  assert.equal(h.context.getConfigRevision_(), '1');
+  assert.equal(h.config().progressivePricing.firstSlicePrice, 19.97);
+});
+
+test('configuracao publica expoe somente precos necessarios ao formulario', () => {
+  const h = createHarness();
+  const publicConfig = h.context.getPublicConfig_();
+  assert.deepEqual(JSON.parse(JSON.stringify(publicConfig.progressivePricing)), {
+    firstSlicePrice: 19.97,
+    additionalSlicePrice: 15
+  });
+  assert.equal(Object.hasOwn(publicConfig, 'sizes'), false);
+  assert.equal(Object.hasOwn(publicConfig.payments[0], 'paymentLink'), false);
+});
+
 test('revisao desatualizada nao sobrescreve salvamento recente', () => {
   const h = createHarness();
   h.context.saveConfigDomain_('brand', { brandName: 'Primeiro', heroTitle: 'Primeiro', heroSubtitle: '', description: '' }, '1');
@@ -269,7 +301,7 @@ test('tamanho pode ser desativado e reativado sem alterar ID', () => {
   const h = createHarness();
   let result = h.context.saveConfigDomain_('sizes', { sizes: [{ id: 'p', name: 'Pequeno', description: 'Serve 8', price: 89, active: false }] }, '1');
   assert.equal(result.config.sizes.find(item => item.id === 'p').active, false);
-  assert.equal(h.context.getPublicConfig_().sizes.some(item => item.id === 'p'), false);
+  assert.equal(Object.hasOwn(h.context.getPublicConfig_(), 'sizes'), false);
   result = h.context.saveConfigDomain_('sizes', { sizes: [{ id: 'p', name: 'Pequeno', description: 'Serve 8', price: 89, active: true }] }, '2');
   assert.equal(result.config.sizes.find(item => item.id === 'p').active, true);
 });

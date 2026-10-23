@@ -21,7 +21,8 @@ const PF = {
     ],
     PedidoItens: [
       'Pedido ID', 'Item', 'Sabor', 'Tamanho ID', 'Tamanho', 'Quantidade',
-      'Preço unitário', 'Subtotal'
+      'Preço unitário', 'Subtotal', 'Preço primeira fatia', 'Preço fatia adicional',
+      'Economia', 'Modelo de preço'
     ]
   }
 };
@@ -67,7 +68,13 @@ const PF_CONFIG = {
   backupHeaders: ['Snapshot ID', 'Criado em', 'Revisão', 'Domínio', 'Dados JSON', 'Estado', 'Parte', 'Total'],
   backupRetention: 20,
   backupChunkSize: 40000,
-  domains: ['brand', 'flavors', 'sizes', 'catalog', 'payments', 'availability']
+  domains: ['brand', 'flavors', 'sizes', 'catalog', 'pricing', 'payments', 'availability']
+};
+
+const PF_PRICING = {
+  defaultFirstSliceCents: 1997,
+  defaultAdditionalSliceCents: 1500,
+  model: 'progressive-v1'
 };
 
 /** Execute manualmente no editor do Apps Script para criar ou rotacionar a chave. */
@@ -311,7 +318,9 @@ function ensureConfigDefaults_(ss) {
     ['ordersEnabled', true],
     ['deliveryDay', 'sunday'],
     ['paymentDeadlineDay', 'thursday'],
-    ['paymentDeadlineTime', '23:59:59']
+    ['paymentDeadlineTime', '23:59:59'],
+    ['firstSlicePrice', PF_PRICING.defaultFirstSliceCents / 100],
+    ['additionalSlicePrice', PF_PRICING.defaultAdditionalSliceCents / 100]
   ];
   const missing = defaults.filter(row => !existing[row[0]]);
   if (missing.length) sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 2).setValues(missing);
@@ -683,6 +692,11 @@ function getConfig_() {
 
     payments,
 
+    progressivePricing: {
+      firstSlicePrice: configuredMoney_(values.firstSlicePrice, PF_PRICING.defaultFirstSliceCents),
+      additionalSlicePrice: configuredMoney_(values.additionalSlicePrice, PF_PRICING.defaultAdditionalSliceCents)
+    },
+
     availability: {
       enabled: isConfigTrue_(values.ordersEnabled, true),
       days: {
@@ -718,20 +732,14 @@ function getPublicConfig_() {
     heroSubtitle: config.heroSubtitle,
     description: config.description,
     flavors: config.flavors,
-    sizes: config.sizes.filter(item => item.active !== false).map(item => ({
-      id: item.id,
-      name: item.name,
-      description: item.description,
-      price: item.price
-    })),
     payments: config.payments.filter(item => item.active !== false).map(item => ({
       id: item.id,
       name: item.name,
       type: item.type,
       description: item.description,
-      paymentLink: safePaymentStorage_(item.paymentLink, false),
       active: true
     })),
+    progressivePricing: config.progressivePricing,
     availability: config.availability,
     orderWindow: {
       open: orderWindow.open,
@@ -1061,6 +1069,7 @@ function applyConfigDomain_(ss, domain, data) {
   if (domain === 'brand' || domain === 'all') writeBrandConfig_(ss, data);
   if (domain === 'flavors' || domain === 'catalog' || domain === 'all') writeFlavorConfig_(ss, data);
   if (domain === 'sizes' || domain === 'catalog' || domain === 'all') writeSizeConfig_(ss, data);
+  if (domain === 'pricing' || (domain === 'all' && data.progressivePricing)) writePricingConfig_(ss, data);
   if (domain === 'catalog' && Array.isArray(data.payments)) writePaymentConfig_(ss, data);
   if (domain === 'payments' || domain === 'all') writePaymentConfig_(ss, data);
   if (domain === 'availability' || domain === 'all') writeAvailabilityConfig_(ss, data);
@@ -1073,6 +1082,32 @@ function writeBrandConfig_(ss, data) {
     heroSubtitle: sheetSafeText_(clean_(data.heroSubtitle)),
     description: sheetSafeText_(clean_(data.description))
   });
+}
+
+function writePricingConfig_(ss, data) {
+  const pricing = data.progressivePricing || data;
+  const firstSliceCents = moneyToCents_(pricing.firstSlicePrice, 'preço da primeira fatia');
+  const additionalSliceCents = moneyToCents_(pricing.additionalSlicePrice, 'preço da fatia adicional');
+  if (firstSliceCents < 1 || additionalSliceCents > firstSliceCents) {
+    throw apiError_('INVALID_PROGRESSIVE_PRICE', 'O preço adicional deve ser menor ou igual ao preço da primeira fatia.');
+  }
+  updateConfigValues_(ss.getSheetByName(PF.sheets.config), {
+    firstSlicePrice: firstSliceCents / 100,
+    additionalSlicePrice: additionalSliceCents / 100
+  });
+}
+
+function moneyToCents_(value, label) {
+  const numeric = Number(value);
+  if (!isFinite(numeric) || numeric < 0 || numeric > 100000) {
+    throw apiError_('INVALID_PROGRESSIVE_PRICE', 'O ' + label + ' não é válido.');
+  }
+  return Math.round(numeric * 100);
+}
+
+function configuredMoney_(value, fallbackCents) {
+  const numeric = Number(value);
+  return isFinite(numeric) && numeric >= 0 ? Math.round(numeric * 100) / 100 : fallbackCents / 100;
 }
 
 function writeAvailabilityConfig_(ss, data) {
@@ -1615,21 +1650,10 @@ function createOrder_(body) {
   const now = currentBusinessDate_();
   const timezone = PF_ORDER.timezone;
   const orderWindow = getOrderWindow_(config, now);
-
-  const items = normalizeOrderItems_(body.items, config);
-
-  const paymentOption = config.payments.find(item =>
-    (String(item.id) === payment || String(item.name) === payment) && item.active !== false
-  );
-  if (!paymentOption) {
-    throw apiError_('INVALID_PAYMENT', 'A forma de pagamento selecionada não está disponível.');
-  }
-
-  const total = items.reduce((sum, item) => sum + item.subtotal, 0);
-  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  const itemIdentity = normalizeOrderItemIdentity_(body.items);
   const fingerprint = orderFingerprint_({
-    customerName, whatsapp, requestedDate, time, payment: paymentOption.id || paymentOption.name,
-    notes, source, items
+    customerName, whatsapp, requestedDate, time, payment,
+    notes, source, items: itemIdentity
   });
   const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(PF.sheets.orders);
@@ -1664,11 +1688,20 @@ function createOrder_(body) {
     }
 
     if (!orderWindow.open) throw apiError_(orderWindow.code, orderWindow.message);
+    const items = priceOrderItems_(itemIdentity, config);
+    const paymentOption = config.payments.find(item =>
+      (String(item.id) === payment || String(item.name) === payment) && item.active !== false
+    );
+    if (!paymentOption) {
+      throw apiError_('INVALID_PAYMENT', 'A forma de pagamento selecionada não está disponível.');
+    }
+    const totalCents = items.reduce((sum, item) => sum + item.subtotalCents, 0);
+    const total = totalCents / 100;
+    const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
     enforceOrderRateLimit_(idempotencyKey);
     const deliveryDate = orderWindow.deliveryDate;
-    const firstItem = items[0];
     const flavorSummary = items.map(item => item.flavor + ' × ' + item.quantity).join('; ');
-    const sizeSummary = items.map(item => item.size + ' × ' + item.quantity).join('; ');
+    const sizeSummary = totalQuantity + (totalQuantity === 1 ? ' fatia' : ' fatias');
     const row = [
       orderId,
       now,
@@ -1677,9 +1710,9 @@ function createOrder_(body) {
       deliveryDate,
       time,
       sheetSafeText_(flavorSummary),
-      items.length === 1 ? sheetSafeText_(firstItem.sizeId) : '',
+      '',
       sheetSafeText_(sizeSummary),
-      sheetSafeText_(totalQuantity + (totalQuantity === 1 ? ' bolo' : ' bolos') + ' · ' + items.length + (items.length === 1 ? ' item' : ' itens')),
+      sheetSafeText_(totalQuantity + (totalQuantity === 1 ? ' fatia' : ' fatias') + ' · ' + items.length + (items.length === 1 ? ' sabor' : ' sabores')),
       total,
       sheetSafeText_(String(paymentOption.name || '')),
       sheetSafeText_(notes),
@@ -1696,8 +1729,9 @@ function createOrder_(body) {
       headerRowNumber = sheet.getLastRow();
       itemStartRow = itemSheet.getLastRow() + 1;
       const itemRows = items.map((item, index) => [
-        orderId, index + 1, sheetSafeText_(item.flavor), sheetSafeText_(item.sizeId),
-        sheetSafeText_(item.size), item.quantity, item.unitPrice, item.subtotal
+        orderId, index + 1, sheetSafeText_(item.flavor), '',
+        'Fatia', item.quantity, item.firstSlicePrice, item.subtotal,
+        item.firstSlicePrice, item.additionalSlicePrice, item.savings, item.pricingModel
       ]);
       itemSheet.getRange(itemStartRow, 1, itemRows.length, PF.headers.PedidoItens.length).setValues(itemRows);
       sheet.getRange(headerRowNumber, 18).setValue('committed');
@@ -1720,54 +1754,77 @@ function createOrder_(body) {
 }
 
 function normalizeOrderItems_(rawItems, config) {
+  return priceOrderItems_(normalizeOrderItemIdentity_(rawItems), config);
+}
+
+function normalizeOrderItemIdentity_(rawItems) {
   if (!Array.isArray(rawItems) || !rawItems.length) {
-    throw apiError_('ORDER_ITEMS_REQUIRED', 'Adicione pelo menos um bolo à encomenda.');
-  }
-  if (rawItems.length > PF_ORDER.maxDistinctItems) {
-    throw apiError_('TOO_MANY_ORDER_ITEMS', 'A encomenda excede o limite de itens diferentes.');
+    throw apiError_('ORDER_ITEMS_REQUIRED', 'Adicione pelo menos um sabor à encomenda.');
   }
   const groups = {};
   rawItems.forEach(raw => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw apiError_('INVALID_ORDER_ITEM', 'Um item da encomenda não possui formato válido.');
     }
-    if (typeof raw.flavor !== 'string' || typeof raw.sizeId !== 'string') {
-      throw apiError_('INVALID_ORDER_ITEM', 'Sabor e tamanho devem ser informados em cada item.');
+    if (typeof raw.flavor !== 'string') {
+      throw apiError_('INVALID_ORDER_ITEM', 'O sabor deve ser informado em cada item.');
     }
     const flavor = clean_(raw.flavor);
-    const sizeId = clean_(raw.sizeId);
     const quantity = Number(raw.quantity);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > PF_ORDER.maxQuantityPerItem) {
       throw apiError_('INVALID_ITEM_QUANTITY', 'A quantidade de cada item deve ser um número inteiro entre 1 e ' + PF_ORDER.maxQuantityPerItem + '.');
     }
-    if (!config.flavors.includes(flavor)) {
-      throw apiError_('INVALID_FLAVOR', 'Um sabor selecionado não está disponível.');
-    }
-    const size = config.sizes.find(item => String(item.id) === sizeId && item.active !== false);
-    if (!size) throw apiError_('INVALID_SIZE', 'Um tamanho selecionado não está disponível.');
-    const unitPrice = Number(size.price);
-    if (!isFinite(unitPrice) || unitPrice < 0) {
-      throw apiError_('INVALID_CATALOG', 'Não foi possível calcular o valor desta encomenda.');
-    }
-    const key = flavor + '\u0000' + sizeId;
+    const key = flavor;
     if (!groups[key]) {
-      groups[key] = { flavor, sizeId, size: String(size.name || ''), description: String(size.description || ''), quantity: 0, unitPrice };
+      groups[key] = { flavor, quantity: 0 };
     }
     groups[key].quantity += quantity;
     if (groups[key].quantity > PF_ORDER.maxQuantityPerItem) {
       throw apiError_('INVALID_ITEM_QUANTITY', 'A quantidade agrupada de um item excede o limite de ' + PF_ORDER.maxQuantityPerItem + '.');
     }
   });
-  const items = Object.keys(groups).map(key => {
-    const item = groups[key];
-    item.subtotal = Number((item.unitPrice * item.quantity).toFixed(2));
-    return item;
-  });
+  const items = Object.keys(groups).map(key => groups[key]);
+  if (items.length > PF_ORDER.maxDistinctItems) {
+    throw apiError_('TOO_MANY_ORDER_ITEMS', 'A encomenda excede o limite de sabores diferentes.');
+  }
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   if (totalQuantity > PF_ORDER.maxTotalQuantity) {
-    throw apiError_('ORDER_QUANTITY_LIMIT', 'A encomenda excede o limite total de ' + PF_ORDER.maxTotalQuantity + ' bolos.');
+    throw apiError_('ORDER_QUANTITY_LIMIT', 'A encomenda excede o limite total de ' + PF_ORDER.maxTotalQuantity + ' fatias.');
   }
   return items;
+}
+
+function priceOrderItems_(identityItems, config) {
+  const pricing = config.progressivePricing || {};
+  const firstSliceCents = moneyToCents_(
+    pricing.firstSlicePrice == null ? PF_PRICING.defaultFirstSliceCents / 100 : pricing.firstSlicePrice,
+    'preço da primeira fatia'
+  );
+  const additionalSliceCents = moneyToCents_(
+    pricing.additionalSlicePrice == null ? PF_PRICING.defaultAdditionalSliceCents / 100 : pricing.additionalSlicePrice,
+    'preço da fatia adicional'
+  );
+  if (firstSliceCents < 1 || additionalSliceCents > firstSliceCents) {
+    throw apiError_('INVALID_CATALOG', 'A configuração de preços progressivos não é válida.');
+  }
+  return identityItems.map(identityItem => {
+    const item = { flavor: identityItem.flavor, quantity: identityItem.quantity };
+    if (!config.flavors.includes(item.flavor)) {
+      throw apiError_('INVALID_FLAVOR', 'Um sabor selecionado não está disponível.');
+    }
+    item.sizeId = '';
+    item.size = 'Fatia';
+    item.description = item.quantity === 1 ? '1 fatia' : item.quantity + ' fatias';
+    item.firstSlicePrice = firstSliceCents / 100;
+    item.additionalSlicePrice = additionalSliceCents / 100;
+    item.unitPrice = item.firstSlicePrice;
+    item.subtotalCents = firstSliceCents + (item.quantity - 1) * additionalSliceCents;
+    item.subtotal = item.subtotalCents / 100;
+    item.savingsCents = item.quantity * firstSliceCents - item.subtotalCents;
+    item.savings = item.savingsCents / 100;
+    item.pricingModel = PF_PRICING.model;
+    return item;
+  });
 }
 
 function orderFingerprint_(order) {
@@ -1779,8 +1836,8 @@ function orderFingerprint_(order) {
     payment: String(order.payment || ''),
     notes: order.notes,
     source: order.source,
-    items: order.items.map(item => ({ flavor: item.flavor, sizeId: item.sizeId, quantity: item.quantity }))
-      .sort((left, right) => (left.flavor + '\u0000' + left.sizeId).localeCompare(right.flavor + '\u0000' + right.sizeId))
+    items: order.items.map(item => ({ flavor: item.flavor, quantity: item.quantity }))
+      .sort((left, right) => left.flavor.localeCompare(right.flavor))
   };
   return hashCredential_(JSON.stringify(canonical));
 }
@@ -1847,7 +1904,11 @@ function getOrderItemsMap_(sheet) {
       size: readableSheetText_(row[4]),
       quantity: Number(row[5] || 0),
       unitPrice: Number(row[6] || 0),
-      subtotal: Number(row[7] || 0)
+      subtotal: Number(row[7] || 0),
+      firstSlicePrice: Number(row[8] || 0),
+      additionalSlicePrice: Number(row[9] || 0),
+      savings: Number(row[10] || 0),
+      pricingModel: readableSheetText_(row[11]) || 'legacy-size'
       });
     });
   return itemsByOrder;
@@ -1887,7 +1948,11 @@ function orderResponseFromRow_(row, timezone, duplicate, persistedItems) {
     description: readableSheetText_(row[9]),
     quantity: 1,
     unitPrice: Number(row[10] || 0),
-    subtotal: Number(row[10] || 0)
+    subtotal: Number(row[10] || 0),
+    firstSlicePrice: 0,
+    additionalSlicePrice: 0,
+    savings: 0,
+    pricingModel: 'legacy-order'
   };
   const items = Array.isArray(persistedItems) && persistedItems.length ? persistedItems : (legacyItem.flavor ? [legacyItem] : []);
   const totalQuantity = Number(row[15] || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -2349,7 +2414,7 @@ function formatSheets_(ss) {
     .getSheetByName(
       PF.sheets.orderItems
     )
-    .getRange('G2:H')
+    .getRange('G2:K')
     .setNumberFormat(
       'R$ #,##0.00'
     );
