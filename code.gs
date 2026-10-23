@@ -18,7 +18,11 @@ const PF = {
     Pedidos: [
       'Pedido ID', 'Criado em', 'Cliente', 'WhatsApp', 'Data desejada', 'Horário',
       'Sabor', 'Tamanho ID', 'Tamanho', 'Descrição/Porções', 'Valor', 'Pagamento',
-      'Observações', 'Status', 'Origem', 'Quantidade total', 'Assinatura do pedido', 'Persistência'
+      'Observações', 'Status', 'Origem', 'Quantidade total', 'Assinatura do pedido', 'Persistência',
+      // Etapa 9: colunas aditivas; pedidos anteriores ficam com estas células vazias.
+      'Modalidade de recebimento', 'CEP', 'Logradouro', 'Número', 'Complemento', 'Bairro', 'Cidade', 'UF',
+      'Referência', 'Subtotal produtos (centavos)', 'Taxa de entrega (centavos)', 'Total final (centavos)',
+      'Orientações de recebimento'
     ],
     PedidoItens: [
       'Pedido ID', 'Item', 'Sabor', 'Tamanho ID', 'Tamanho', 'Quantidade',
@@ -73,7 +77,17 @@ const PF_CONFIG = {
   backupHeaders: ['Snapshot ID', 'Criado em', 'Revisão', 'Domínio', 'Dados JSON', 'Estado', 'Parte', 'Total'],
   backupRetention: 20,
   backupChunkSize: 40000,
-  domains: ['brand', 'flavors', 'sizes', 'catalog', 'pricing', 'payments', 'availability']
+  domains: ['brand', 'flavors', 'sizes', 'catalog', 'pricing', 'payments', 'availability', 'fulfillment']
+};
+
+const PF_FULFILLMENT = {
+  modes: ['delivery', 'pickup'],
+  maxDeliveryFeeCents: 100000,
+  limits: {
+    street: 120, number: 20, complement: 80, neighborhood: 80, city: 80, reference: 160,
+    pickupAddress: 300, instructions: 500
+  },
+  states: ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
 };
 
 const PF_PRICING = {
@@ -345,7 +359,10 @@ function ensureConfigDefaults_(ss) {
     ['paymentDeadlineDay', 'thursday'],
     ['paymentDeadlineTime', '23:59:59'],
     ['firstSlicePrice', PF_PRICING.defaultFirstSliceCents / 100],
-    ['additionalSlicePrice', PF_PRICING.defaultAdditionalSliceCents / 100]
+    ['additionalSlicePrice', PF_PRICING.defaultAdditionalSliceCents / 100],
+    // Entrega começa desligada e sem taxa: só é habilitada após configuração explícita.
+    ['pickupEnabled', true],
+    ['deliveryEnabled', false]
   ];
   const missing = defaults.filter(row => !existing[row[0]]);
   if (missing.length) sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, 2).setValues(missing);
@@ -763,6 +780,8 @@ function getConfig_() {
 
     businessWhatsapp: String(values.businessWhatsapp || '').replace(/[^\d+()\s-]/g, '').slice(0, 24),
 
+    fulfillment: fulfillmentConfigFromValues_(values),
+
     spreadsheetUrl: ss.getUrl(),
 
     revision: getConfigRevision_()
@@ -790,6 +809,7 @@ function getPublicConfig_() {
     progressivePricing: config.progressivePricing,
     availability: config.availability,
     businessWhatsapp: config.businessWhatsapp || '',
+    fulfillment: normalizeFulfillmentConfig_(config.fulfillment),
     orderWindow: {
       open: orderWindow.open,
       code: orderWindow.code,
@@ -1122,6 +1142,130 @@ function applyConfigDomain_(ss, domain, data) {
   if (domain === 'catalog' && Array.isArray(data.payments)) writePaymentConfig_(ss, data);
   if (domain === 'payments' || domain === 'all') writePaymentConfig_(ss, data);
   if (domain === 'availability' || domain === 'all') writeAvailabilityConfig_(ss, data);
+  if (domain === 'fulfillment' || (domain === 'all' && data.fulfillment)) writeFulfillmentConfig_(ss, data);
+}
+
+function fulfillmentConfigFromValues_(values) {
+  const feeText = String(values.deliveryFee == null ? '' : values.deliveryFee).trim().replace(',', '.');
+  const feeNumber = Number(feeText);
+  return normalizeFulfillmentConfig_({
+    pickupEnabled: isConfigTrue_(values.pickupEnabled, true),
+    deliveryEnabled: isConfigTrue_(values.deliveryEnabled, false),
+    deliveryFeeCents: feeText !== '' && isFinite(feeNumber) ? Math.round(feeNumber * 100) : null,
+    pickupAddress: values.pickupAddress,
+    pickupInstructions: values.pickupInstructions,
+    deliveryInstructions: values.deliveryInstructions
+  });
+}
+
+// Entrega só fica ativa com taxa explicitamente definida; sem nenhuma modalidade válida, mantém a retirada.
+function normalizeFulfillmentConfig_(value) {
+  const source = value || {};
+  const fee = source.deliveryFeeCents === null || source.deliveryFeeCents === undefined || source.deliveryFeeCents === ''
+    ? null
+    : Number(source.deliveryFeeCents);
+  const feeDefined = fee !== null && Number.isInteger(fee) && fee >= 0 && fee <= PF_FULFILLMENT.maxDeliveryFeeCents;
+  const deliveryEnabled = source.deliveryEnabled === true && feeDefined;
+  return {
+    deliveryEnabled,
+    pickupEnabled: source.pickupEnabled !== false || !deliveryEnabled,
+    deliveryFeeCents: feeDefined ? fee : null,
+    deliveryFee: feeDefined ? fee / 100 : null,
+    pickupAddress: String(source.pickupAddress || '').slice(0, PF_FULFILLMENT.limits.pickupAddress),
+    pickupInstructions: String(source.pickupInstructions || '').slice(0, PF_FULFILLMENT.limits.instructions),
+    deliveryInstructions: String(source.deliveryInstructions || '').slice(0, PF_FULFILLMENT.limits.instructions)
+  };
+}
+
+function writeFulfillmentConfig_(ss, data) {
+  const fulfillment = data.fulfillment || data;
+  const deliveryEnabled = fulfillment.deliveryEnabled === true;
+  const pickupEnabled = fulfillment.pickupEnabled === true;
+  if (!deliveryEnabled && !pickupEnabled) {
+    throw apiError_('FULFILLMENT_MODE_REQUIRED', 'Mantenha ao menos uma modalidade de recebimento habilitada.');
+  }
+  const rawFee = fulfillment.deliveryFee;
+  let feeCents = null;
+  if (rawFee !== null && rawFee !== undefined && String(rawFee).trim() !== '') {
+    const numeric = Number(String(rawFee).replace(',', '.'));
+    if (!isFinite(numeric) || numeric < 0 || Math.round(numeric * 100) > PF_FULFILLMENT.maxDeliveryFeeCents) {
+      throw apiError_('INVALID_DELIVERY_FEE', 'Informe uma taxa de entrega válida.');
+    }
+    feeCents = Math.round(numeric * 100);
+  }
+  if (deliveryEnabled && feeCents === null) {
+    throw apiError_('DELIVERY_FEE_REQUIRED', 'Defina a taxa de entrega antes de habilitar a entrega. Use 0 somente se a entrega for gratuita.');
+  }
+  const text = (value, limit, label) => {
+    const cleaned = clean_(value);
+    if (cleaned.length > limit) throw apiError_('FULFILLMENT_TEXT_TOO_LONG', 'O campo ' + label + ' excede o limite permitido.');
+    return sheetSafeText_(cleaned);
+  };
+  updateConfigValues_(ss.getSheetByName(PF.sheets.config), {
+    pickupEnabled,
+    deliveryEnabled,
+    deliveryFee: feeCents === null ? '' : feeCents / 100,
+    pickupAddress: text(fulfillment.pickupAddress, PF_FULFILLMENT.limits.pickupAddress, 'endereço de retirada'),
+    pickupInstructions: text(fulfillment.pickupInstructions, PF_FULFILLMENT.limits.instructions, 'instruções de retirada'),
+    deliveryInstructions: text(fulfillment.deliveryInstructions, PF_FULFILLMENT.limits.instructions, 'orientações de entrega')
+  });
+}
+
+// Lê a escolha do cliente sem consultar disponibilidade: o resultado entra na assinatura de idempotência.
+function parseFulfillmentRequest_(body) {
+  if (body.fulfillment === undefined || body.fulfillment === null) return { provided: false, mode: '', address: null };
+  const raw = body.fulfillment;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw apiError_('INVALID_FULFILLMENT', 'A modalidade de recebimento não é válida.');
+  }
+  const mode = orderText_(raw, ['mode'], 'como deseja receber', 20, true);
+  if (!PF_FULFILLMENT.modes.includes(mode)) {
+    throw apiError_('INVALID_FULFILLMENT', 'A modalidade de recebimento não é válida.');
+  }
+  if (mode === 'pickup') return { provided: true, mode, address: null };
+  const address = raw.address;
+  if (!address || typeof address !== 'object' || Array.isArray(address)) {
+    throw apiError_('DELIVERY_ADDRESS_REQUIRED', 'Informe o endereço de entrega.');
+  }
+  const limits = PF_FULFILLMENT.limits;
+  const cep = orderText_(address, ['cep'], 'o CEP', 9, true).replace(/\D/g, '');
+  if (!/^\d{8}$/.test(cep)) throw apiError_('INVALID_CEP', 'Informe um CEP válido com 8 dígitos.');
+  const state = orderText_(address, ['state'], 'a UF', 2, true).toUpperCase();
+  if (!PF_FULFILLMENT.states.includes(state)) throw apiError_('INVALID_STATE', 'Informe uma UF válida.');
+  return {
+    provided: true,
+    mode,
+    address: {
+      cep,
+      street: orderText_(address, ['street'], 'a rua ou avenida', limits.street, true),
+      number: orderText_(address, ['number'], 'o número', limits.number, true),
+      complement: orderText_(address, ['complement'], 'o complemento', limits.complement, false),
+      neighborhood: orderText_(address, ['neighborhood'], 'o bairro', limits.neighborhood, true),
+      city: orderText_(address, ['city'], 'a cidade', limits.city, true),
+      state,
+      reference: orderText_(address, ['reference'], 'a referência', limits.reference, false)
+    }
+  };
+}
+
+// Aplica a configuração vigente: disponibilidade e taxa vêm somente do servidor.
+function resolveFulfillment_(request, fulfillmentConfig) {
+  const settings = normalizeFulfillmentConfig_(fulfillmentConfig);
+  if (!request.provided) {
+    if (!settings.pickupEnabled) {
+      throw apiError_('FULFILLMENT_REQUIRED', 'Atualize a página e escolha como deseja receber a encomenda.');
+    }
+    return { mode: '', address: null, feeCents: 0, instructions: '' };
+  }
+  if (request.mode === 'pickup') {
+    if (!settings.pickupEnabled) throw apiError_('FULFILLMENT_UNAVAILABLE', 'A retirada não está disponível no momento.');
+    return {
+      mode: 'pickup', address: null, feeCents: 0,
+      instructions: [settings.pickupAddress, settings.pickupInstructions].filter(Boolean).join(' — ')
+    };
+  }
+  if (!settings.deliveryEnabled) throw apiError_('FULFILLMENT_UNAVAILABLE', 'A entrega não está disponível no momento.');
+  return { mode: 'delivery', address: request.address, feeCents: settings.deliveryFeeCents, instructions: settings.deliveryInstructions };
 }
 
 function writeBrandConfig_(ss, data) {
@@ -1486,6 +1630,10 @@ function checkoutValueVersion_(order) {
       subtotalCents: Math.round(Number(item.subtotal || 0) * 100)
     }))
   };
+  // Modalidade e taxa mudam o valor cobrado; pedidos sem modalidade mantêm a versão já registrada.
+  if (order.fulfillment && order.fulfillment.mode) {
+    identity.fulfillment = { mode: order.fulfillment.mode, deliveryFeeCents: Number(order.deliveryFeeCents || 0) };
+  }
   return hashCredential_(JSON.stringify(identity)).slice(0, 32);
 }
 
@@ -1517,6 +1665,8 @@ function checkoutItemsFromOrder_(order) {
       result.push({ quantity: quantity - 1, price: additionalCents, description: flavor + ' — fatias adicionais' });
     }
   });
+  const deliveryFeeCents = Number(order.deliveryFeeCents || 0);
+  if (deliveryFeeCents > 0) result.push({ quantity: 1, price: deliveryFeeCents, description: 'Taxa de entrega' });
   const expected = Math.round(Number(order.total || order.price || 0) * 100);
   const calculated = result.reduce((sum, item) => sum + item.quantity * item.price, 0);
   if (!result.length || expected < 1 || calculated !== expected) {
@@ -1604,8 +1754,17 @@ function checkoutRetryAllowed_(record, manual) {
   return Number(record.references && record.references.attempts || 1) < PF_CHECKOUT.maxAutomaticAttempts;
 }
 
-function sanitizeProviderText_(value) {
-  return String(value == null ? '' : value)
+function escapeRegExp_(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// personalData: valores do próprio pedido (nome, endereço) que nunca podem chegar aos registros.
+function sanitizeProviderText_(value, personalData) {
+  let text = String(value == null ? '' : value);
+  (personalData || []).map(item => String(item || '').trim()).filter(item => item.length >= 3)
+    .sort((left, right) => right.length - left.length)
+    .forEach(item => { text = text.replace(new RegExp(escapeRegExp_(item), 'gi'), '[dado pessoal]'); });
+  return text
     .replace(/inchk_[A-Za-z0-9_-]+/g, '[chave]')
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
     .replace(/\+?\d[\d\s().-]{7,}\d/g, '[número]')
@@ -1615,12 +1774,12 @@ function sanitizeProviderText_(value) {
     .slice(0, PF_CHECKOUT.maxProviderMessageLength);
 }
 
-function providerMessage_(data, text) {
+function providerMessage_(data, text, personalData) {
   if (data && typeof data === 'object') {
     const candidate = data.message || data.error || data.error_message || data.errors;
-    if (candidate) return sanitizeProviderText_(typeof candidate === 'string' ? candidate : JSON.stringify(candidate));
+    if (candidate) return sanitizeProviderText_(typeof candidate === 'string' ? candidate : JSON.stringify(candidate), personalData);
   }
-  return sanitizeProviderText_(text);
+  return sanitizeProviderText_(text, personalData);
 }
 
 function providerCorrelationId_(response) {
@@ -1716,10 +1875,22 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
     options: {
       single_payment: true,
       valid_until: String(expiresAt),
-      payment_methods_enabled: ['credit_card', 'pix']
+      payment_methods_enabled: ['credit_card', 'pix'],
+      // A logística é administrada pelo BOLOGIS: o checkout não pede o endereço novamente.
+      require_delivery_address: false
     }
   };
   if (!payload.customer.phone_number) delete payload.customer.phone_number;
+  const deliveryAddress = order.fulfillment && order.fulfillment.mode === 'delivery' ? order.fulfillment.address : null;
+  if (deliveryAddress) {
+    // Campos de endereço documentados pela InfinitePay; retirada nunca envia endereço.
+    payload.address = {
+      cep: deliveryAddress.cep, street: deliveryAddress.street, number: deliveryAddress.number,
+      neighborhood: deliveryAddress.neighborhood, city: deliveryAddress.city, state: deliveryAddress.state
+    };
+    if (deliveryAddress.complement) payload.address.complement = deliveryAddress.complement;
+  }
+  const personalData = [payload.customer.name].concat(payload.address ? Object.keys(payload.address).map(key => payload.address[key]) : []);
   // A referência de desenvolvedores exige a InfiniteTag (handle) no corpo da criação do link.
   if (integration.handle) payload.handle = integration.handle;
   let response;
@@ -1741,7 +1912,7 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
   const correlationId = providerCorrelationId_(response);
   if (status < 200 || status >= 300) {
     const classification = checkoutHttpCategory_(status);
-    throw checkoutFailure_(classification.category, classification.definitive, status, providerMessage_(data, text), correlationId);
+    throw checkoutFailure_(classification.category, classification.definitive, status, providerMessage_(data, text, personalData), correlationId);
   }
   // Com 2xx a cobrança pode ter sido criada mesmo sem URL utilizável: nunca recriar automaticamente.
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -2219,9 +2390,11 @@ function createOrderRecord_(body) {
   const timezone = PF_ORDER.timezone;
   const orderWindow = getOrderWindow_(config, now);
   const itemIdentity = normalizeOrderItemIdentity_(body.items);
+  const fulfillmentRequest = parseFulfillmentRequest_(body);
   const fingerprint = orderFingerprint_({
     customerName, whatsapp, requestedDate, time, payment,
-    notes, source, items: itemIdentity
+    notes, source, items: itemIdentity,
+    fulfillment: fulfillmentRequest.provided ? { mode: fulfillmentRequest.mode, address: fulfillmentRequest.address } : null
   });
   const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(PF.sheets.orders);
@@ -2266,9 +2439,12 @@ function createOrderRecord_(body) {
     if (!paymentOption) {
       throw apiError_('INVALID_PAYMENT', 'A forma de pagamento selecionada não está disponível.');
     }
-    const totalCents = items.reduce((sum, item) => sum + item.subtotalCents, 0);
+    const fulfillment = resolveFulfillment_(fulfillmentRequest, config.fulfillment);
+    const productsCents = items.reduce((sum, item) => sum + item.subtotalCents, 0);
+    const totalCents = productsCents + fulfillment.feeCents;
     const total = totalCents / 100;
     const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+    const address = fulfillment.address || {};
     enforceOrderRateLimit_(idempotencyKey);
     const deliveryDate = orderWindow.deliveryDate;
     const flavorSummary = items.map(item => item.flavor + ' × ' + item.quantity).join('; ');
@@ -2291,7 +2467,20 @@ function createOrderRecord_(body) {
       sheetSafeText_(source),
       totalQuantity,
       fingerprint,
-      'pending'
+      'pending',
+      fulfillment.mode,
+      sheetSafeText_(address.cep || ''),
+      sheetSafeText_(address.street || ''),
+      sheetSafeText_(address.number || ''),
+      sheetSafeText_(address.complement || ''),
+      sheetSafeText_(address.neighborhood || ''),
+      sheetSafeText_(address.city || ''),
+      sheetSafeText_(address.state || ''),
+      sheetSafeText_(address.reference || ''),
+      productsCents,
+      fulfillment.feeCents,
+      totalCents,
+      sheetSafeText_(fulfillment.instructions)
     ];
     let headerRowNumber = 0;
     let itemStartRow = 0;
@@ -2410,6 +2599,8 @@ function orderFingerprint_(order) {
     items: order.items.map(item => ({ flavor: item.flavor, quantity: item.quantity }))
       .sort((left, right) => left.flavor.localeCompare(right.flavor))
   };
+  // Só entra quando informado, para manter a assinatura de pedidos enviados antes da Etapa 9.
+  if (order.fulfillment) canonical.fulfillment = order.fulfillment;
   return hashCredential_(JSON.stringify(canonical));
 }
 
@@ -2528,6 +2719,7 @@ function orderResponseFromRow_(row, timezone, duplicate, persistedItems) {
   const items = Array.isArray(persistedItems) && persistedItems.length ? persistedItems : (legacyItem.flavor ? [legacyItem] : []);
   const totalQuantity = Number(row[15] || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const total = Number(row[10] || 0);
+  const fulfillment = orderFulfillmentFromRow_(row, total);
   return {
     id: String(row[0] || ''),
     createdAt: validCreatedAt ? createdAt.toISOString() : String(row[1] || ''),
@@ -2548,7 +2740,32 @@ function orderResponseFromRow_(row, timezone, duplicate, persistedItems) {
     payment: readableSheetText_(row[11]),
     notes: readableSheetText_(row[12]),
     status: String(row[13] || ''),
+    fulfillment: fulfillment.details,
+    subtotal: fulfillment.productsCents / 100,
+    deliveryFee: fulfillment.feeCents / 100,
+    deliveryFeeCents: fulfillment.feeCents,
     duplicate: duplicate === true
+  };
+}
+
+// Colunas 19 a 31 (Etapa 9). Ausentes em pedidos antigos: subtotal = total e taxa zero.
+function orderFulfillmentFromRow_(row, total) {
+  const mode = PF_FULFILLMENT.modes.includes(String(row[18] || '')) ? String(row[18]) : '';
+  const totalCentsCell = row[29];
+  const hasCents = totalCentsCell !== '' && totalCentsCell !== null && totalCentsCell !== undefined && isFinite(Number(totalCentsCell));
+  const totalCents = hasCents ? Number(totalCentsCell) : Math.round(total * 100);
+  const feeCents = hasCents ? Number(row[28] || 0) : 0;
+  const productsCents = hasCents ? Number(row[27] || 0) : totalCents;
+  const address = mode === 'delivery'
+    ? {
+      cep: readableSheetText_(row[19]), street: readableSheetText_(row[20]), number: readableSheetText_(row[21]),
+      complement: readableSheetText_(row[22]), neighborhood: readableSheetText_(row[23]), city: readableSheetText_(row[24]),
+      state: readableSheetText_(row[25]), reference: readableSheetText_(row[26])
+    }
+    : null;
+  return {
+    productsCents, feeCents, totalCents,
+    details: { mode, address, instructions: readableSheetText_(row[30]) }
   };
 }
 

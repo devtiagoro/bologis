@@ -45,7 +45,7 @@ function createHarness(options = {}) {
     properties.set('INFINITEPAY_RETURN_SECRET', 'fictitious-return-secret');
   }
   const sheets = {
-    Pedidos: createSheet(orderRows, 18),
+    Pedidos: createSheet(orderRows, 31),
     PedidoItens: createSheet(itemRows, 12),
     CheckoutCobrancas: createSheet(checkoutRows, 11)
   };
@@ -473,6 +473,105 @@ test('configuracao publica expoe WhatsApp comercial para contato', () => {
   const h = createHarness();
   h.config.businessWhatsapp = '(34) 99999-8888';
   assert.equal(h.context.getPublicConfig_().businessWhatsapp, '(34) 99999-8888');
+});
+
+// ---- Etapa 9: entrega e retirada no checkout ----
+
+function withFulfillment(h, overrides = {}) {
+  h.config.fulfillment = { pickupEnabled: true, deliveryEnabled: true, deliveryFeeCents: 800, pickupAddress: 'Loja fictícia, 100', ...overrides };
+  return h;
+}
+
+const deliveryRequest = (address = {}) => ({
+  fulfillment: {
+    mode: 'delivery',
+    address: { cep: '38400-000', street: 'Rua Fictícia das Flores', number: '123', complement: 'Casa 2', neighborhood: 'Bairro Teste', city: 'Cidade Exemplo', state: 'MG', reference: 'Portão azul', ...address }
+  }
+});
+
+test('entrega envia endereco do BOLOGIS e nao pede endereco no checkout', () => {
+  const h = withFulfillment(createHarness());
+  h.post(deliveryRequest());
+  const payload = h.fetches[0].payload;
+  assert.equal(payload.options.require_delivery_address, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(payload.address)), {
+    cep: '38400000', street: 'Rua Fictícia das Flores', number: '123', neighborhood: 'Bairro Teste',
+    city: 'Cidade Exemplo', state: 'MG', complement: 'Casa 2'
+  });
+  assert.equal(JSON.stringify(payload).includes('Portão azul'), false, 'referência é interna');
+});
+
+test('valor final do checkout inclui a taxa de entrega como item proprio', () => {
+  const h = withFulfillment(createHarness());
+  const result = h.post({ ...deliveryRequest(), items: [{ flavor: 'Chocolate', quantity: 2 }] });
+  const items = h.fetches[0].payload.items;
+  assert.deepEqual(items.map(item => [item.description, item.quantity, item.price]), [
+    ['Chocolate — primeira fatia', 1, 1997], ['Chocolate — fatias adicionais', 1, 1500], ['Taxa de entrega', 1, 800]
+  ]);
+  assert.equal(items.reduce((sum, item) => sum + item.quantity * item.price, 0), 4297);
+  assert.equal(h.checkoutRows[0][4], 4297);
+  assert.equal(result.order.total, 42.97);
+});
+
+test('retirada nao envia endereco e mantem total sem taxa', () => {
+  const h = withFulfillment(createHarness());
+  h.post({ fulfillment: { mode: 'pickup' }, items: [{ flavor: 'Chocolate', quantity: 2 }] });
+  const payload = h.fetches[0].payload;
+  assert.equal(payload.address, undefined);
+  assert.equal(payload.options.require_delivery_address, false);
+  assert.equal(payload.items.some(item => /Taxa/.test(item.description)), false);
+  assert.equal(h.checkoutRows[0][4], 3497);
+});
+
+test('versao de cobranca de pedidos sem modalidade nao muda', () => {
+  const h = createHarness();
+  const base = { id: 'PF-V', total: 19.97, items: [{ flavor: 'Chocolate', quantity: 1, subtotal: 19.97 }] };
+  const legacyVersion = h.context.checkoutValueVersion_(base);
+  assert.equal(h.context.checkoutValueVersion_({ ...base, fulfillment: { mode: '' }, deliveryFeeCents: 0 }), legacyVersion);
+  assert.notEqual(h.context.checkoutValueVersion_({ ...base, fulfillment: { mode: 'pickup' }, deliveryFeeCents: 0 }), legacyVersion);
+  assert.notEqual(
+    h.context.checkoutValueVersion_({ ...base, fulfillment: { mode: 'delivery' }, deliveryFeeCents: 800 }),
+    h.context.checkoutValueVersion_({ ...base, fulfillment: { mode: 'delivery' }, deliveryFeeCents: 900 })
+  );
+});
+
+test('reenvio reaproveita a cobranca da entrega sem novo valor', () => {
+  const h = withFulfillment(createHarness());
+  const first = h.post(deliveryRequest());
+  h.config.fulfillment.deliveryFeeCents = 1500;
+  const second = h.post(deliveryRequest());
+  assert.equal(second.order.checkout.url, first.order.checkout.url);
+  assert.equal(h.fetches.length, 1);
+  assert.equal(second.order.total, first.order.total);
+});
+
+test('nova tentativa administrativa preserva taxa e endereco do pedido', () => {
+  const h = withFulfillment(createHarness(httpFailure(400)));
+  const order = h.post(deliveryRequest()).order;
+  h.context.retryOrderCheckout_(order.id);
+  const retryPayload = h.fetches[1].payload;
+  assert.equal(retryPayload.address.street, 'Rua Fictícia das Flores');
+  assert.equal(retryPayload.items.at(-1).description, 'Taxa de entrega');
+  assert.equal(h.checkoutRows.length, 1);
+});
+
+test('endereco e nome nunca chegam ao diagnostico nem aos registros', () => {
+  const h = withFulfillment(createHarness(httpFailure(400, { message: 'invalid address: Rua Fictícia das Flores, Bairro Teste, Cliente Fictício' })));
+  const logs = [];
+  h.context.console.warn = message => logs.push(String(message));
+  h.post(deliveryRequest());
+  const stored = JSON.stringify(h.checkoutRows);
+  assert.doesNotMatch(stored, /Rua Fictícia|Bairro Teste|Cliente Fictício/);
+  assert.doesNotMatch(logs.join('\n'), /Rua Fictícia|Bairro Teste|Cliente Fictício/);
+  assert.match(stored, /invalid address: \[dado pessoal\]/);
+});
+
+test('configuracao publica de recebimento nao expoe dados de pedidos', () => {
+  const h = withFulfillment(createHarness());
+  h.post(deliveryRequest());
+  const publicConfig = JSON.stringify(h.context.getPublicConfig_());
+  assert.match(publicConfig, /"deliveryFeeCents":800/);
+  assert.doesNotMatch(publicConfig, /Rua Fictícia|38400000/);
 });
 
 (async () => {

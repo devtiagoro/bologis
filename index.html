@@ -270,11 +270,21 @@
     }
 
     .choice-subtitle {
+      display: block;
       margin-top: 4px;
       color: var(--muted);
       font-size: 13px;
       line-height: 1.4;
     }
+
+    .choice:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(201, 127, 93, .14); }
+    #fulfillmentChoices .choice { cursor: pointer; }
+    .fulfillment-fields { margin-top: 16px; }
+    .fulfillment-fields.delivery-box span { display: block; margin-top: 6px; }
+    .optional-label { font-weight: 500; color: var(--muted); }
+    .success-address { white-space: pre-line; text-align: right; overflow-wrap: anywhere; }
+    .order-fulfillment { color: var(--accent-strong); font-weight: 800; }
+    .pre-line { white-space: pre-line; overflow-wrap: anywhere; }
 
     .price {
       white-space: nowrap;
@@ -1263,7 +1273,67 @@
             <div class="form-section">
               <div class="section-heading">
                 <div>
-                  <h2><span class="step-number" aria-hidden="true">3</span>Detalhes do pedido</h2>
+                  <h2><span class="step-number" aria-hidden="true">3</span>Como deseja receber?</h2>
+                  <p>Escolha entre receber no seu endereço ou retirar no local.</p>
+                </div>
+              </div>
+
+              <div id="fulfillmentChoices" class="choice-grid" role="radiogroup" aria-label="Como deseja receber">
+                <label id="deliveryChoice" class="choice" for="fulfillmentDelivery">
+                  <input id="fulfillmentDelivery" type="radio" name="fulfillmentMode" value="delivery" />
+                  <span class="choice-title"><span>Receber no meu endereço</span><span id="deliveryFeeLabel" class="price"></span></span>
+                  <span class="choice-subtitle">Informe o endereço completo para a entrega.</span>
+                </label>
+                <label id="pickupChoice" class="choice" for="fulfillmentPickup">
+                  <input id="fulfillmentPickup" type="radio" name="fulfillmentMode" value="pickup" />
+                  <span class="choice-title"><span>Retirar no local</span><span class="price">Sem taxa</span></span>
+                  <span class="choice-subtitle">Você retira a encomenda na Primeira Fornada.</span>
+                </label>
+              </div>
+
+              <div id="deliveryFields" class="form-grid fulfillment-fields hidden">
+                <div class="field">
+                  <label for="addressCep">CEP</label>
+                  <input class="control" id="addressCep" name="addressCep" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" maxlength="9" />
+                </div>
+                <div class="field">
+                  <label for="addressState">Estado (UF)</label>
+                  <input class="control" id="addressState" name="addressState" autocomplete="address-level1" placeholder="MG" maxlength="2" />
+                </div>
+                <div class="field full">
+                  <label for="addressStreet">Rua/Avenida</label>
+                  <input class="control" id="addressStreet" name="addressStreet" autocomplete="address-line1" maxlength="120" />
+                </div>
+                <div class="field">
+                  <label for="addressNumber">Número</label>
+                  <input class="control" id="addressNumber" name="addressNumber" maxlength="20" />
+                </div>
+                <div class="field">
+                  <label for="addressComplement">Complemento <span class="optional-label">(opcional)</span></label>
+                  <input class="control" id="addressComplement" name="addressComplement" autocomplete="address-line2" maxlength="80" />
+                </div>
+                <div class="field">
+                  <label for="addressNeighborhood">Bairro</label>
+                  <input class="control" id="addressNeighborhood" name="addressNeighborhood" maxlength="80" />
+                </div>
+                <div class="field">
+                  <label for="addressCity">Cidade</label>
+                  <input class="control" id="addressCity" name="addressCity" autocomplete="address-level2" maxlength="80" />
+                </div>
+                <div class="field full">
+                  <label for="addressReference">Referência <span class="optional-label">(opcional)</span></label>
+                  <input class="control" id="addressReference" name="addressReference" maxlength="160" placeholder="Ex.: portão azul, próximo à praça" />
+                </div>
+                <div id="deliveryInstructionsBox" class="field full delivery-box hidden"></div>
+              </div>
+
+              <div id="pickupInfo" class="delivery-box fulfillment-fields hidden"></div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <div>
+                  <h2><span class="step-number" aria-hidden="true">4</span>Detalhes do pedido</h2>
                   <p>Conte algo importante para prepararmos seu bolo.</p>
                 </div>
               </div>
@@ -1284,6 +1354,9 @@
             <div class="summary-row"><span>Fatias</span><strong id="summaryQuantity">0</strong></div>
             <div class="summary-row"><span>Itens</span><div id="summaryItems" class="compact-item-list"><span>Adicione seu primeiro sabor</span></div></div>
             <div class="summary-row"><span>Data</span><strong id="summaryDate">—</strong></div>
+            <div class="summary-row"><span>Recebimento</span><strong id="summaryFulfillment">Escolha uma opção</strong></div>
+            <div class="summary-row"><span>Subtotal</span><strong id="summarySubtotal">R$ 0,00</strong></div>
+            <div id="summaryDeliveryFeeRow" class="summary-row hidden"><span>Taxa de entrega</span><strong id="summaryDeliveryFee">R$ 0,00</strong></div>
           </div>
 
           <div class="total-row">
@@ -1311,8 +1384,12 @@
           <div class="summary-row"><span>WhatsApp</span><strong id="successWhatsapp">—</strong></div>
           <div class="summary-row"><span>Quantidade</span><strong id="successQuantity">—</strong></div>
           <div class="summary-row"><span>Itens</span><div id="successItems" class="compact-item-list"></div></div>
+          <div id="successSubtotalRow" class="summary-row hidden"><span>Subtotal dos bolos</span><strong id="successSubtotal">—</strong></div>
+          <div id="successDeliveryFeeRow" class="summary-row hidden"><span>Taxa de entrega</span><strong id="successDeliveryFee">—</strong></div>
           <div class="summary-row"><span>Total</span><strong id="successPrice">—</strong></div>
-          <div class="summary-row"><span>Entrega</span><strong id="successDelivery">—</strong></div>
+          <div class="summary-row"><span>Data</span><strong id="successDelivery">—</strong></div>
+          <div id="successFulfillmentRow" class="summary-row hidden"><span>Recebimento</span><strong id="successFulfillment">—</strong></div>
+          <div id="successFulfillmentDetailsRow" class="summary-row hidden"><span id="successFulfillmentDetailsLabel">Endereço</span><strong id="successFulfillmentDetails" class="success-address">—</strong></div>
           <div class="summary-row"><span>Forma de pagamento</span><strong id="successPayment">—</strong></div>
           <div class="summary-row"><span>Status</span><strong id="successStatus" class="success-status">Aguardando pagamento</strong></div>
         </div>
@@ -1384,6 +1461,7 @@
             <button id="editAdminTab" type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="brandPanel">Marca e textos</button>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="paymentPanel">Pagamentos</button>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="availabilityPanel">Disponibilidade</button>
+            <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="fulfillmentPanel">Entrega e retirada</button>
             <button type="button" class="admin-area-btn admin-nav-btn" data-view="edit" data-panel="integrationPanel">Integrações</button>
           </aside>
 
@@ -1505,6 +1583,43 @@
             </div>
           </div>
 
+          <div id="fulfillmentPanel" class="admin-panel">
+            <div class="admin-section">
+              <h2>Entrega e retirada</h2>
+              <p class="help">Defina como o cliente pode receber a encomenda. Ao menos uma modalidade precisa permanecer habilitada. A entrega só pode ser habilitada com a taxa definida (use 0 somente se for gratuita).</p>
+              <div class="admin-toggle-row">
+                <div><label for="adminPickupEnabled">Permitir retirada no local</label><small>O cliente retira sem taxa de entrega.</small></div>
+                <input id="adminPickupEnabled" type="checkbox" />
+              </div>
+              <div class="admin-grid">
+                <div class="field full">
+                  <label for="adminPickupAddress">Endereço comercial para retirada</label>
+                  <input class="control" id="adminPickupAddress" maxlength="300" />
+                </div>
+                <div class="field full">
+                  <label for="adminPickupInstructions">Instruções para retirada</label>
+                  <textarea class="control" id="adminPickupInstructions" maxlength="500"></textarea>
+                </div>
+              </div>
+              <div class="admin-toggle-row" style="margin-top:16px">
+                <div><label for="adminDeliveryEnabled">Permitir entrega no endereço do cliente</label><small>Exige taxa de entrega definida.</small></div>
+                <input id="adminDeliveryEnabled" type="checkbox" />
+              </div>
+              <div class="admin-grid">
+                <div class="field">
+                  <label for="adminDeliveryFee">Taxa fixa de entrega (R$)</label>
+                  <input class="control" id="adminDeliveryFee" type="number" min="0" max="1000" step="0.01" inputmode="decimal" placeholder="Não definida" />
+                </div>
+                <div class="field full">
+                  <label for="adminDeliveryInstructions">Orientações para entrega</label>
+                  <textarea class="control" id="adminDeliveryInstructions" maxlength="500"></textarea>
+                </div>
+              </div>
+              <div class="editor-actions"><button id="saveFulfillmentBtn" class="secondary-btn" type="button">Salvar entrega e retirada</button></div>
+              <div id="fulfillmentSaveMessage" class="message" role="status"></div>
+            </div>
+          </div>
+
           <div id="integrationPanel" class="admin-panel">
             <div class="admin-section">
               <h2>Conexão com Google Sheets</h2>
@@ -1623,6 +1738,10 @@
           deliveryDay: 'sunday',
           paymentDeadlineDay: 'thursday',
           paymentDeadlineTime: '23:59:59'
+        },
+        fulfillment: {
+          pickupEnabled: true, deliveryEnabled: false, deliveryFeeCents: null,
+          pickupAddress: '', pickupInstructions: '', deliveryInstructions: ''
         },
         spreadsheetUrl: '',
         orderStatuses: DEFAULT_ORDER_STATUSES,
@@ -1981,7 +2100,25 @@
         });
 
         next.payments = normalizedPayments;
+        next.fulfillment = normalizeFulfillment(value?.fulfillment);
         return next;
+      }
+
+      // Espelha a regra do servidor: entrega só fica ativa com taxa definida.
+      function normalizeFulfillment(value) {
+        const source = value || {};
+        const rawFee = source.deliveryFeeCents;
+        const feeCents = rawFee === null || rawFee === undefined || rawFee === '' ? null : Number(rawFee);
+        const feeDefined = Number.isInteger(feeCents) && feeCents >= 0;
+        const deliveryEnabled = source.deliveryEnabled === true && feeDefined;
+        return {
+          pickupEnabled: source.pickupEnabled !== false || !deliveryEnabled,
+          deliveryEnabled,
+          deliveryFeeCents: feeDefined ? feeCents : null,
+          pickupAddress: String(source.pickupAddress || ''),
+          pickupInstructions: String(source.pickupInstructions || ''),
+          deliveryInstructions: String(source.deliveryInstructions || '')
+        };
       }
 
       function currentDayKey(date = new Date()) {
@@ -2182,14 +2319,117 @@
       function updateSummary() {
         const detailedItems = orderItems.map(itemDetails);
         const totalQuantity = detailedItems.reduce((sum, item) => sum + item.quantity, 0);
-        const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        // Estimativa em centavos; o valor definitivo é sempre calculado pelo servidor.
+        const productsCents = detailedItems.reduce((sum, item) => sum + Math.round(item.subtotal * 100), 0);
+        const mode = selectedFulfillmentMode();
+        const feeCents = mode === 'delivery' ? Number(config.fulfillment?.deliveryFeeCents || 0) : 0;
         $('summaryQuantity').textContent = String(totalQuantity);
         $('summaryItems').innerHTML = detailedItems.length
           ? detailedItems.map(item => `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
           : '<span>Adicione seu primeiro sabor</span>';
         $('summaryDate').textContent = formatDate($('orderDate').value);
-        $('summaryTotal').textContent = brl(total);
+        $('summaryFulfillment').textContent = fulfillmentLabel(mode) || 'Escolha uma opção';
+        $('summarySubtotal').textContent = brl(productsCents / 100);
+        $('summaryDeliveryFeeRow').classList.toggle('hidden', mode !== 'delivery');
+        $('summaryDeliveryFee').textContent = feeCents > 0 ? brl(feeCents / 100) : 'Sem taxa';
+        $('summaryTotal').textContent = brl((productsCents + feeCents) / 100);
         renderPricingEstimate();
+      }
+
+      const BRAZIL_STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+
+      function selectedFulfillmentMode() {
+        if ($('fulfillmentDelivery').checked && config.fulfillment?.deliveryEnabled) return 'delivery';
+        if ($('fulfillmentPickup').checked && config.fulfillment?.pickupEnabled) return 'pickup';
+        return '';
+      }
+
+      function fulfillmentLabel(mode) {
+        return mode === 'delivery' ? 'Entrega no endereço' : mode === 'pickup' ? 'Retirada no local' : '';
+      }
+
+      function formatCep(value) {
+        const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
+        return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+      }
+
+      function formatAddress(address) {
+        if (!address) return '';
+        return [
+          `${address.street || ''}, ${address.number || ''}${address.complement ? ` — ${address.complement}` : ''}`,
+          `${address.neighborhood || ''} — ${address.city || ''}/${address.state || ''}`,
+          `CEP ${formatCep(address.cep)}`,
+          address.reference ? `Referência: ${address.reference}` : ''
+        ].filter(Boolean).join('\n');
+      }
+
+      function pickupGuidance(instructions) {
+        const fulfillment = config.fulfillment || {};
+        return instructions
+          || [fulfillment.pickupAddress, fulfillment.pickupInstructions].filter(Boolean).join(' — ')
+          || 'O endereço e o horário de retirada serão confirmados pela Primeira Fornada.';
+      }
+
+      function renderFulfillmentOptions() {
+        const fulfillment = config.fulfillment || DEFAULT_CONFIG.fulfillment;
+        $('deliveryChoice').classList.toggle('hidden', !fulfillment.deliveryEnabled);
+        $('pickupChoice').classList.toggle('hidden', !fulfillment.pickupEnabled);
+        if (!fulfillment.deliveryEnabled) $('fulfillmentDelivery').checked = false;
+        if (!fulfillment.pickupEnabled) $('fulfillmentPickup').checked = false;
+        // Com uma única modalidade disponível, ela já vem selecionada.
+        if (fulfillment.deliveryEnabled !== fulfillment.pickupEnabled) {
+          (fulfillment.deliveryEnabled ? $('fulfillmentDelivery') : $('fulfillmentPickup')).checked = true;
+        }
+        $('deliveryFeeLabel').textContent = fulfillment.deliveryEnabled
+          ? (fulfillment.deliveryFeeCents > 0 ? `+ ${brl(fulfillment.deliveryFeeCents / 100)}` : 'Sem taxa')
+          : '';
+        $('pickupInfo').innerHTML = fulfillment.pickupAddress
+          ? `Retirada em:<strong>${escapeHtml(fulfillment.pickupAddress)}</strong>${fulfillment.pickupInstructions ? `<span>${escapeHtml(fulfillment.pickupInstructions)}</span>` : ''}`
+          : `Retirada no local<strong>${escapeHtml(pickupGuidance(fulfillment.pickupInstructions))}</strong>`;
+        $('deliveryInstructionsBox').classList.toggle('hidden', !fulfillment.deliveryInstructions);
+        $('deliveryInstructionsBox').textContent = fulfillment.deliveryInstructions || '';
+        updateFulfillmentView();
+      }
+
+      function updateFulfillmentView() {
+        const mode = selectedFulfillmentMode();
+        $('deliveryChoice').classList.toggle('selected', mode === 'delivery');
+        $('pickupChoice').classList.toggle('selected', mode === 'pickup');
+        $('deliveryFields').classList.toggle('hidden', mode !== 'delivery');
+        $('pickupInfo').classList.toggle('hidden', mode !== 'pickup');
+        updateSummary();
+      }
+
+      function fulfillmentPayload() {
+        const mode = selectedFulfillmentMode();
+        if (mode !== 'delivery') return { mode };
+        return {
+          mode,
+          address: {
+            cep: $('addressCep').value.trim(),
+            street: $('addressStreet').value.trim(),
+            number: $('addressNumber').value.trim(),
+            complement: $('addressComplement').value.trim(),
+            neighborhood: $('addressNeighborhood').value.trim(),
+            city: $('addressCity').value.trim(),
+            state: $('addressState').value.trim().toUpperCase(),
+            reference: $('addressReference').value.trim()
+          }
+        };
+      }
+
+      function validateFulfillment() {
+        const mode = selectedFulfillmentMode();
+        if (!mode) return { message: 'Escolha como deseja receber a encomenda.', field: 'fulfillmentChoices' };
+        if (mode !== 'delivery') return null;
+        const { address } = fulfillmentPayload();
+        if (!/^\d{8}$/.test(address.cep.replace(/\D/g, ''))) return { message: 'Informe um CEP válido com 8 dígitos.', field: 'addressCep' };
+        if (!address.street) return { message: 'Informe a rua ou avenida.', field: 'addressStreet' };
+        if (!address.number) return { message: 'Informe o número.', field: 'addressNumber' };
+        if (!address.neighborhood) return { message: 'Informe o bairro.', field: 'addressNeighborhood' };
+        if (!address.city) return { message: 'Informe a cidade.', field: 'addressCity' };
+        if (!BRAZIL_STATES.includes(address.state)) return { message: 'Informe a UF com 2 letras (ex.: MG).', field: 'addressState' };
+        return null;
       }
 
       function businessWhatsappDigits() {
@@ -2283,6 +2523,7 @@
         $('successDelivery').textContent = formatDate(order.deliveryDate || order.date);
         $('successPayment').textContent = order.payment || 'InfinitePay — PIX ou cartão';
         $('successStatus').textContent = order.status || DEFAULT_ORDER_STATUSES[0];
+        renderSuccessFulfillment(order);
         const details = $('successPaymentDetails');
         renderPaymentDetails(details, order.checkout || {}, order);
         const businessPhone = businessWhatsappDigits();
@@ -2297,6 +2538,25 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
+      // Usa somente os dados devolvidos pelo servidor para esta encomenda.
+      function renderSuccessFulfillment(order) {
+        const fulfillment = order.fulfillment || {};
+        const mode = fulfillment.mode === 'delivery' || fulfillment.mode === 'pickup' ? fulfillment.mode : '';
+        const hasBreakdown = order.subtotal !== undefined && Number.isFinite(Number(order.subtotal));
+        const feeCents = Math.round(Number(order.deliveryFee || 0) * 100);
+        $('successSubtotalRow').classList.toggle('hidden', !hasBreakdown || !mode);
+        $('successSubtotal').textContent = hasBreakdown ? brl(Number(order.subtotal)) : '';
+        $('successDeliveryFeeRow').classList.toggle('hidden', mode !== 'delivery');
+        $('successDeliveryFee').textContent = mode === 'delivery' ? (feeCents > 0 ? brl(feeCents / 100) : 'Sem taxa') : '';
+        $('successFulfillmentRow').classList.toggle('hidden', !mode);
+        $('successFulfillment').textContent = fulfillmentLabel(mode);
+        $('successFulfillmentDetailsRow').classList.toggle('hidden', !mode);
+        $('successFulfillmentDetailsLabel').textContent = mode === 'delivery' ? 'Endereço de entrega' : 'Retirada';
+        $('successFulfillmentDetails').textContent = mode === 'delivery'
+          ? [formatAddress(fulfillment.address), fulfillment.instructions].filter(Boolean).join('\n')
+          : mode === 'pickup' ? pickupGuidance(fulfillment.instructions) : '';
+      }
+
       function startAnotherOrder() {
         $('orderForm').reset();
         orderItems = [];
@@ -2308,8 +2568,8 @@
         $('orderLayout').classList.remove('hidden');
         renderFlavorOptions();
         renderOrderItems();
+        renderFulfillmentOptions();
         applyPublicAvailability();
-        updateSummary();
         $('customerName').focus();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -2372,6 +2632,8 @@
         if (!time) return { message: 'Escolha o horário preferido.', field: 'pickupTime' };
         if (!orderItems.length) return { message: 'Adicione pelo menos um sabor à encomenda.', field: 'orderItems' };
         if (orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) > 50) return { message: 'A encomenda aceita até 50 fatias.', field: 'orderItems' };
+        const fulfillmentError = validateFulfillment();
+        if (fulfillmentError) return fulfillmentError;
         if ($('notes').value.trim().length > 500) return { message: 'As observações devem ter no máximo 500 caracteres.', field: 'notes' };
         return null;
       }
@@ -2418,6 +2680,7 @@
           time: $('pickupTime').value,
           items: orderItems.map(item => ({ flavor: item.flavor, quantity: item.quantity })),
           payment: 'InfinitePay',
+          fulfillment: fulfillmentPayload(),
           notes: $('notes').value.trim(),
           source: 'site',
           website: $('website').value
@@ -2539,7 +2802,7 @@
         renderBrand();
         renderFlavorOptions();
         renderOrderItems();
-        updateSummary();
+        renderFulfillmentOptions();
         applyPublicAvailability();
       }
 
@@ -2588,6 +2851,7 @@
         renderPricingEditor();
         renderPaymentEditor();
         renderAvailabilityEditor();
+        renderFulfillmentEditor();
         renderConnectionStatus();
         renderLocalOrders([]);
         if (isOrdersOpen) loadAdminOrders();
@@ -2752,7 +3016,7 @@
       function applyConfigEverywhere() {
         renderBrand();
         renderFlavorOptions();
-        updateSummary();
+        renderFulfillmentOptions();
         if (isPublic) applyPublicAvailability();
       }
 
@@ -2761,7 +3025,8 @@
         catalog: 'catalogSaveMessage',
         pricing: 'pricingSaveMessage',
         payments: 'paymentSaveMessage',
-        availability: 'availabilitySaveMessage'
+        availability: 'availabilitySaveMessage',
+        fulfillment: 'fulfillmentSaveMessage'
       };
 
       function markConfigDirty(domain) {
@@ -2785,6 +3050,19 @@
         if (domain === 'pricing') return { progressivePricing: config.progressivePricing };
         if (domain === 'payments') return { payments: config.payments };
         if (domain === 'availability') return { availability: config.availability };
+        if (domain === 'fulfillment') {
+          const fulfillment = config.fulfillment;
+          return {
+            fulfillment: {
+              pickupEnabled: fulfillment.pickupEnabled === true,
+              deliveryEnabled: fulfillment.deliveryEnabled === true,
+              deliveryFee: fulfillment.deliveryFeeCents === null ? '' : fulfillment.deliveryFeeCents / 100,
+              pickupAddress: fulfillment.pickupAddress,
+              pickupInstructions: fulfillment.pickupInstructions,
+              deliveryInstructions: fulfillment.deliveryInstructions
+            }
+          };
+        }
         throw new Error('Domínio de configuração inválido.');
       }
 
@@ -2804,6 +3082,8 @@
         } else if (domain === 'availability') {
           config.availability = remote.availability;
           config.orderWindow = remote.orderWindow;
+        } else if (domain === 'fulfillment') {
+          config.fulfillment = remote.fulfillment;
         }
         config.revision = remote.revision;
         config.orderStatuses = remote.orderStatuses;
@@ -3087,6 +3367,60 @@
         return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
       }
 
+      function orderFulfillmentSummary(order) {
+        const fulfillment = order.fulfillment || {};
+        const mode = fulfillment.mode === 'delivery' || fulfillment.mode === 'pickup' ? fulfillment.mode : '';
+        if (!mode) return { label: '', details: 'Não informado (pedido anterior à escolha de recebimento)', amounts: '' };
+        const feeCents = Math.round(Number(order.deliveryFee || 0) * 100);
+        return {
+          label: fulfillmentLabel(mode),
+          details: mode === 'delivery'
+            ? [formatAddress(fulfillment.address), fulfillment.instructions].filter(Boolean).join('\n')
+            : pickupGuidance(fulfillment.instructions),
+          amounts: order.subtotal !== undefined
+            ? `Subtotal ${brl(Number(order.subtotal))}${mode === 'delivery' ? ` · taxa ${feeCents > 0 ? brl(feeCents / 100) : 'sem taxa'}` : ''}`
+            : ''
+        };
+      }
+
+      function renderAdminFulfillment(order, tag) {
+        const summary = orderFulfillmentSummary(order);
+        const title = summary.label || 'Recebimento';
+        if (tag === 'div') {
+          return `<div><span>Recebimento</span><strong>${escapeHtml(title)}</strong><span class="pre-line">${escapeHtml(summary.details)}</span>${summary.amounts ? `<small>${escapeHtml(summary.amounts)}</small>` : ''}</div>`;
+        }
+        return `<p>Recebimento: ${escapeHtml(title)}</p><p class="pre-line">${escapeHtml(summary.details)}</p>${summary.amounts ? `<p>${escapeHtml(summary.amounts)}</p>` : ''}`;
+      }
+
+      function renderFulfillmentEditor() {
+        const fulfillment = config.fulfillment || DEFAULT_CONFIG.fulfillment;
+        $('adminPickupEnabled').checked = fulfillment.pickupEnabled !== false;
+        $('adminDeliveryEnabled').checked = fulfillment.deliveryEnabled === true;
+        $('adminDeliveryFee').value = fulfillment.deliveryFeeCents === null || fulfillment.deliveryFeeCents === undefined ? '' : (fulfillment.deliveryFeeCents / 100).toFixed(2);
+        $('adminPickupAddress').value = fulfillment.pickupAddress || '';
+        $('adminPickupInstructions').value = fulfillment.pickupInstructions || '';
+        $('adminDeliveryInstructions').value = fulfillment.deliveryInstructions || '';
+      }
+
+      function readFulfillmentEditor() {
+        const pickupEnabled = $('adminPickupEnabled').checked;
+        const deliveryEnabled = $('adminDeliveryEnabled').checked;
+        const feeText = $('adminDeliveryFee').value.trim();
+        const fee = feeText === '' ? null : Number(feeText);
+        if (!pickupEnabled && !deliveryEnabled) return { error: 'Mantenha ao menos uma modalidade de recebimento habilitada.' };
+        if (fee !== null && (!Number.isFinite(fee) || fee < 0 || fee > 1000)) return { error: 'Informe uma taxa de entrega válida.' };
+        if (deliveryEnabled && fee === null) return { error: 'Defina a taxa de entrega antes de habilitar a entrega. Use 0 somente se for gratuita.' };
+        return {
+          value: {
+            pickupEnabled, deliveryEnabled,
+            deliveryFeeCents: fee === null ? null : Math.round(fee * 100),
+            pickupAddress: $('adminPickupAddress').value.trim(),
+            pickupInstructions: $('adminPickupInstructions').value.trim(),
+            deliveryInstructions: $('adminDeliveryInstructions').value.trim()
+          }
+        };
+      }
+
       function checkoutDiagnosticText(diagnostic) {
         const label = ({
           invalid_request: 'Requisição recusada', auth: 'Credencial recusada', endpoint_not_found: 'Endereço da API não encontrado',
@@ -3155,9 +3489,9 @@
               <tbody>
                 ${orders.map(order => `
                   <tr class="${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
-                    <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><details class="order-row-details"><summary>Mais informações</summary><div><p>WhatsApp: ${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</p><p>Recebido: ${escapeHtml(formatCreatedAt(order.createdAt))}</p><p>Observações: ${escapeHtml(order.notes || 'Sem observações')}</p></div></details></td>
+                    <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><details class="order-row-details"><summary>Mais informações</summary><div><p>WhatsApp: ${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</p><p>Recebido: ${escapeHtml(formatCreatedAt(order.createdAt))}</p><p>Observações: ${escapeHtml(order.notes || 'Sem observações')}</p>${renderAdminFulfillment(order, 'p')}</div></details></td>
                     <td class="order-main-cell">${renderAdminOrderItems(order)}</td>
-                    <td class="order-main-cell order-date-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small></td>
+                    <td class="order-main-cell order-date-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small>${orderFulfillmentSummary(order).label ? `<small class="order-fulfillment">${escapeHtml(orderFulfillmentSummary(order).label)}</small>` : ''}</td>
                     <td class="order-main-cell order-payment-cell"><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong><small>${escapeHtml(order.payment || '—')}</small>${renderAdminCheckout(order, true)}</td>
                     <td class="order-status-cell">
                       <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
@@ -3183,7 +3517,7 @@
                   <div><span>Pagamento</span>${escapeHtml(order.payment || '—')}</div>
                   <div><span>Checkout</span>${renderAdminCheckout(order)}</div>
                   <div><span>Pedido recebido</span>${escapeHtml(formatCreatedAt(order.createdAt))}</div>
-                  <div><span>Observações</span>${escapeHtml(order.notes || 'Sem observações')}</div>
+                  <div><span>Observações</span>${escapeHtml(order.notes || 'Sem observações')}</div>${renderAdminFulfillment(order, 'div')}
                 </div></details>
                 <div class="order-mobile-actions">${orderStatusControl(order, true)}</div>
               </article>
@@ -3266,6 +3600,12 @@
       });
       $('refreshOrdersBtn').addEventListener('click', () => withSavingState($('refreshOrdersBtn'), loadAdminOrders, 'Atualizando...'));
       $('newOrderBtn').addEventListener('click', startAnotherOrder);
+      ['fulfillmentDelivery', 'fulfillmentPickup'].forEach(id => $(id).addEventListener('change', () => {
+        clearFieldErrors();
+        updateFulfillmentView();
+      }));
+      $('addressCep').addEventListener('input', event => { event.target.value = formatCep(event.target.value); });
+      $('addressState').addEventListener('input', event => { event.target.value = event.target.value.replace(/[^a-z]/gi, '').slice(0, 2).toUpperCase(); });
       $('orderForm').addEventListener('input', event => {
         if (event.target?.hasAttribute?.('aria-invalid')) clearFieldErrors();
       });
@@ -3277,6 +3617,7 @@
             : panel?.id === 'pricingPanel' ? 'pricing'
               : panel?.id === 'paymentPanel' ? 'payments'
                 : panel?.id === 'availabilityPanel' ? 'availability'
+                  : panel?.id === 'fulfillmentPanel' ? 'fulfillment'
                 : '';
         if (domain) markConfigDirty(domain);
       });
@@ -3287,7 +3628,8 @@
           : panel?.id === 'pricingPanel' ? 'pricing'
             : panel?.id === 'paymentPanel' ? 'payments'
               : panel?.id === 'availabilityPanel' ? 'availability'
-                : panel?.id === 'brandPanel' ? 'brand' : '';
+                : panel?.id === 'brandPanel' ? 'brand'
+                  : panel?.id === 'fulfillmentPanel' ? 'fulfillment' : '';
         if (domain) markConfigDirty(domain);
       });
 
@@ -3382,6 +3724,21 @@
           renderPaymentEditor();
         } catch (error) {
           showConfigSaveError('payments', error);
+        }
+      }));
+
+      $('saveFulfillmentBtn').addEventListener('click', () => withSavingState($('saveFulfillmentBtn'), async () => {
+        const edited = readFulfillmentEditor();
+        if (edited.error) {
+          setMessage($('fulfillmentSaveMessage'), 'error', edited.error);
+          return;
+        }
+        config.fulfillment = edited.value;
+        try {
+          await saveConfigRemote('fulfillment');
+          renderFulfillmentEditor();
+        } catch (error) {
+          showConfigSaveError('fulfillment', error);
         }
       }));
 

@@ -40,7 +40,7 @@ function createHarness(options = {}) {
       }
     };
   }
-  const sheet = makeSheet(rows, 18);
+  const sheet = makeSheet(rows, 31);
   const itemSheet = makeSheet(itemRows, 12, true);
   const spreadsheet = {
     getSheetByName: name => name === 'PedidoItens' ? itemSheet : sheet,
@@ -467,6 +467,149 @@ test('limite temporario reduz abuso sem gravar novo pedido', () => {
   h.cache.set('order-attempts:global', '80');
   assert.equal(h.post().code, 'ORDER_RATE_LIMIT');
   assert.equal(h.rows.length, 0);
+});
+
+// ---- Etapa 9: entrega e retirada ----
+
+function fulfillmentConfig(fulfillment = {}) {
+  return {
+    ...businessConfig(),
+    fulfillment: {
+      pickupEnabled: true, deliveryEnabled: true, deliveryFeeCents: 800,
+      pickupAddress: 'Endereço comercial fictício, 100', pickupInstructions: 'Retire das 9h às 12h.',
+      deliveryInstructions: 'Entregas a partir das 14h.', ...fulfillment
+    }
+  };
+}
+
+const fictitiousAddress = (overrides = {}) => ({
+  cep: '38400-000', street: 'Rua Fictícia das Flores', number: '123', complement: 'Apto 4',
+  neighborhood: 'Bairro Teste', city: 'Cidade Exemplo', state: 'mg', reference: 'Portão azul', ...overrides
+});
+
+const deliveryPost = (h, overrides = {}) => h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress() }, ...overrides });
+
+test('entrega com endereco completo soma taxa em centavos e persiste colunas novas', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  const result = deliveryPost(h);
+  assert.equal(result.ok, true);
+  const row = h.rows[0];
+  assert.equal(row.length, 31);
+  assert.equal(row[10], 27.97);
+  assert.deepEqual([...row.slice(18, 31)], ['delivery', '38400000', 'Rua Fictícia das Flores', '123', 'Apto 4', 'Bairro Teste', 'Cidade Exemplo', 'MG', 'Portão azul', 1997, 800, 2797, 'Entregas a partir das 14h.']);
+  assert.equal(result.order.subtotal, 19.97);
+  assert.equal(result.order.deliveryFee, 8);
+  assert.equal(result.order.total, 27.97);
+  assert.equal(result.order.fulfillment.mode, 'delivery');
+  assert.equal(result.order.fulfillment.address.street, 'Rua Fictícia das Flores');
+});
+
+test('retirada nao grava endereco nem taxa e registra orientacoes da loja', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  const result = h.post({ fulfillment: { mode: 'pickup', address: fictitiousAddress() } });
+  assert.equal(result.ok, true);
+  const row = h.rows[0];
+  assert.equal(row[18], 'pickup');
+  assert.deepEqual([...row.slice(19, 27)], ['', '', '', '', '', '', '', '']);
+  assert.deepEqual([...row.slice(27, 30)], [1997, 0, 1997]);
+  assert.equal(row[30], 'Endereço comercial fictício, 100 — Retire das 9h às 12h.');
+  assert.equal(result.order.fulfillment.address, null);
+  assert.equal(result.order.total, 19.97);
+});
+
+test('campos obrigatorios do endereco sao validados no servidor', () => {
+  for (const field of ['cep', 'street', 'number', 'neighborhood', 'city', 'state']) {
+    const h = createHarness({ config: fulfillmentConfig() });
+    const result = h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ [field]: '' }) } });
+    assert.equal(result.ok, false, `campo ${field}`);
+    assert.equal(h.rows.length, 0);
+  }
+  const missing = createHarness({ config: fulfillmentConfig() });
+  assert.equal(missing.post({ fulfillment: { mode: 'delivery' } }).code, 'DELIVERY_ADDRESS_REQUIRED');
+  assert.equal(missing.post({ fulfillment: { mode: 'drone' } }).code, 'INVALID_FULFILLMENT');
+});
+
+test('CEP e UF invalidos sao rejeitados', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  assert.equal(h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ cep: '3840-00' }) } }).code, 'INVALID_CEP');
+  assert.equal(h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ cep: '38400-00a' }) } }).code, 'INVALID_CEP');
+  assert.equal(h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ state: 'XX' }) } }).code, 'INVALID_STATE');
+  assert.equal(h.rows.length, 0);
+});
+
+test('taxa e total enviados pelo navegador sao ignorados', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  const result = h.post({ total: 1, price: 1, deliveryFee: 0, fulfillment: { mode: 'delivery', deliveryFee: 0, deliveryFeeCents: 0, address: fictitiousAddress() } });
+  assert.equal(result.ok, true);
+  assert.equal(h.rows[0][28], 800);
+  assert.equal(h.rows[0][29], 2797);
+});
+
+test('modalidade desabilitada ou sem taxa definida e recusada', () => {
+  const disabled = createHarness({ config: fulfillmentConfig({ deliveryEnabled: false }) });
+  assert.equal(deliveryPost(disabled).code, 'FULFILLMENT_UNAVAILABLE');
+  const withoutFee = createHarness({ config: fulfillmentConfig({ deliveryFeeCents: null }) });
+  assert.equal(deliveryPost(withoutFee).code, 'FULFILLMENT_UNAVAILABLE');
+  const noPickup = createHarness({ config: fulfillmentConfig({ pickupEnabled: false }) });
+  assert.equal(noPickup.post({ fulfillment: { mode: 'pickup' } }).code, 'FULFILLMENT_UNAVAILABLE');
+  assert.equal(noPickup.post().code, 'FULFILLMENT_REQUIRED');
+  assert.equal(disabled.rows.length + withoutFee.rows.length + noPickup.rows.length, 0);
+});
+
+test('entrega gratuita so existe com taxa zero explicita', () => {
+  const h = createHarness({ config: fulfillmentConfig({ deliveryFeeCents: 0 }) });
+  const result = deliveryPost(h);
+  assert.equal(result.ok, true);
+  assert.equal(h.rows[0][28], 0);
+});
+
+test('idempotencia considera modalidade e endereco sem recalcular pedido existente', () => {
+  const settings = fulfillmentConfig();
+  const h = createHarness({ config: settings });
+  const first = deliveryPost(h);
+  settings.fulfillment.deliveryFeeCents = 1500;
+  const retry = deliveryPost(h);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.order.total, 27.97, 'reenvio devolve o valor original');
+  assert.equal(h.rows.length, 1);
+  assert.equal(h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ number: '999' }) } }).code, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(h.post({ fulfillment: { mode: 'pickup' } }).code, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(first.orderId, retry.orderId);
+});
+
+test('pedido sem modalidade (versao anterior do site) mantem assinatura e valor', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  const first = h.post();
+  const retry = h.post();
+  assert.equal(first.ok, true);
+  assert.equal(retry.duplicate, true);
+  assert.equal(h.rows[0][18], '');
+  assert.equal(h.rows[0][10], 19.97);
+  assert.equal(first.order.fulfillment.mode, '');
+});
+
+test('pedido antigo sem colunas novas continua legivel', () => {
+  const legacy = ['PF-20250101-120000-ABC123', new Date('2025-01-01T12:00:00Z'), 'Cliente Antigo', '(34) 99999-1111', new Date('2025-01-05T12:00:00Z'), '00:00', 'Chocolate ficticio', 'p', 'Pequeno', 'Serve 8 pessoas', 89, 'PIX', '', 'Concluido', 'site'];
+  const h = createHarness({ rows: [legacy] });
+  const order = h.context.getOrders_()[0];
+  assert.equal(order.total, 89);
+  assert.equal(order.subtotal, 89);
+  assert.equal(order.deliveryFee, 0);
+  assert.equal(order.fulfillment.mode, '');
+  assert.equal(order.fulfillment.address, null);
+  assert.equal(h.rows[0].length, legacy.length);
+});
+
+test('endereco com formula e neutralizado na planilha e limites sao aplicados', () => {
+  const h = createHarness({ config: fulfillmentConfig() });
+  const result = h.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ street: '=HYPERLINK("https://evil.example")', reference: '+cmd' }) } });
+  assert.equal(result.ok, true);
+  assert.equal(h.rows[0][20], "'=HYPERLINK(\"https://evil.example\")");
+  assert.equal(h.rows[0][26], "'+cmd");
+  assert.equal(result.order.fulfillment.address.street, '=HYPERLINK("https://evil.example")');
+  const long = createHarness({ config: fulfillmentConfig() });
+  assert.equal(long.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ street: 'x'.repeat(121) }) } }).code, 'ORDER_FIELD_TOO_LONG');
+  assert.equal(long.post({ fulfillment: { mode: 'delivery', address: fictitiousAddress({ number: 12 }) } }).code, 'INVALID_ORDER_FIELD');
 });
 
 (async () => {

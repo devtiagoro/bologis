@@ -25,6 +25,11 @@ const publicConfig = {
   ],
   payments: [{ id: 'pix', name: 'PIX', type: 'pix', description: 'Pagamento via PIX', paymentLink: '', active: true }],
   progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
+  fulfillment: {
+    pickupEnabled: true, deliveryEnabled: true, deliveryFeeCents: 800,
+    pickupAddress: 'Endereço comercial fictício, 100 — Centro', pickupInstructions: 'Retirada das 9h às 12h.',
+    deliveryInstructions: 'Entregas fictícias a partir das 14h.'
+  },
   availability: {
     enabled: true,
     days: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: true, sunday: true },
@@ -125,6 +130,52 @@ async function launchDevTools() {
   };
 }
 
+// Formulário público com um sabor e entrega selecionada; depois confirma que a retirada esconde o endereço.
+const PUBLIC_FORM_PROBE = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (!document.getElementById('customerView').classList.contains('hidden') && !document.getElementById('deliveryChoice').classList.contains('hidden')) break;
+    await wait(100);
+  }
+  const ready = !document.getElementById('deliveryChoice').classList.contains('hidden');
+  document.getElementById('flavorSelect').value = document.getElementById('flavorSelect').options[1]?.value || '';
+  document.getElementById('addOrderItemBtn').click();
+  document.getElementById('fulfillmentDelivery').click();
+  await document.fonts.ready;
+  await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})));
+  const measure = () => {
+    const card = document.querySelector('.order-card').getBoundingClientRect();
+    const targets = [...document.querySelectorAll('#fulfillmentChoices .choice:not(.hidden), #deliveryFields .control')];
+    return {
+      ready,
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      fieldsVisible: targets.length >= 10 && targets.every(element => element.getClientRects().length > 0),
+      fieldsWithin: targets.every(element => { const rect = element.getBoundingClientRect(); return rect.left >= card.left - 1 && rect.right <= card.right + 1; }),
+      feeShown: !document.getElementById('summaryDeliveryFeeRow').classList.contains('hidden'),
+      total: document.getElementById('summaryTotal').textContent
+    };
+  };
+  let previous = '';
+  let result;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await frame();
+    result = measure();
+    const current = JSON.stringify(result);
+    if (current === previous) break;
+    previous = current;
+  }
+  document.getElementById('deliveryFields').scrollIntoView({ block: 'center' });
+  const snapshot = { ...result };
+  document.getElementById('fulfillmentPickup').click();
+  await frame();
+  snapshot.pickupHidesAddress = document.getElementById('deliveryFields').getClientRects().length === 0
+    && document.getElementById('pickupInfo').getClientRects().length > 0;
+  document.getElementById('fulfillmentDelivery').click();
+  await frame();
+  return snapshot;
+})()`;
+
 // Mede apenas depois de fontes, animações e layout estabilizarem (duas leituras iguais seguidas).
 const STABLE_PROBE = `(async () => {
   await document.fonts.ready;
@@ -171,14 +222,21 @@ const server = http.createServer((request, response) => {
           { flavor: 'Ninho com morango e decoração especial', quantity: 2, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' },
           { flavor: 'Cenoura com chocolate', quantity: 2, subtotal: 39.97, savings: 0, pricingModel: 'progressive-v1' }
         ],
-        checkout: { state: 'returned_unverified', available: true, url: 'https://checkout.infinitepay.com.br/fictitious', chargeId: 'invoice-fictitious-long-reference-001', expectedAmountCents: 12491, expiresAt: '2026-10-22T23:59:59-03:00' }
+        checkout: { state: 'returned_unverified', available: true, url: 'https://checkout.infinitepay.com.br/fictitious', chargeId: 'invoice-fictitious-long-reference-001', expectedAmountCents: 12491, expiresAt: '2026-10-22T23:59:59-03:00' },
+        subtotal: 116.91, deliveryFee: 8,
+        fulfillment: {
+          mode: 'delivery', instructions: 'Entregas fictícias a partir das 14h.',
+          address: { cep: '38400000', street: 'Avenida Fictícia com Nome Bastante Extenso para Validação', number: '1234', complement: 'Bloco B, apartamento 302', neighborhood: 'Bairro Exemplo Muito Longo', city: 'Cidade Exemplo', state: 'MG', reference: 'Em frente à praça fictícia' }
+        }
       },
       {
         id: 'PF-HML-102', createdAt: '2026-10-19T12:00:00Z', customerName: 'Pessoa de Teste',
         whatsapp: '(34) 98888-2222', date: '2026-10-26', time: '14:00', total: 34.97, totalQuantity: 2,
         payment: 'InfinitePay — PIX ou cartão', notes: '', status: 'Pagamento não confirmado',
         items: [{ flavor: 'Ninho com morango', quantity: 2, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' }],
-        checkout: { state: 'not_created', available: false }
+        checkout: { state: 'not_created', available: false },
+        subtotal: 34.97, deliveryFee: 0,
+        fulfillment: { mode: 'pickup', address: null, instructions: 'Endereço comercial fictício, 100 — Centro — Retirada das 9h às 12h.' }
       }
     ];
     adminPreviewHtml = html.replace(
@@ -257,6 +315,18 @@ const server = http.createServer((request, response) => {
           assert.equal(status.title, status.text.replace(/ \(legado\)$/, ''), `Seletor sem identificação acessível do status em ${label}.`);
           if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
         }
+
+        const publicPage = await devTools.openPage(`${origin}/?public=1`, viewport);
+        const form = await publicPage.evaluate(PUBLIC_FORM_PROBE);
+        await publicPage.screenshot(path.join(tempDir, `public-delivery-${label}.png`));
+        await publicPage.close();
+        assert.equal(form.ready, true, `Formulário público não carregou em ${label}.`);
+        assert.equal(form.pageOverflow, false, `Formulário com entrega apresentou overflow em ${label}.`);
+        assert.equal(form.fieldsVisible, true, `Campos de endereço ocultos com entrega selecionada em ${label}.`);
+        assert.equal(form.fieldsWithin, true, `Campos de recebimento saíram do formulário em ${label}.`);
+        assert.equal(form.feeShown, true, `Taxa de entrega ausente no resumo em ${label}.`);
+        assert.match(form.total, /27,97/, `Total com taxa incorreto em ${label}.`);
+        assert.equal(form.pickupHidesAddress, true, `Retirada manteve campos de endereço em ${label}.`);
       }
     } finally {
       await devTools.close();
@@ -280,6 +350,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS central operacional sem overflow em viewports reais 390x844, 768x1024, 1024x768, 1280x800, 1440x1000 e 1920x1080');
     console.log('PASS cards responsivos e tabela desktop permanecem dentro do painel, inclusive com detalhes abertos');
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
+    console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {
     server.close();
