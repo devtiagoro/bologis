@@ -32,6 +32,7 @@ const publicConfig = {
   }
 };
 
+const DEFAULT_STATUSES = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bologis-visual-'));
 let html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 let adminPreviewHtml = '';
@@ -52,6 +53,91 @@ function classListFor(dom, id) {
   const match = dom.match(new RegExp(`<[^>]+id="${id}"[^>]*class="([^"]*)"`, 'i'));
   return match ? match[1].split(/\s+/).filter(Boolean) : [];
 }
+
+// Chrome DevTools Protocol: viewport exata (o --window-size do headless não reduz abaixo de ~500px).
+async function launchDevTools() {
+  const profile = fs.mkdtempSync(path.join(tempDir, 'profile-'));
+  const child = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = '';
+    const timer = setTimeout(() => reject(new Error('Chrome DevTools não respondeu.')), 20_000);
+    child.stderr.on('data', chunk => {
+      buffer += chunk;
+      const match = buffer.match(/DevTools listening on (ws:\/\/\S+)/);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    child.on('error', reject);
+  });
+  const socket = new WebSocket(wsUrl);
+  await new Promise((resolve, reject) => { socket.addEventListener('open', resolve); socket.addEventListener('error', reject); });
+  let nextId = 0;
+  const pending = new Map();
+  const listeners = new Set();
+  socket.addEventListener('message', event => {
+    const message = JSON.parse(event.data);
+    if (message.id && pending.has(message.id)) {
+      const { resolve, reject } = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) reject(new Error(`${message.error.message} (${message.error.code})`));
+      else resolve(message.result);
+    } else listeners.forEach(listener => listener(message));
+  });
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    socket.send(JSON.stringify({ id, method, params, sessionId }));
+  });
+  return {
+    async openPage(url, viewport) {
+      const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+      const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+      const pageSend = (method, params) => send(method, params, sessionId);
+      await pageSend('Page.enable');
+      await pageSend('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false });
+      const loaded = new Promise(resolve => {
+        const listener = message => {
+          if (message.sessionId === sessionId && message.method === 'Page.loadEventFired') { listeners.delete(listener); resolve(); }
+        };
+        listeners.add(listener);
+      });
+      await pageSend('Page.navigate', { url });
+      await loaded;
+      return {
+        async evaluate(expression) {
+          const result = await pageSend('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+          if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+          return result.result.value;
+        },
+        async screenshot(file) {
+          const { data } = await pageSend('Page.captureScreenshot', { format: 'png' });
+          fs.writeFileSync(file, Buffer.from(data, 'base64'));
+        },
+        close: () => send('Target.closeTarget', { targetId })
+      };
+    },
+    async close() {
+      const exited = child.exitCode !== null ? Promise.resolve() : new Promise(resolve => child.once('exit', resolve));
+      try { await send('Browser.close'); } catch (_) { /* navegador já encerrado */ }
+      socket.close();
+      await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5_000))]);
+      if (child.exitCode === null) child.kill();
+    }
+  };
+}
+
+// Mede apenas depois de fontes, animações e layout estabilizarem (duas leituras iguais seguidas).
+const STABLE_PROBE = `(async () => {
+  await document.fonts.ready;
+  await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})));
+  let previous = '';
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const current = JSON.stringify(window.__visualProbe());
+    if (current === previous) return JSON.parse(current);
+    previous = current;
+  }
+  throw new Error('Layout não estabilizou.');
+})()`;
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
@@ -74,36 +160,111 @@ const server = http.createServer((request, response) => {
       .replace('connect-src https://script.google.com https://script.googleusercontent.com', `connect-src ${origin}`);
 
     const fakeOrders = [
-      { id: 'PF-HML-101', createdAt: '2026-10-20T12:00:00Z', customerName: 'Cliente Fictícia', whatsapp: '(34) 99999-1111', date: '2026-10-25', time: '10:00', flavor: 'Chocolate', size: 'Pequeno', description: 'Serve 8 pessoas', price: 89, payment: 'PIX', notes: 'Sem nozes', status: 'Aguardando pagamento' },
-      { id: 'PF-HML-102', createdAt: '2026-10-19T12:00:00Z', customerName: 'Pessoa de Teste', whatsapp: '(34) 98888-2222', date: '2026-10-26', time: '14:00', flavor: 'Ninho com morango', size: 'Médio', description: 'Serve 15 pessoas', price: 129, payment: 'Cartão', notes: '', status: 'Em produção' }
+      {
+        id: 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001',
+        createdAt: '2026-10-20T12:00:00Z', customerName: 'Cliente com nome excepcionalmente extenso para validação visual',
+        whatsapp: '(34) 99999-1111', date: '2026-10-25', time: '10:00', total: 124.91, totalQuantity: 7,
+        payment: 'InfinitePay — PIX ou cartão', status: 'Aguardando pagamento',
+        notes: 'Observação fictícia longa: separar cuidadosamente os sabores, manter longe de castanhas e confirmar a retirada pelo WhatsApp antes do horário combinado.',
+        items: [
+          { flavor: 'Chocolate com brigadeiro belga', quantity: 3, subtotal: 49.97, savings: 9.94, pricingModel: 'progressive-v1' },
+          { flavor: 'Ninho com morango e decoração especial', quantity: 2, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' },
+          { flavor: 'Cenoura com chocolate', quantity: 2, subtotal: 39.97, savings: 0, pricingModel: 'progressive-v1' }
+        ],
+        checkout: { state: 'returned_unverified', available: true, url: 'https://checkout.infinitepay.com.br/fictitious', chargeId: 'invoice-fictitious-long-reference-001', expectedAmountCents: 12491, expiresAt: '2026-10-22T23:59:59-03:00' }
+      },
+      {
+        id: 'PF-HML-102', createdAt: '2026-10-19T12:00:00Z', customerName: 'Pessoa de Teste',
+        whatsapp: '(34) 98888-2222', date: '2026-10-26', time: '14:00', total: 34.97, totalQuantity: 2,
+        payment: 'InfinitePay — PIX ou cartão', notes: '', status: 'Pagamento não confirmado',
+        items: [{ flavor: 'Ninho com morango', quantity: 2, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' }],
+        checkout: { state: 'not_created', available: false }
+      }
     ];
     adminPreviewHtml = html.replace(
       'initializeApp();',
-      `config = normalizeConfig(${JSON.stringify({ ...publicConfig, revision: '7', flavorItems: publicConfig.flavors.map((name, index) => ({ id: `f-${index}`, name, active: index === 0, order: index + 1 })), orderStatuses: ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'] })});
+      `config = normalizeConfig(${JSON.stringify({ ...publicConfig, revision: '7', flavorItems: publicConfig.flavors.map((name, index) => ({ id: `f-${index}`, name, active: index === 0, order: index + 1 })), orderStatuses: DEFAULT_STATUSES })});
        appState.config = config;
        appState.orders = ${JSON.stringify(fakeOrders)};
        adminWasUnlocked = true;
        document.getElementById('initialLoading').classList.add('hidden');
        document.getElementById('appTopbar').classList.remove('hidden');
        document.getElementById('adminAuthView').classList.add('hidden');
-       renderAdmin();`
+       renderAdmin();
+       window.__visualProbe = () => {
+         const page = document.documentElement;
+         const panel = document.querySelector('.admin-content');
+         const tableWrap = document.querySelector('.orders-table-wrap');
+         const cards = document.querySelector('.orders-mobile-list');
+         const panelRect = panel.getBoundingClientRect();
+         const tableVisible = getComputedStyle(tableWrap).display !== 'none';
+         const surface = tableVisible ? tableWrap : cards;
+         const inPanel = element => {
+           const rect = element.getBoundingClientRect();
+           return rect.left >= panelRect.left - 1 && rect.right <= panelRect.right + 1;
+         };
+         const controls = [...document.querySelectorAll('.orders-toolbar .control')].concat([...surface.querySelectorAll('.order-status')]);
+         const canvas = document.createElement('canvas').getContext('2d');
+         const statusSelects = [...surface.querySelectorAll('.order-status')].map(select => {
+           const style = getComputedStyle(select);
+           canvas.font = style.font;
+           const text = select.selectedOptions[0]?.text || '';
+           const available = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 22;
+           return { text, title: select.title, fits: canvas.measureText(text).width <= available, width: Math.round(select.getBoundingClientRect().width) };
+         });
+         const closedDetails = [...surface.querySelectorAll('details:not([open])')];
+         closedDetails.forEach(details => { details.open = true; });
+         const detailsOverflow = page.scrollWidth > page.clientWidth + 1 || !inPanel(surface);
+         closedDetails.forEach(details => { details.open = false; });
+         return {
+           viewport: { width: innerWidth, height: innerHeight },
+           pageOverflow: page.scrollWidth > page.clientWidth + 1,
+           surfaceWithin: inPanel(surface),
+           controlsWithin: controls.filter(control => control.getClientRects().length).every(inPanel),
+           ordersMode: !tableVisible && getComputedStyle(cards).display !== 'none' ? 'cards' : 'table',
+           detailsOverflow,
+           statusSelects
+         };
+       };`
     );
 
-    const desktop = path.join(tempDir, 'admin-desktop.png');
-    const tablet = path.join(tempDir, 'admin-tablet.png');
-    const mobile = path.join(tempDir, 'public-mobile.png');
     const common = ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--virtual-time-budget=2500'];
-
-    await runChrome([...common, '--window-size=1440,1000', `--screenshot=${desktop}`, `${origin}/admin-preview`]);
-    await runChrome([...common, '--window-size=768,1024', `--screenshot=${tablet}`, `${origin}/admin-preview`]);
-    await runChrome([...common, '--window-size=390,844', `--screenshot=${mobile}`, `${origin}/?public=1`]);
+    const viewports = [
+      { width: 390, height: 844, mode: 'cards' },
+      { width: 768, height: 1024, mode: 'cards' },
+      { width: 1024, height: 768, mode: 'cards' },
+      { width: 1280, height: 800, mode: 'table' },
+      { width: 1440, height: 1000, mode: 'table' },
+      { width: 1920, height: 1080, mode: 'table' }
+    ];
+    const devTools = await launchDevTools();
+    try {
+      for (const viewport of viewports) {
+        const label = `${viewport.width}x${viewport.height}`;
+        const page = await devTools.openPage(`${origin}/admin-preview`, viewport);
+        const layout = await page.evaluate(STABLE_PROBE);
+        const screenshot = path.join(tempDir, `admin-${label}.png`);
+        await page.screenshot(screenshot);
+        await page.close();
+        assert.deepEqual(layout.viewport, { width: viewport.width, height: viewport.height }, `Viewport real diferente de ${label}.`);
+        assert.ok(fs.statSync(screenshot).size > 10_000, `Screenshot ${label} não foi renderizado corretamente.`);
+        assert.equal(layout.pageOverflow, false, `A página apresentou overflow horizontal em ${label}.`);
+        assert.equal(layout.surfaceWithin, true, `A superfície de pedidos saiu do painel em ${label}.`);
+        assert.equal(layout.controlsWithin, true, `Um controle saiu do painel em ${label}.`);
+        assert.equal(layout.ordersMode, viewport.mode, `Modo de pedidos incorreto em ${label}.`);
+        assert.equal(layout.detailsOverflow, false, `Detalhes expandidos provocaram overflow em ${label}.`);
+        for (const status of layout.statusSelects) {
+          assert.equal(status.title, status.text.replace(/ \(legado\)$/, ''), `Seletor sem identificação acessível do status em ${label}.`);
+          if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
+        }
+      }
+    } finally {
+      await devTools.close();
+    }
     const adminDom = await runChrome([...common, '--dump-dom', `${origin}/`]);
     const previewDom = await runChrome([...common, '--dump-dom', `${origin}/admin-preview`]);
     const publicDom = await runChrome([...common, '--dump-dom', `${origin}/?public=1`]);
 
-    assert.ok(fs.statSync(desktop).size > 10_000, 'Screenshot desktop não foi renderizado corretamente.');
-    assert.ok(fs.statSync(tablet).size > 10_000, 'Screenshot tablet não foi renderizado corretamente.');
-    assert.ok(fs.statSync(mobile).size > 10_000, 'Screenshot mobile não foi renderizado corretamente.');
     assert.equal(classListFor(adminDom, 'adminAuthView').includes('hidden'), false);
     assert.equal(classListFor(adminDom, 'adminView').includes('hidden'), true);
     assert.equal(classListFor(publicDom, 'customerView').includes('hidden'), false);
@@ -113,13 +274,16 @@ const server = http.createServer((request, response) => {
     assert.equal(classListFor(previewDom, 'adminView').includes('hidden'), false);
     assert.match(previewDom, /id="pricingPanel"/);
     assert.match(previewDom, /order-mobile-card/);
-    assert.match(previewDom, /PF-HML-101/);
+    assert.match(previewDom, /PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001/);
+    assert.match(previewDom, /PF-HML-102/);
     console.log('PASS central protegida sem sessão');
-    console.log('PASS central operacional renderizada em 1440x1000 e 768x1024');
-    console.log('PASS formulário público renderizado em 390x844');
+    console.log('PASS central operacional sem overflow em viewports reais 390x844, 768x1024, 1024x768, 1280x800, 1440x1000 e 1920x1080');
+    console.log('PASS cards responsivos e tabela desktop permanecem dentro do painel, inclusive com detalhes abertos');
+    console.log('PASS seletor de status legível e identificado em todas as resoluções');
+    if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {
     server.close();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (!process.argv.includes('--keep')) fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 })().catch(error => {
   console.error(error.stack || error);

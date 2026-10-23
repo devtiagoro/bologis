@@ -6,7 +6,8 @@ const PF = {
     payments: 'Pagamentos',
     availability: 'Disponibilidade',
     orders: 'Pedidos',
-    orderItems: 'PedidoItens'
+    orderItems: 'PedidoItens',
+    checkouts: 'CheckoutCobrancas'
   },
   headers: {
     Configuracoes: ['Chave', 'Valor'],
@@ -23,6 +24,10 @@ const PF = {
       'Pedido ID', 'Item', 'Sabor', 'Tamanho ID', 'Tamanho', 'Quantidade',
       'Preço unitário', 'Subtotal', 'Preço primeira fatia', 'Preço fatia adicional',
       'Economia', 'Modelo de preço'
+    ],
+    CheckoutCobrancas: [
+      'Pedido ID', 'Versão do valor', 'Checkout URL', 'Cobrança ID', 'Valor esperado (centavos)',
+      'Criado em', 'Expira em', 'Estado', 'Último erro', 'Referências JSON', 'Atualizado em'
     ]
   }
 };
@@ -75,6 +80,21 @@ const PF_PRICING = {
   defaultFirstSliceCents: 1997,
   defaultAdditionalSliceCents: 1500,
   model: 'progressive-v1'
+};
+
+const PF_CHECKOUT = {
+  apiUrl: 'https://api.checkout.infinitepay.io/links',
+  paymentCheckUrl: 'https://api.checkout.infinitepay.io/payment_check',
+  apiKeyProperty: 'INFINITEPAY_API_KEY',
+  handleProperty: 'INFINITEPAY_HANDLE',
+  redirectUrlProperty: 'INFINITEPAY_REDIRECT_URL',
+  returnSecretProperty: 'INFINITEPAY_RETURN_SECRET',
+  allowedCheckoutHosts: ['checkout.infinitepay.com.br'],
+  states: {
+    creating: 'creating', active: 'active', returned: 'returned_unverified',
+    paid: 'paid_unverified', mismatch: 'payment_amount_mismatch', expired: 'expired', failed: 'failed', unknown: 'unknown'
+  },
+  maxErrorLength: 300
 };
 
 /** Execute manualmente no editor do Apps Script para criar ou rotacionar a chave. */
@@ -406,6 +426,12 @@ function setupProject() {
     PF.headers.PedidoItens
   );
 
+  ensureSheet_(
+    ss,
+    PF.sheets.checkouts,
+    PF.headers.CheckoutCobrancas
+  );
+
 
   seedDefaults_(ss);
 
@@ -497,6 +523,11 @@ function doPost(e) {
 
     }
 
+    if (action === 'registerCheckoutReturn') {
+      validateObjectSize_(body, PF_ORDER.maxOrderBytes);
+      return json_({ ok: true, checkout: registerCheckoutReturn_(body) });
+    }
+
     if (action === 'createAdminSession') {
       return json_({ ok: true, session: createAdminSession_(body.adminKey || '') });
     }
@@ -515,6 +546,11 @@ function doPost(e) {
     if (action === 'getOrders') {
       requireAdmin_(body);
       return json_({ ok: true, orders: getOrders_() });
+    }
+
+    if (action === 'checkCheckoutPayment') {
+      requireAdmin_(body);
+      return json_({ ok: true, checkout: checkCheckoutPayment_(body.orderId) });
     }
 
 
@@ -1400,6 +1436,350 @@ function restoreConfigBackup_(backupId, expectedRevision) {
   }
 }
 
+function getInfinitePayConfig_() {
+  const properties = PropertiesService.getScriptProperties();
+  const apiKey = String(properties.getProperty(PF_CHECKOUT.apiKeyProperty) || '').trim();
+  const redirectUrl = validateRedirectUrl_(properties.getProperty(PF_CHECKOUT.redirectUrlProperty) || '');
+  return {
+    configured: /^inchk_[A-Za-z0-9_-]{8,}$/.test(apiKey) && Boolean(redirectUrl),
+    apiKey,
+    handle: String(properties.getProperty(PF_CHECKOUT.handleProperty) || '').trim().replace(/^\$/, ''),
+    redirectUrl
+  };
+}
+
+function validateRedirectUrl_(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return /^https:\/\/[^\s]+$/i.test(text) ? text : '';
+}
+
+function getCheckoutReturnSecret_() {
+  const properties = PropertiesService.getScriptProperties();
+  let secret = properties.getProperty(PF_CHECKOUT.returnSecretProperty) || '';
+  if (!secret) {
+    secret = randomSecret_();
+    properties.setProperty(PF_CHECKOUT.returnSecretProperty, secret);
+  }
+  return secret;
+}
+
+function checkoutValueVersion_(order) {
+  const identity = {
+    orderId: String(order.id || ''),
+    totalCents: Math.round(Number(order.total || order.price || 0) * 100),
+    items: (order.items || []).map(item => ({
+      flavor: String(item.flavor || ''), quantity: Number(item.quantity || 0),
+      subtotalCents: Math.round(Number(item.subtotal || 0) * 100)
+    }))
+  };
+  return hashCredential_(JSON.stringify(identity)).slice(0, 32);
+}
+
+function checkoutReturnToken_(orderId, valueVersion) {
+  return base64UrlEncode_(Utilities.computeHmacSha256Signature(
+    String(orderId) + '|' + String(valueVersion),
+    getCheckoutReturnSecret_(),
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function checkoutRedirectUrl_(baseUrl, orderId, valueVersion) {
+  const separator = baseUrl.indexOf('?') === -1 ? '?' : '&';
+  return baseUrl + separator
+    + 'payment_return=1&checkout_token=' + encodeURIComponent(checkoutReturnToken_(orderId, valueVersion));
+}
+
+function checkoutItemsFromOrder_(order) {
+  const result = [];
+  (order.items || []).forEach(item => {
+    const quantity = Number(item.quantity || 0);
+    const firstCents = Math.round(Number(item.firstSlicePrice || item.unitPrice || 0) * 100);
+    const additionalCents = Math.round(Number(item.additionalSlicePrice || item.unitPrice || 0) * 100);
+    const flavor = String(item.flavor || 'Encomenda').slice(0, 120);
+    if (quantity > 0 && firstCents > 0) {
+      result.push({ quantity: 1, price: firstCents, description: flavor + ' — primeira fatia' });
+    }
+    if (quantity > 1 && additionalCents >= 0) {
+      result.push({ quantity: quantity - 1, price: additionalCents, description: flavor + ' — fatias adicionais' });
+    }
+  });
+  const expected = Math.round(Number(order.total || order.price || 0) * 100);
+  const calculated = result.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  if (!result.length || expected < 1 || calculated !== expected) {
+    throw apiError_('CHECKOUT_TOTAL_MISMATCH', 'O pedido foi registrado, mas o total do checkout não pôde ser validado.');
+  }
+  return result;
+}
+
+function normalizeInfinitePayPhone_(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (/^55\d{10,11}$/.test(digits)) return '+' + digits;
+  if (/^\d{10,11}$/.test(digits)) return '+55' + digits;
+  return '';
+}
+
+function safeInfinitePayCheckoutUrl_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^https:\/\/([a-z0-9.-]+)(?::\d{1,5})?(?:[\/?#]|$)/i);
+  if (!match) return '';
+  const host = match[1].toLowerCase();
+  return PF_CHECKOUT.allowedCheckoutHosts.includes(host) ? text : '';
+}
+
+function checkoutRecordFromRow_(row) {
+  return {
+    orderId: String(row[0] || ''), valueVersion: String(row[1] || ''),
+    url: readableSheetText_(row[2]), chargeId: readableSheetText_(row[3]),
+    expectedAmountCents: Number(row[4] || 0),
+    createdAt: row[5] instanceof Date ? row[5].toISOString() : String(row[5] || ''),
+    expiresAt: row[6] instanceof Date ? row[6].toISOString() : String(row[6] || ''),
+    state: String(row[7] || ''), error: readableSheetText_(row[8]),
+    references: parseCheckoutReferences_(row[9]),
+    updatedAt: row[10] instanceof Date ? row[10].toISOString() : String(row[10] || '')
+  };
+}
+
+function parseCheckoutReferences_(value) {
+  try {
+    const parsed = JSON.parse(readableSheetText_(value) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function checkoutPublicView_(record) {
+  if (!record) return { state: 'not_created', available: false };
+  const url = safeInfinitePayCheckoutUrl_(record.url);
+  return {
+    state: record.state || 'unknown', available: Boolean(url) && ['active', 'returned_unverified', 'paid_unverified'].includes(record.state),
+    url, chargeId: record.chargeId || '', expectedAmountCents: record.expectedAmountCents,
+    expiresAt: record.expiresAt || ''
+  };
+}
+
+function findCheckoutRecord_(sheet, orderId, valueVersion) {
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, PF.headers.CheckoutCobrancas.length).getValues();
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (String(rows[index][0] || '') === String(orderId)
+      && (!valueVersion || String(rows[index][1] || '') === String(valueVersion))) {
+      return { row: rows[index], rowNumber: index + 2, record: checkoutRecordFromRow_(rows[index]) };
+    }
+  }
+  return null;
+}
+
+function updateCheckoutRecord_(sheet, rowNumber, values) {
+  Object.keys(values).forEach(key => {
+    const indexes = { url: 3, chargeId: 4, expectedAmountCents: 5, createdAt: 6, expiresAt: 7, state: 8, error: 9, references: 10, updatedAt: 11 };
+    const column = indexes[key];
+    if (!column) return;
+    const value = key === 'references' ? JSON.stringify(values[key] || {}) : values[key];
+    sheet.getRange(rowNumber, column).setValue(typeof value === 'string' ? sheetSafeText_(value) : value);
+  });
+}
+
+function checkoutIsExpired_(record, now) {
+  const expires = new Date(record && record.expiresAt || '');
+  return !isNaN(expires.getTime()) && expires.getTime() <= now.getTime();
+}
+
+function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration) {
+  const payload = {
+    order_nsu: String(order.id),
+    redirect_url: checkoutRedirectUrl_(integration.redirectUrl, order.id, valueVersion),
+    items: checkoutItemsFromOrder_(order),
+    customer: {
+      name: String(order.customerName || '').slice(0, 120),
+      phone_number: normalizeInfinitePayPhone_(order.whatsapp)
+    },
+    options: {
+      single_payment: true,
+      valid_until: String(expiresAt),
+      payment_methods_enabled: ['credit_card', 'pix']
+    }
+  };
+  if (!payload.customer.phone_number) delete payload.customer.phone_number;
+  const response = UrlFetchApp.fetch(PF_CHECKOUT.apiUrl, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'X-Api-Key': integration.apiKey }, payload: JSON.stringify(payload)
+  });
+  const status = Number(response.getResponseCode());
+  let data = {};
+  try { data = JSON.parse(response.getContentText() || '{}'); } catch (_) {}
+  if (status < 200 || status >= 300) {
+    const error = apiError_('INFINITEPAY_API_ERROR', 'A InfinitePay não pôde criar o checkout neste momento.');
+    error.definitive = true;
+    error.providerStatus = status;
+    throw error;
+  }
+  const url = safeInfinitePayCheckoutUrl_(data.url);
+  if (!url) {
+    const error = apiError_('INFINITEPAY_INVALID_RESPONSE', 'A InfinitePay respondeu sem uma URL de checkout válida.');
+    error.definitive = true;
+    throw error;
+  }
+  return { url, chargeId: String(data.id || data.slug || data.invoice_slug || ''), payload };
+}
+
+function ensureCheckoutForOrder_(order, expiresAt) {
+  const integration = getInfinitePayConfig_();
+  if (!integration.configured) return { state: 'not_configured', available: false };
+  if (['Cancelado', 'Confirmado', 'Concluído'].includes(String(order.status || ''))) {
+    return { state: 'blocked_order_status', available: false };
+  }
+  const expectedAmountCents = Math.round(Number(order.total || order.price || 0) * 100);
+  const valueVersion = checkoutValueVersion_(order);
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(PF.sheets.checkouts);
+  if (!sheet) return { state: 'not_configured', available: false };
+  const now = currentBusinessDate_();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  let rowNumber;
+  try {
+    const existing = findCheckoutRecord_(sheet, order.id, valueVersion);
+    if (existing) {
+      if (checkoutIsExpired_(existing.record, now)
+        && [PF_CHECKOUT.states.active, PF_CHECKOUT.states.returned].includes(existing.record.state)) {
+        updateCheckoutRecord_(sheet, existing.rowNumber, { state: PF_CHECKOUT.states.expired, updatedAt: now });
+        existing.record.state = PF_CHECKOUT.states.expired;
+      }
+      return checkoutPublicView_(existing.record);
+    }
+    const createdAt = now;
+    const expiry = new Date(expiresAt);
+    if (isNaN(expiry.getTime()) || expiry.getTime() <= createdAt.getTime()) {
+      return { state: PF_CHECKOUT.states.expired, available: false };
+    }
+    sheet.appendRow([
+      order.id, valueVersion, '', '', expectedAmountCents, createdAt, expiry,
+      PF_CHECKOUT.states.creating, '', '{}', createdAt
+    ]);
+    rowNumber = sheet.getLastRow();
+  } finally {
+    lock.releaseLock();
+  }
+
+  try {
+    const created = createInfinitePayCheckout_(order, expiresAt, valueVersion, integration);
+    const commitLock = LockService.getScriptLock();
+    commitLock.waitLock(10000);
+    try {
+      updateCheckoutRecord_(sheet, rowNumber, {
+        url: created.url, chargeId: created.chargeId, state: PF_CHECKOUT.states.active,
+        error: '', references: { orderNsu: order.id }, updatedAt: currentBusinessDate_()
+      });
+    } finally {
+      commitLock.releaseLock();
+    }
+    return checkoutPublicView_({
+      url: created.url, chargeId: created.chargeId, expectedAmountCents,
+      expiresAt, state: PF_CHECKOUT.states.active
+    });
+  } catch (error) {
+    const failureState = error && error.definitive ? PF_CHECKOUT.states.failed : PF_CHECKOUT.states.unknown;
+    const failureLock = LockService.getScriptLock();
+    failureLock.waitLock(10000);
+    try {
+      updateCheckoutRecord_(sheet, rowNumber, {
+        state: failureState,
+        error: String(error && error.message || 'Falha de conexão com a InfinitePay.').slice(0, PF_CHECKOUT.maxErrorLength),
+        updatedAt: currentBusinessDate_()
+      });
+    } finally {
+      failureLock.releaseLock();
+    }
+    return { state: failureState, available: false };
+  }
+}
+
+function safeInfinitePayReferenceUrl_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^https:\/\/([a-z0-9.-]+)(?:[\/?#]|$)/i);
+  if (!match) return '';
+  const host = match[1].toLowerCase();
+  return host === 'infinitepay.io' || host.endsWith('.infinitepay.io')
+    || host === 'infinitepay.com.br' || host.endsWith('.infinitepay.com.br') ? text : '';
+}
+
+function registerCheckoutReturn_(body) {
+  const orderId = orderText_(body, ['orderId', 'order_nsu'], 'pedido', 80, true);
+  const token = orderText_(body, ['checkoutToken'], 'token de retorno', 256, true);
+  const ss = getSpreadsheet_();
+  const orderRecord = findOrderRecordById_(ss.getSheetByName(PF.sheets.orders), orderId);
+  if (!orderRecord) throw apiError_('ORDER_NOT_FOUND', 'O pedido informado não foi encontrado.');
+  const checkoutSheet = ss.getSheetByName(PF.sheets.checkouts);
+  const checkout = findCheckoutRecord_(checkoutSheet, orderId, '');
+  if (!checkout || !constantTimeEqual_(token, checkoutReturnToken_(orderId, checkout.record.valueVersion))) {
+    throw apiError_('CHECKOUT_RETURN_INVALID', 'Não foi possível validar o retorno do checkout.');
+  }
+  const references = {
+    orderNsu: orderId,
+    slug: orderText_(body, ['slug'], 'código da cobrança', 160, false),
+    transactionNsu: orderText_(body, ['transactionNsu', 'transaction_nsu'], 'transação', 160, false),
+    captureMethod: orderText_(body, ['captureMethod', 'capture_method'], 'meio de pagamento', 40, false),
+    receiptUrl: safeInfinitePayReferenceUrl_(body.receiptUrl || body.receipt_url),
+    returnedAt: currentBusinessDate_().toISOString()
+  };
+  const previousReferences = checkout.record.references || {};
+  if ((previousReferences.slug && references.slug && previousReferences.slug !== references.slug)
+    || (previousReferences.transactionNsu && references.transactionNsu
+      && previousReferences.transactionNsu !== references.transactionNsu)) {
+    throw apiError_('CHECKOUT_RETURN_CONFLICT', 'O retorno não corresponde às referências já registradas para este pedido.');
+  }
+  references.slug = previousReferences.slug || references.slug;
+  references.transactionNsu = previousReferences.transactionNsu || references.transactionNsu;
+  const chargeId = references.slug || checkout.record.chargeId;
+  updateCheckoutRecord_(checkoutSheet, checkout.rowNumber, {
+    chargeId, references, state: PF_CHECKOUT.states.returned, updatedAt: currentBusinessDate_()
+  });
+  return { orderId, state: PF_CHECKOUT.states.returned, subjectToManualReview: true };
+}
+
+function checkCheckoutPayment_(orderId) {
+  const id = clean_(orderId);
+  if (!id) throw apiError_('ORDER_ID_REQUIRED', 'Informe o pedido para conferir o pagamento.');
+  const integration = getInfinitePayConfig_();
+  if (!integration.configured || !integration.handle) {
+    throw apiError_('INFINITEPAY_CHECK_NOT_CONFIGURED', 'Configure a API Key, a InfiniteTag e a URL de retorno nas propriedades do script.');
+  }
+  const sheet = getSpreadsheet_().getSheetByName(PF.sheets.checkouts);
+  const found = findCheckoutRecord_(sheet, id, '');
+  if (!found) throw apiError_('CHECKOUT_NOT_FOUND', 'Este pedido ainda não possui checkout registrado.');
+  const refs = found.record.references || {};
+  if (!refs.slug || !refs.transactionNsu) {
+    throw apiError_('CHECKOUT_REFERENCE_PENDING', 'A transação ainda não retornou referências suficientes para consulta.');
+  }
+  const response = UrlFetchApp.fetch(PF_CHECKOUT.paymentCheckUrl, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'X-Api-Key': integration.apiKey },
+    payload: JSON.stringify({ handle: integration.handle, order_nsu: id, transaction_nsu: refs.transactionNsu, slug: refs.slug })
+  });
+  const status = Number(response.getResponseCode());
+  let data = {};
+  try { data = JSON.parse(response.getContentText() || '{}'); } catch (_) {}
+  if (status < 200 || status >= 300) throw apiError_('INFINITEPAY_CHECK_FAILED', 'Não foi possível consultar a situação na InfinitePay.');
+  refs.lastCheckedAt = currentBusinessDate_().toISOString();
+  refs.providerPaid = data.paid === true;
+  refs.providerAmount = Number(data.amount || 0);
+  refs.providerPaidAmount = Number(data.paid_amount || 0);
+  refs.installments = Number(data.installments || 0);
+  const amountMatches = refs.providerAmount === found.record.expectedAmountCents;
+  refs.amountMatches = amountMatches;
+  const state = data.paid === true
+    ? (amountMatches ? PF_CHECKOUT.states.paid : PF_CHECKOUT.states.mismatch)
+    : PF_CHECKOUT.states.returned;
+  updateCheckoutRecord_(sheet, found.rowNumber, { state, references: refs, updatedAt: currentBusinessDate_() });
+  return {
+    ...checkoutPublicView_({ ...found.record, state, references: refs }),
+    providerPaid: data.paid === true, paidAmountCents: refs.providerPaidAmount, amountMatches,
+    subjectToManualReview: true, checkedAt: refs.lastCheckedAt
+  };
+}
+
 
 
 /* Implementação anterior preservada temporariamente no histórico local durante a migração.
@@ -1618,13 +1998,24 @@ function createOrderLegacy_(body) {
 
 */
 function createOrder_(body) {
+  const order = createOrderRecord_(body);
+  try {
+    const orderWindow = getOrderWindow_(getConfig_(), currentBusinessDate_());
+    order.checkout = ensureCheckoutForOrder_(order, orderWindow.deadlineText);
+  } catch (error) {
+    order.checkout = { state: 'failed', available: false };
+  }
+  return order;
+}
+
+function createOrderRecord_(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw apiError_('INVALID_ORDER', 'Os dados do pedido não são válidos.');
   }
 
   const customerName = orderText_(body, ['customerName', 'name', 'cliente'], 'nome', PF_ORDER.maxNameLength, true);
   const whatsapp = orderText_(body, ['whatsapp', 'phone'], 'WhatsApp', PF_ORDER.maxWhatsappLength, true);
-  const payment = orderText_(body, ['payment'], 'forma de pagamento', 120, true);
+  const payment = orderText_(body, ['payment'], 'forma de pagamento', 120, false) || 'InfinitePay';
   const time = orderText_(body, ['time'], 'horário', 5, true);
   const notes = orderText_(body, ['notes', 'observations'], 'observações', PF_ORDER.maxNotesLength, false);
   const source = orderText_(body, ['source'], 'origem', PF_ORDER.maxSourceLength, false) || 'site';
@@ -1689,9 +2080,12 @@ function createOrder_(body) {
 
     if (!orderWindow.open) throw apiError_(orderWindow.code, orderWindow.message);
     const items = priceOrderItems_(itemIdentity, config);
-    const paymentOption = config.payments.find(item =>
-      (String(item.id) === payment || String(item.name) === payment) && item.active !== false
-    );
+    const integratedPayment = payment === 'InfinitePay' || payment === 'infinitepay';
+    const paymentOption = integratedPayment
+      ? { id: 'infinitepay', name: 'InfinitePay — PIX ou cartão', active: true }
+      : config.payments.find(item =>
+        (String(item.id) === payment || String(item.name) === payment) && item.active !== false
+      );
     if (!paymentOption) {
       throw apiError_('INVALID_PAYMENT', 'A forma de pagamento selecionada não está disponível.');
     }
@@ -1998,13 +2392,26 @@ function getOrders_() {
   const sheet = ss.getSheetByName(PF.sheets.orders);
   const itemSheet = ss.getSheetByName(PF.sheets.orderItems);
   const itemsByOrder = getOrderItemsMap_(itemSheet);
+  const checkoutsByOrder = getCheckoutsMap_(ss.getSheetByName(PF.sheets.checkouts));
   const tz = ss.getSpreadsheetTimeZone();
   return dataRows_(sheet).reverse().map(row => {
     const order = orderResponseFromRow_(row, tz, false, itemsByOrder[String(row[0] || '')] || []);
     order.source = readableSheetText_(row[14]);
+    order.checkout = checkoutPublicView_(checkoutsByOrder[String(row[0] || '')]);
     delete order.duplicate;
     return order;
   });
+}
+
+function getCheckoutsMap_(sheet) {
+  const byOrder = {};
+  if (!sheet || sheet.getLastRow() < 2) return byOrder;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, PF.headers.CheckoutCobrancas.length).getValues()
+    .forEach(row => {
+      const record = checkoutRecordFromRow_(row);
+      if (record.orderId) byOrder[record.orderId] = record;
+    });
+  return byOrder;
 }
 
 
@@ -2417,6 +2824,15 @@ function formatSheets_(ss) {
     .getRange('G2:K')
     .setNumberFormat(
       'R$ #,##0.00'
+    );
+
+  ss
+    .getSheetByName(
+      PF.sheets.checkouts
+    )
+    .getRange('F2:G')
+    .setNumberFormat(
+      'dd/MM/yyyy HH:mm:ss'
     );
 
 }

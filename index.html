@@ -53,6 +53,8 @@
       padding: 28px 0 48px;
     }
 
+    .app-shell.admin-mode { width: min(1600px, calc(100% - 32px)); }
+
     .topbar {
       display: flex;
       align-items: center;
@@ -531,6 +533,12 @@
     .success-note { padding: 16px; border-radius: 14px; background: #fff8ef; color: #7b5730; line-height: 1.55; }
     .success-payment { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
     .success-payment .primary-btn, .success-payment .ghost-btn { width: 100%; }
+    .checkout-state { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 10px 0 14px; }
+    .checkout-meta { display: grid; gap: 6px; margin: 12px 0; color: var(--muted); font-size: 13px; }
+    .checkout-meta strong { color: var(--text); }
+    .payment-return { display: none; padding: clamp(24px, 5vw, 46px); }
+    .payment-return.show { display: block; }
+    .payment-return h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(30px, 5vw, 46px); margin-bottom: 10px; }
 
     .admin-toggle-row {
       display: flex;
@@ -804,7 +812,15 @@
       color: var(--text);
     }
 
-    .orders-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+    .orders-table-wrap {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      scrollbar-gutter: stable;
+    }
     table { width: 100%; border-collapse: collapse; min-width: 760px; background: #fff; }
     th, td { padding: 12px 14px; border-bottom: 1px solid #eee3dc; text-align: left; font-size: 13px; }
     th { background: #fbf7f3; color: var(--muted); font-weight: 800; }
@@ -833,13 +849,14 @@
 
     .admin-workspace {
       display: grid;
-      grid-template-columns: 220px minmax(0, 1fr);
-      gap: 28px;
+      grid-template-columns: 176px minmax(0, 1fr);
+      gap: 20px;
       align-items: start;
       margin-top: 26px;
+      min-width: 0;
     }
 
-    .admin-workspace-main { min-width: 0; }
+    .admin-workspace-main { width: 100%; min-width: 0; max-width: 100%; }
     .admin-workspace-main .admin-edit-layout { display: block; }
     .admin-workspace-main .admin-edit-layout.hidden { display: none; }
 
@@ -881,12 +898,14 @@
 
     .orders-toolbar {
       display: grid;
-      grid-template-columns: minmax(210px, 1.5fr) minmax(150px, .8fr) minmax(150px, .8fr) minmax(170px, .9fr);
+      grid-template-columns: minmax(0, 1.45fr) repeat(2, minmax(0, .82fr)) minmax(0, 1fr);
       gap: 10px;
       margin: 18px 0 14px;
+      min-width: 0;
     }
 
-    .orders-toolbar .control { min-height: 44px; padding: 10px 12px; }
+    .orders-toolbar .control { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; }
+    .filter-field { min-width: 0; }
     .filter-field label {
       display: block;
       margin: 0 0 6px;
@@ -931,15 +950,31 @@
     }
 
     .orders-result-line strong { color: var(--text); }
-    .orders-table-wrap { overflow-x: visible; }
-    .orders-table { min-width: 880px; }
+    .orders-table { min-width: 940px; table-layout: fixed; }
     .orders-table th { white-space: nowrap; }
-    .order-main-cell strong, .order-detail-primary { display: block; color: var(--text); }
+    .orders-table th:nth-child(1) { width: 22%; }
+    .orders-table th:nth-child(2) { width: 23%; }
+    .orders-table th:nth-child(3) { width: 12%; }
+    .orders-table th:nth-child(4) { width: 22%; }
+    .orders-table th:nth-child(5) { width: 21%; }
+    .orders-table td { vertical-align: top; overflow-wrap: anywhere; }
+    .order-main-cell { min-width: 0; }
+    .order-main-cell strong, .order-detail-primary { display: block; color: var(--text); overflow-wrap: anywhere; }
     .order-main-cell small, .order-meta { display: block; margin-top: 4px; color: var(--muted); line-height: 1.35; }
-    .order-id { color: var(--accent-strong); font-weight: 900; letter-spacing: .01em; }
-    .order-note-preview { max-width: 230px; white-space: normal; }
-    .order-status-cell { min-width: 185px; }
-    .order-status-cell .control { min-height: 40px; padding: 8px 10px; font-size: 12px; }
+    .order-id { display: inline-block; max-width: 100%; color: var(--accent-strong); font-weight: 900; letter-spacing: .01em; overflow-wrap: anywhere; }
+    .order-date-cell strong, .order-value { white-space: nowrap; }
+    .order-date-cell small { font-size: 12px; }
+    .order-status-cell { min-width: 0; }
+    .order-status-cell label { display: block; margin-top: 8px; }
+    .order-status-cell .control { width: 100%; min-width: 0; min-height: 40px; padding: 8px 9px; font-size: 12px; }
+    .order-row-details { margin-top: 9px; color: var(--muted); font-size: 12px; }
+    .order-row-details summary { cursor: pointer; color: var(--accent-strong); font-weight: 800; }
+    .order-row-details > div { display: grid; gap: 5px; margin-top: 7px; line-height: 1.4; }
+    .order-row-details p { margin: 0; overflow-wrap: anywhere; }
+    .order-payment-cell .admin-item-list { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
+    .order-payment-cell .ghost-btn { width: 100%; padding: 8px 9px; white-space: normal; }
+    .admin-item-list, .admin-item-line, .admin-item-line > span { min-width: 0; }
+    .admin-item-line > span { overflow-wrap: anywhere; }
 
     .status-badge {
       display: inline-flex;
@@ -971,17 +1006,21 @@
       justify-content: space-between;
       gap: 12px;
     }
+    .order-card-heading > div { min-width: 0; }
+    .order-card-heading .status-badge { flex: 0 1 auto; max-width: 48%; text-align: center; white-space: normal; }
     .order-card-heading h3 { margin: 4px 0 0; font-size: 17px; }
     .order-card-price { margin: 16px 0 12px; align-items: flex-end; }
     .order-card-price strong { font-size: 21px; }
     .order-card-summary { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .order-card-items { margin: 14px 0 4px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
     .order-details {
       margin-top: 12px;
       border-top: 1px solid var(--line);
       padding-top: 12px;
     }
     .order-details summary { cursor: pointer; font-weight: 850; color: var(--accent-strong); }
-    .order-details-grid { display: grid; gap: 10px; margin-top: 12px; font-size: 13px; }
+    .order-details-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 12px; font-size: 13px; }
+    .order-details-grid > div { min-width: 0; overflow-wrap: anywhere; }
     .order-details-grid span { color: var(--muted); display: block; margin-bottom: 2px; }
     .order-mobile-actions { margin-top: 14px; }
     .order-mobile-actions .control { min-height: 46px; }
@@ -1057,22 +1096,33 @@
 
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+    @media (max-width: 1180px) {
+      .admin-workspace { grid-template-columns: 1fr; gap: 18px; }
+      .admin-workspace .admin-nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        overflow-x: auto;
+        gap: 6px;
+        margin: 0 -12px;
+        border-radius: 0;
+        box-shadow: 0 8px 18px rgba(76,49,37,.08);
+      }
+      .admin-nav h3 { display: none; }
+      .admin-nav button { width: auto; flex: 0 0 auto; white-space: nowrap; margin: 0; }
+      .orders-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 1120px) {
+      .orders-table-wrap { display: none; }
+      .orders-mobile-list { display: block; }
+    }
+
     @media (max-width: 940px) {
       .order-layout { grid-template-columns: 1fr; }
       .summary-card { position: static; }
       .admin-layout, .admin-edit-layout { grid-template-columns: 1fr; }
-      .admin-nav {
-        position: static;
-        display: flex;
-        overflow-x: auto;
-        gap: 6px;
-      }
-      .admin-nav h3 { display: none; }
-      .admin-nav button { width: auto; white-space: nowrap; margin: 0; }
-      .admin-workspace { grid-template-columns: 1fr; gap: 18px; }
-      .admin-workspace .admin-nav { position: sticky; top: 0; z-index: 20; margin: 0 -12px; border-radius: 0; box-shadow: 0 8px 18px rgba(76,49,37,.08); }
-      .orders-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .orders-table-wrap { overflow-x: auto; }
     }
 
     @media (max-width: 660px) {
@@ -1098,19 +1148,12 @@
       .admin-heading-actions { display: grid; grid-template-columns: 1fr 1fr; }
       .admin-heading-actions button { width: 100%; }
       .orders-toolbar { grid-template-columns: 1fr; }
-      .orders-table-wrap { display: none; }
-      .orders-mobile-list { display: block; }
       .orders-result-line { align-items: flex-start; flex-direction: column; }
       .admin-workspace .admin-nav { margin: 0 -4px; padding: 8px; }
       .admin-nav .nav-count { display: none; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr; }
       .toggle-item-btn { width: 100%; }
       .success-actions { position: sticky; bottom: 8px; padding: 10px; margin-left: -10px; margin-right: -10px; border-radius: 16px; background: rgba(255,253,251,.94); backdrop-filter: blur(10px); }
-    }
-
-    @media (min-width: 661px) and (max-width: 800px) {
-      .orders-table-wrap { display: none; }
-      .orders-mobile-list { display: block; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1121,7 +1164,7 @@
   </style>
 </head>
 <body>
-  <div class="app-shell">
+  <div id="appShell" class="app-shell">
     <header id="appTopbar" class="topbar hidden">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">🍰</div>
@@ -1217,16 +1260,15 @@
               <div class="section-heading">
                 <div>
                   <h2><span class="step-number" aria-hidden="true">3</span>Pagamento</h2>
-                  <p>Escolha como prefere pagar.</p>
+                  <p>PIX e cartão estarão disponíveis no checkout seguro após o registro.</p>
                 </div>
               </div>
 
-              <div class="field full">
-                <label for="paymentSelect">Forma de pagamento</label>
-                <select class="control" id="paymentSelect" name="payment" required>
-                  <option value="">Selecione a forma de pagamento</option>
-                </select>
+              <div class="delivery-box">
+                Checkout InfinitePay
+                <strong>Escolha PIX ou cartão na próxima etapa</strong>
               </div>
+              <input id="paymentSelect" name="payment" type="hidden" value="infinitepay" />
             </div>
 
             <div class="form-section">
@@ -1291,6 +1333,17 @@
         <div class="success-actions">
           <button id="newOrderBtn" class="ghost-btn" type="button">Fazer outro pedido</button>
           <a id="businessWhatsappBtn" class="primary-btn hidden" href="#" target="_blank" rel="noopener">Falar com a Primeira Fornada no WhatsApp</a>
+        </div>
+      </section>
+
+      <section id="paymentReturnView" class="card payment-return" aria-live="polite">
+        <div class="eyebrow">Retorno do checkout</div>
+        <h1>Pagamento enviado para conferência</h1>
+        <p>O retorno da InfinitePay foi recebido, mas não confirma automaticamente o pagamento.</p>
+        <div id="returnOrderNumber" class="success-number"></div>
+        <div id="returnPaymentMessage" class="success-note">A Primeira Fornada fará a conferência e manterá o status do pedido até a confirmação manual.</div>
+        <div class="success-actions">
+          <a class="ghost-btn" href="?public=1">Voltar para encomendas</a>
         </div>
       </section>
 
@@ -1591,7 +1644,8 @@
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz4p5noLyaHwFwCDJ7oJKUFk67PJFvN8O1WTi_05PuKT0LDjJbd4V8PpciFe7CeuN8p/exec';
       const ORDERS_SPREADSHEET_URL = '';
       const params = new URLSearchParams(window.location.search);
-      const isPublic = params.get('public') === '1';
+      const isPaymentReturn = params.get('payment_return') === '1';
+      const isPublic = params.get('public') === '1' || isPaymentReturn;
       let config = normalizeConfig(DEFAULT_CONFIG);
       const appState = { config, orders: [] };
       let orderItems = [];
@@ -1715,6 +1769,7 @@
         clearTimeout(adminExpiryTimer);
         $('adminView').classList.add('hidden');
         $('adminAuthView').classList.remove('hidden');
+        $('appShell').classList.remove('admin-mode');
         $('adminKey').value = '';
         if (message) setMessage($('adminAuthMessage'), 'info', message);
         else clearMessage($('adminAuthMessage'));
@@ -2025,10 +2080,7 @@
 
       function renderPaymentOptions() {
         const select = $('paymentSelect');
-        const current = select.value;
-        select.innerHTML = '<option value="">Selecione a forma de pagamento</option>' +
-          config.payments.filter(payment => payment.active !== false).map(payment => `<option value="${escapeHtml(payment.id)}">${escapeHtml(payment.name)}</option>`).join('');
-        if (config.payments.some(payment => payment.id === current)) select.value = current;
+        select.value = 'infinitepay';
         updatePaymentPreview();
       }
 
@@ -2152,8 +2204,7 @@
           ? detailedItems.map(item => `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
           : '<span>Adicione seu primeiro sabor</span>';
         $('summaryDate').textContent = formatDate($('orderDate').value);
-        const payment = config.payments.find(item => item.id === $('paymentSelect').value);
-        $('summaryPayment').textContent = payment?.name || '—';
+        $('summaryPayment').textContent = 'PIX ou cartão no checkout';
         $('summaryTotal').textContent = brl(total);
         renderPricingEstimate();
         updatePaymentPreview();
@@ -2163,39 +2214,25 @@
         return;
       }
 
-      function renderPaymentDetails(container, payment, items) {
-        if (!payment) {
-          container.innerHTML = '<p>Os dados de pagamento ainda não foram configurados.</p>';
+      function renderPaymentDetails(container, checkout, order) {
+        const total = Number(order?.total || order?.price || 0);
+        const checkoutUrl = safeCheckoutUrl(checkout?.url);
+        const expires = new Date(checkout?.expiresAt || '');
+        const expiryText = Number.isNaN(expires.getTime()) ? '' : expires.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+        if (checkout?.available && checkoutUrl) {
+          const label = order?.duplicate ? 'Continuar pagamento' : 'Ir para pagamento';
+          container.innerHTML = `<h3>Pagamento seguro</h3><p class="checkout-state">Escolha PIX ou cartão diretamente no checkout da InfinitePay. A reserva continuará aguardando conferência após o acesso.</p><div class="checkout-meta"><span>Valor esperado: <strong>${escapeHtml(brl(total))}</strong></span>${expiryText ? `<span>Disponível até: <strong>${escapeHtml(expiryText)}</strong></span>` : ''}</div><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(checkoutUrl)}">${label}</a>`;
           return;
         }
-
-        const detailedItems = (Array.isArray(items) ? items : []).map(itemDetails);
-        const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
-        const isSingleUnit = detailedItems.length === 1 && detailedItems[0].quantity === 1;
-        const usesProgressivePricing = detailedItems.some(item => item.pricingModel === 'progressive-v1' || !item.sizeId);
-        if (usesProgressivePricing || !isSingleUnit) {
-          container.innerHTML = `<h4>${escapeHtml(payment.name || 'Pagamento')}</h4><p>O valor integral desta encomenda é <strong>${brl(total)}</strong>. Os links antigos são vinculados a tamanhos e não representam este total. A Primeira Fornada enviará as instruções seguras de pagamento e confirmará a reserva manualmente.</p>`;
-          return;
-        }
-
-        const paymentLink = safeExternalUrl(resolvePaymentLinkForSize(payment, detailedItems[0].sizeId));
-        if (!paymentLink) {
-          container.innerHTML = payment.type === 'other'
-            ? '<p>Esta forma de pagamento será combinada diretamente após o pedido.</p>'
-            : '<p>Os dados de pagamento deste tamanho ainda não foram configurados.</p>';
-          return;
-        }
-
-        const isPix = payment.type === 'pix';
-        const paymentName = payment.name || (isPix ? 'PIX' : 'Pagamento');
-        const actionLabel = isPix ? 'Pagar com PIX' : 'Acessar pagamento';
-        const visibleLink = isPix
-          ? ''
-          : `<div class="payment-payload" style="margin-top:10px">${escapeHtml(paymentLink)}</div>`;
-
-        container.innerHTML = `<h4>${escapeHtml(paymentName)}</h4><p>${escapeHtml(payment.description || 'Acesse o link abaixo para efetuar o pagamento.')}</p><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(paymentLink)}" target="_blank" rel="noopener">${actionLabel}</a>${visibleLink}<button id="copyPaymentLinkBtn" class="ghost-btn" type="button" style="margin-top:10px">Copiar link</button>`;
-
-        $('copyPaymentLinkBtn').addEventListener('click', () => copyText(paymentLink, 'Link copiado'));
+        const messages = {
+          not_configured: 'O pedido foi registrado, mas o checkout ainda não está configurado. Fale com a Primeira Fornada para receber as instruções de pagamento.',
+          failed: 'O pedido foi registrado, mas a InfinitePay não conseguiu gerar o checkout. Tente reenviar o mesmo pedido ou fale com a Primeira Fornada.',
+          unknown: 'O pedido foi registrado. Houve uma falha de conexão e nenhuma nova cobrança será criada automaticamente até a conferência.',
+          creating: 'O pedido foi registrado e o checkout está sendo preparado. Reenvie o mesmo pedido para consultar novamente.',
+          expired: 'O pedido foi registrado, mas o checkout expirou. Fale com a Primeira Fornada antes de solicitar uma nova cobrança.',
+          blocked_order_status: 'Este pedido não aceita uma nova cobrança no status atual.'
+        };
+        container.innerHTML = `<h3>Pagamento pendente</h3><p class="checkout-state">O valor integral do pedido é <strong>${escapeHtml(brl(total))}</strong>. ${escapeHtml(messages[checkout?.state] || 'O pedido foi preservado, mas o checkout não está disponível neste momento.')}</p>`;
       }
 
       function safeExternalUrl(value) {
@@ -2207,13 +2244,21 @@
         }
       }
 
+      function safeCheckoutUrl(value) {
+        try {
+          const parsed = new URL(String(value || ''));
+          return parsed.protocol === 'https:' && parsed.hostname === 'checkout.infinitepay.com.br' ? parsed.toString() : '';
+        } catch (_) {
+          return '';
+        }
+      }
+
       function renderOrderSuccess(order, orderNumber) {
         const items = Array.isArray(order.items) && order.items.length
           ? order.items.map(itemDetails)
           : [{ flavor: order.flavor, sizeId: order.sizeId, size: order.size, quantity: 1, unitPrice: Number(order.price || 0), subtotal: Number(order.price || 0) }];
         const totalQuantity = Number(order.totalQuantity || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
         const total = Number.isFinite(Number(order.total)) ? Number(order.total) : Number(order.price || 0);
-        const payment = config.payments.find(item => item.id === $('paymentSelect').value || item.name === order.payment);
         $('orderLayout').classList.add('hidden');
         $('orderSuccessView').classList.add('show');
         $('successOrderNumber').textContent = `Nº do pedido: ${orderNumber || 'aguardando identificação'}`;
@@ -2227,11 +2272,10 @@
         ).join('');
         $('successPrice').textContent = brl(total);
         $('successDelivery').textContent = formatDate(order.deliveryDate || order.date);
-        $('successPayment').textContent = order.payment || payment?.name || '—';
+        $('successPayment').textContent = order.payment || 'InfinitePay — PIX ou cartão';
         $('successStatus').textContent = order.status || DEFAULT_ORDER_STATUSES[0];
         const details = $('successPaymentDetails');
-        details.innerHTML = `<h3>Dados para pagamento</h3>`;
-        renderPaymentDetails(details, payment, items);
+        renderPaymentDetails(details, order.checkout || {}, order);
         const businessPhone = normalizedPhoneDigits(config.businessWhatsapp || config.commercialWhatsapp || '');
         const whatsappButton = $('businessWhatsappBtn');
         whatsappButton.classList.toggle('hidden', !businessPhone);
@@ -2359,7 +2403,6 @@
       }
 
       function makeOrderPayload() {
-        const payment = config.payments.find(item => item.id === $('paymentSelect').value);
         return {
           action: 'createOrder',
           customerName: $('customerName').value.trim(),
@@ -2367,7 +2410,7 @@
           date: $('orderDate').value,
           time: $('pickupTime').value,
           items: orderItems.map(item => ({ flavor: item.flavor, quantity: item.quantity })),
-          payment: payment?.name || '',
+          payment: 'InfinitePay',
           notes: $('notes').value.trim(),
           source: 'site',
           website: $('website').value
@@ -2405,6 +2448,32 @@
           throw error;
         }
         return data;
+      }
+
+      async function renderCheckoutReturn() {
+        $('orderLayout').classList.add('hidden');
+        $('orderSuccessView').classList.remove('show');
+        $('paymentReturnView').classList.add('show');
+        const orderId = String(params.get('order_nsu') || '').slice(0, 80);
+        $('returnOrderNumber').textContent = orderId ? `Nº do pedido: ${orderId}` : 'Pedido não identificado';
+        const payload = {
+          action: 'registerCheckoutReturn',
+          order_nsu: orderId,
+          checkoutToken: String(params.get('checkout_token') || ''),
+          slug: String(params.get('slug') || ''),
+          transaction_nsu: String(params.get('transaction_nsu') || ''),
+          capture_method: String(params.get('capture_method') || ''),
+          receipt_url: String(params.get('receipt_url') || '')
+        };
+        try {
+          await apiPost(payload);
+          $('returnPaymentMessage').textContent = 'Recebemos as referências do checkout. O pagamento será conferido manualmente antes de o pedido ser confirmado.';
+        } catch (_) {
+          $('returnPaymentMessage').textContent = 'Não foi possível validar automaticamente este retorno. Seu pedido permanece registrado e a equipe fará a conferência manual.';
+        }
+        if (window.history?.replaceState) {
+          window.history.replaceState({}, document.title, '?public=1');
+        }
       }
 
       function updateOrderStatus(orderId, status) {
@@ -2456,6 +2525,7 @@
       }
 
       function renderPublicOrderForm() {
+        $('appShell').classList.remove('admin-mode');
         $('customerView').classList.remove('hidden');
         $('adminView').classList.add('hidden');
         renderBrand();
@@ -2467,6 +2537,7 @@
       }
 
       function renderAdmin() {
+        $('appShell').classList.add('admin-mode');
         $('customerView').classList.add('hidden');
         $('adminView').classList.remove('hidden');
         renderAdminEditors();
@@ -2977,7 +3048,39 @@
       }
 
       function orderStatusControl(order, mobile = false) {
-        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" aria-label="Status do pedido ${escapeHtml(order.id || '')}">${renderStatusOptions(order.status)}</select></label>`;
+        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(order.status || '')}" aria-label="Status do pedido ${escapeHtml(order.id || '')}">${renderStatusOptions(order.status)}</select></label>`;
+      }
+
+      function checkoutStateLabel(state) {
+        return ({
+          active: 'Checkout ativo', returned_unverified: 'Retorno recebido', paid_unverified: 'Pagamento informado',
+          payment_amount_mismatch: 'Valor divergente',
+          expired: 'Checkout expirado', failed: 'Falha na geração', unknown: 'Conferência necessária',
+          creating: 'Gerando checkout', not_created: 'Sem checkout', not_configured: 'Não configurado'
+        })[state] || 'Sem checkout';
+      }
+
+      function renderAdminCheckout(order, compact = false) {
+        const checkout = order.checkout || {};
+        const url = safeCheckoutUrl(checkout.url);
+        const expiry = new Date(checkout.expiresAt || '');
+        const expiryText = Number.isNaN(expiry.getTime()) ? '—' : expiry.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+        const checkAction = ['returned_unverified', 'paid_unverified', 'payment_amount_mismatch'].includes(checkout.state)
+          ? `<button class="ghost-btn checkout-check" type="button" data-order-id="${escapeHtml(order.id || '')}">Conferir na InfinitePay</button>`
+          : '';
+        const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${checkAction}<small>A confirmação do pedido permanece manual.</small></div>`;
+        if (compact) {
+          return `<div class="admin-item-list checkout-compact"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}<details class="order-row-details"><summary>Dados do checkout</summary>${details}</details></div>`;
+        }
+        return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
+      }
+
+      async function checkCheckoutPayment(orderId) {
+        const result = await apiPost({ action: 'checkCheckoutPayment', orderId }, { admin: true });
+        const order = appState.orders.find(item => String(item.id) === String(orderId));
+        if (order) order.checkout = result.checkout || order.checkout;
+        renderLocalOrders();
+        showToast(result.checkout?.providerPaid ? 'Pagamento informado pela InfinitePay; confirme manualmente.' : 'Consulta concluída; pagamento ainda não informado.');
       }
 
       function renderLocalOrders() {
@@ -3007,21 +3110,19 @@
               <thead>
                 <tr>
                   <th>Pedido / cliente</th>
-                  <th>Bolo</th>
+                  <th>Sabores / quantidades</th>
                   <th>Entrega</th>
-                  <th>Pagamento / valor</th>
-                  <th>Observações</th>
+                  <th>Pagamento / checkout</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 ${orders.map(order => `
                   <tr class="${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
-                    <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><small>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}<br>Recebido ${escapeHtml(formatCreatedAt(order.createdAt))}</small></td>
+                    <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><details class="order-row-details"><summary>Mais informações</summary><div><p>WhatsApp: ${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</p><p>Recebido: ${escapeHtml(formatCreatedAt(order.createdAt))}</p><p>Observações: ${escapeHtml(order.notes || 'Sem observações')}</p></div></details></td>
                     <td class="order-main-cell">${renderAdminOrderItems(order)}</td>
-                    <td class="order-main-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small></td>
-                    <td class="order-main-cell"><strong>${escapeHtml(brl(orderTotal(order)))}</strong><small>${escapeHtml(order.payment || '—')}</small></td>
-                    <td class="order-note-preview">${escapeHtml(order.notes || 'Sem observações')}</td>
+                    <td class="order-main-cell order-date-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small></td>
+                    <td class="order-main-cell order-payment-cell"><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong><small>${escapeHtml(order.payment || '—')}</small>${renderAdminCheckout(order, true)}</td>
                     <td class="order-status-cell">
                       <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                       ${orderStatusControl(order)}
@@ -3039,11 +3140,12 @@
                   <div><span class="order-id">#${escapeHtml(order.id || '—')}</span><h3>${escapeHtml(order.customerName || 'Cliente não informado')}</h3></div>
                   <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                 </div>
+                <div class="order-card-items">${renderAdminOrderItems(order)}</div>
                 <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${orderTotalQuantity(order)} ${orderUsesProgressivePricing(order) ? (orderTotalQuantity(order) === 1 ? 'fatia' : 'fatias') : (orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos')}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(orderTotal(order)))}</strong></div>
                 <details class="order-details"><summary>Ver detalhes</summary><div class="order-details-grid">
-                  <div><span>Itens</span>${renderAdminOrderItems(order)}</div>
                   <div><span>WhatsApp</span>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</div>
                   <div><span>Pagamento</span>${escapeHtml(order.payment || '—')}</div>
+                  <div><span>Checkout</span>${renderAdminCheckout(order)}</div>
                   <div><span>Pedido recebido</span>${escapeHtml(formatCreatedAt(order.createdAt))}</div>
                   <div><span>Observações</span>${escapeHtml(order.notes || 'Sem observações')}</div>
                 </div></details>
@@ -3055,6 +3157,7 @@
         qsa('.order-status', container).forEach(select => select.addEventListener('change', async () => {
           const nextStatus = select.value;
           const previousStatus = select.dataset.previousStatus;
+          select.title = nextStatus;
           select.disabled = true;
           try {
             await changeOrderStatus(select.dataset.orderId, nextStatus);
@@ -3064,6 +3167,12 @@
             renderLocalOrders();
             setMessage($('ordersMessage'), 'error', `Não foi possível alterar o status: ${error.message}`);
           }
+        }));
+        qsa('.checkout-check', container).forEach(button => button.addEventListener('click', async () => {
+          button.disabled = true;
+          try { await checkCheckoutPayment(button.dataset.orderId); }
+          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível conferir o pagamento: ${error.message}`); }
+          finally { button.disabled = false; }
         }));
       }
 
@@ -3304,7 +3413,10 @@
 
         $('initialLoading').classList.add('hidden');
         $('appTopbar').classList.remove('hidden');
-        if (isPublic) renderPublicOrderForm();
+        if (isPublic) {
+          renderPublicOrderForm();
+          if (isPaymentReturn) await renderCheckoutReturn();
+        }
         else {
           renderBrand();
           lockAdminAccess('', false);

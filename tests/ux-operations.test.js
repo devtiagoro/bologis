@@ -19,6 +19,9 @@ source = source.replace(
         renderPricingEditor,
         renderPaymentEditor,
         renderOrderSuccess,
+        renderPaymentDetails,
+        renderAdminCheckout,
+        safeCheckoutUrl,
         normalizeClientOrderItems,
         progressivePriceDetails,
         itemDetails,
@@ -299,6 +302,39 @@ test('confirmação pública usa itens e total definitivos do servidor', () => {
   assert.match(runtime.get('successPrice').textContent, /54,94/);
   assert.match(runtime.get('successItems').innerHTML, /economia/);
   assert.match(runtime.get('successPaymentDetails').innerHTML, /valor integral/);
+});
+
+test('confirmação pública oferece checkout InfinitePay válido', () => {
+  const runtime = createRuntime();
+  runtime.window.__uxTest.renderOrderSuccess({
+    customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25',
+    payment: 'InfinitePay — PIX ou cartão', status: 'Aguardando pagamento', totalQuantity: 1, total: 19.97,
+    items: [{ flavor: 'Chocolate', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' }],
+    checkout: { state: 'active', available: true, url: 'https://checkout.infinitepay.com.br/teste', expectedAmountCents: 1997, expiresAt: '2026-10-22T23:59:59-03:00' }
+  }, 'PF-CHECKOUT-1');
+  assert.match(runtime.get('successPaymentDetails').innerHTML, /Ir para pagamento/);
+  assert.match(runtime.get('successPaymentDetails').innerHTML, /checkout\.infinitepay\.com\.br/);
+  assert.match(runtime.get('successPaymentDetails').innerHTML, /19,97/);
+});
+
+test('frontend rejeita URL de checkout fora do domínio oficial', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  assert.equal(api.safeCheckoutUrl('https://evil.example/pay'), '');
+  const container = runtime.get('checkout-test');
+  api.renderPaymentDetails(container, { state: 'active', available: true, url: 'https://evil.example/pay' }, { total: 19.97 });
+  assert.doesNotMatch(container.innerHTML, /href=/);
+});
+
+test('central mostra estado identificador validade e link do checkout', () => {
+  const markup = createRuntime().window.__uxTest.renderAdminCheckout({
+    id: 'PF-CHECKOUT-2',
+    checkout: { state: 'returned_unverified', chargeId: 'invoice-123', expiresAt: '2026-10-22T23:59:59-03:00', url: 'https://checkout.infinitepay.com.br/teste' }
+  });
+  assert.match(markup, /Retorno recebido/);
+  assert.match(markup, /invoice-123/);
+  assert.match(markup, /Abrir checkout/);
+  assert.match(markup, /Conferir na InfinitePay/);
 });
 
 (async () => {

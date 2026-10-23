@@ -319,6 +319,21 @@ test('createOrder continua publico e passa pelo doPost', () => {
   assert.equal(result.orderId, 'HML-FAKE-ORDER');
 });
 
+test('retorno do checkout e publico mas validado pelo backend', () => {
+  const h = createHarness();
+  h.context.registerCheckoutReturn_ = body => ({ orderId: body.order_nsu, subjectToManualReview: true });
+  const result = h.post({ action: 'registerCheckoutReturn', order_nsu: 'PF-RETURN', checkoutToken: 'token-fictitious' });
+  assert.equal(result.ok, true);
+  assert.equal(result.checkout.subjectToManualReview, true);
+});
+
+test('consulta da InfinitePay exige sessao administrativa', () => {
+  const h = createHarness();
+  h.configure();
+  const result = h.post({ action: 'checkCheckoutPayment', orderId: 'PF-1' });
+  assert.equal(result.code, 'AUTH_REQUIRED');
+});
+
 test('frontend compila, nao persiste credencial e inclui estados de reautenticacao', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
@@ -329,6 +344,8 @@ test('frontend compila, nao persiste credencial e inclui estados de reautenticac
   assert.equal(/localStorage\.(?:getItem|setItem)\([^\n]*spreadsheet/i.test(html), false);
   assert.equal(html.includes('cdnjs.cloudflare.com'), false);
   assert.equal(html.includes('qrcode.min.js'), false);
+  assert.equal(html.includes('inchk_'), false);
+  assert.equal(html.includes('INFINITEPAY_API_KEY'), false);
   assert.match(html, /restorePreservedAdminAccess/);
   assert.match(html, /sess[aã]o remota poder[aá] permanecer v[aá]lida at[eé] expirar/i);
 });
