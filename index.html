@@ -532,7 +532,10 @@
     .success-status { color: var(--accent-strong); font-weight: 900; }
     .success-note { padding: 16px; border-radius: 14px; background: #fff8ef; color: #7b5730; line-height: 1.55; }
     .success-payment { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
-    .success-payment .primary-btn, .success-payment .ghost-btn { width: 100%; }
+    .success-payment .primary-btn, .success-payment .ghost-btn, .success-payment .secondary-btn { width: 100%; }
+    .payment-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .payment-method-btn { display: grid; gap: 3px; text-align: center; text-decoration: none; }
+    .payment-method-btn small { font-size: 12px; font-weight: 600; opacity: .85; }
     .checkout-state { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 10px 0 14px; }
     .checkout-meta { display: grid; gap: 6px; margin: 12px 0; color: var(--muted); font-size: 13px; }
     .checkout-meta strong { color: var(--text); }
@@ -1139,6 +1142,7 @@
       .admin-tabs { width: 100%; }
       .admin-tabs button { flex: 1; }
       .order-success .primary-btn, .order-success .ghost-btn, .order-success .success-payment a { width: 88vw; max-width: 360px; margin-left: auto; margin-right: auto; }
+      .order-success .payment-methods { grid-template-columns: minmax(0, 1fr); justify-items: center; }
       .field.full { grid-column: auto; }
       .list-row { grid-template-columns: 1fr; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr auto; }
@@ -1259,22 +1263,7 @@
             <div class="form-section">
               <div class="section-heading">
                 <div>
-                  <h2><span class="step-number" aria-hidden="true">3</span>Pagamento</h2>
-                  <p>PIX e cartão estarão disponíveis no checkout seguro após o registro.</p>
-                </div>
-              </div>
-
-              <div class="delivery-box">
-                Checkout InfinitePay
-                <strong>Escolha PIX ou cartão na próxima etapa</strong>
-              </div>
-              <input id="paymentSelect" name="payment" type="hidden" value="infinitepay" />
-            </div>
-
-            <div class="form-section">
-              <div class="section-heading">
-                <div>
-                  <h2><span class="step-number" aria-hidden="true">4</span>Detalhes do pedido</h2>
+                  <h2><span class="step-number" aria-hidden="true">3</span>Detalhes do pedido</h2>
                   <p>Conte algo importante para prepararmos seu bolo.</p>
                 </div>
               </div>
@@ -1295,7 +1284,6 @@
             <div class="summary-row"><span>Fatias</span><strong id="summaryQuantity">0</strong></div>
             <div class="summary-row"><span>Itens</span><div id="summaryItems" class="compact-item-list"><span>Adicione seu primeiro sabor</span></div></div>
             <div class="summary-row"><span>Data</span><strong id="summaryDate">—</strong></div>
-            <div class="summary-row"><span>Pagamento</span><strong id="summaryPayment">—</strong></div>
           </div>
 
           <div class="total-row">
@@ -1308,7 +1296,7 @@
 
           <div id="deadlineSummary" class="deadline-note">Seu pedido será registrado como aguardando pagamento.</div>
 
-          <button id="submitOrderBtn" class="primary-btn" type="submit" form="orderForm">Enviar encomenda</button>
+          <button id="submitOrderBtn" class="primary-btn" type="submit" form="orderForm">Finalizar encomenda</button>
           <div class="secure-note"><span>🔒</span><span>Seus dados serão usados apenas para registrar e confirmar esta encomenda.</span></div>
           <div id="orderMessage" class="message"></div>
         </aside>
@@ -1651,6 +1639,8 @@
       let orderItems = [];
       let isSubmitting = false;
       let pendingOrderAttempt = null;
+      // Último pedido confirmado nesta aba; permite consultar o pagamento sem criar outro pedido.
+      let lastSubmittedOrder = null;
       let isOrdersOpen = false;
       let configRevision = 0;
       let configSaveInFlight = false;
@@ -2078,12 +2068,6 @@
         if (config.flavors.includes(current)) select.value = current;
       }
 
-      function renderPaymentOptions() {
-        const select = $('paymentSelect');
-        select.value = 'infinitepay';
-        updatePaymentPreview();
-      }
-
       function normalizeClientOrderItems(items) {
         const grouped = new Map();
         (Array.isArray(items) ? items : []).forEach(item => {
@@ -2204,14 +2188,12 @@
           ? detailedItems.map(item => `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${item.quantity === 1 ? 'fatia' : 'fatias'}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
           : '<span>Adicione seu primeiro sabor</span>';
         $('summaryDate').textContent = formatDate($('orderDate').value);
-        $('summaryPayment').textContent = 'PIX ou cartão no checkout';
         $('summaryTotal').textContent = brl(total);
         renderPricingEstimate();
-        updatePaymentPreview();
       }
 
-      function updatePaymentPreview() {
-        return;
+      function businessWhatsappDigits() {
+        return normalizedPhoneDigits(config.businessWhatsapp || config.commercialWhatsapp || '');
       }
 
       function renderPaymentDetails(container, checkout, order) {
@@ -2220,19 +2202,46 @@
         const expires = new Date(checkout?.expiresAt || '');
         const expiryText = Number.isNaN(expires.getTime()) ? '' : expires.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
         if (checkout?.available && checkoutUrl) {
-          const label = order?.duplicate ? 'Continuar pagamento' : 'Ir para pagamento';
-          container.innerHTML = `<h3>Pagamento seguro</h3><p class="checkout-state">Escolha PIX ou cartão diretamente no checkout da InfinitePay. A reserva continuará aguardando conferência após o acesso.</p><div class="checkout-meta"><span>Valor esperado: <strong>${escapeHtml(brl(total))}</strong></span>${expiryText ? `<span>Disponível até: <strong>${escapeHtml(expiryText)}</strong></span>` : ''}</div><a class="primary-btn" style="display:block;text-align:center;text-decoration:none" href="${escapeHtml(checkoutUrl)}">${label}</a>`;
+          // A API não documenta pré-seleção do método: os dois botões abrem o mesmo checkout (uma única cobrança).
+          const link = escapeHtml(checkoutUrl);
+          container.innerHTML = `<h3>Pagamento</h3><p class="checkout-state">Escolha como prefere pagar. Os dois botões abrem o mesmo checkout seguro da InfinitePay, onde a escolha definitiva entre PIX e cartão de crédito é feita. A reserva continua aguardando conferência após o pagamento.</p><div class="checkout-meta"><span>Valor: <strong>${escapeHtml(brl(total))}</strong></span>${expiryText ? `<span>Disponível até: <strong>${escapeHtml(expiryText)}</strong></span>` : ''}</div><div class="payment-methods"><a class="primary-btn payment-method-btn" data-payment-method="pix" href="${link}">PIX<small>Abre o checkout seguro</small></a><a class="primary-btn payment-method-btn" data-payment-method="credit_card" href="${link}">Cartão de crédito<small>Abre o checkout seguro</small></a></div>`;
           return;
         }
+        const contact = businessWhatsappDigits()
+          ? 'Se preferir, fale com a Primeira Fornada pelo WhatsApp abaixo informando o número do pedido.'
+          : 'Se preferir, fale com a Primeira Fornada informando o número do pedido.';
         const messages = {
-          not_configured: 'O pedido foi registrado, mas o checkout ainda não está configurado. Fale com a Primeira Fornada para receber as instruções de pagamento.',
-          failed: 'O pedido foi registrado, mas a InfinitePay não conseguiu gerar o checkout. Tente reenviar o mesmo pedido ou fale com a Primeira Fornada.',
-          unknown: 'O pedido foi registrado. Houve uma falha de conexão e nenhuma nova cobrança será criada automaticamente até a conferência.',
-          creating: 'O pedido foi registrado e o checkout está sendo preparado. Reenvie o mesmo pedido para consultar novamente.',
-          expired: 'O pedido foi registrado, mas o checkout expirou. Fale com a Primeira Fornada antes de solicitar uma nova cobrança.',
+          not_configured: 'O pagamento online ainda não está disponível. A Primeira Fornada enviará as instruções de pagamento.',
+          failed: checkout?.canRetry
+            ? 'A InfinitePay não gerou o pagamento e nenhuma cobrança foi criada. Você pode tentar novamente sem fazer outro pedido.'
+            : 'Não foi possível gerar o pagamento automaticamente. A Primeira Fornada enviará o link seguro de pagamento.',
+          unknown: 'Estamos conferindo a cobrança com a InfinitePay antes de liberar o pagamento, para evitar cobrança em duplicidade.',
+          creating: 'O pagamento está sendo preparado. Consulte novamente em instantes.',
+          expired: 'O prazo de pagamento desta encomenda terminou. Fale com a Primeira Fornada antes de qualquer nova cobrança.',
           blocked_order_status: 'Este pedido não aceita uma nova cobrança no status atual.'
         };
-        container.innerHTML = `<h3>Pagamento pendente</h3><p class="checkout-state">O valor integral do pedido é <strong>${escapeHtml(brl(total))}</strong>. ${escapeHtml(messages[checkout?.state] || 'O pedido foi preservado, mas o checkout não está disponível neste momento.')}</p>`;
+        const retryLabel = checkout?.canRetry ? 'Tentar gerar o pagamento novamente' : (checkout?.state === 'creating' ? 'Consultar pagamento' : '');
+        const retryButton = retryLabel && lastSubmittedOrder
+          ? `<button id="retryCheckoutBtn" class="secondary-btn" type="button">${retryLabel}</button>`
+          : '';
+        container.innerHTML = `<h3>Pagamento pendente</h3><p class="checkout-state">Seu pedido está registrado. O valor integral do pedido é <strong>${escapeHtml(brl(total))}</strong>. ${escapeHtml(messages[checkout?.state] || 'O pagamento não está disponível neste momento.')} ${escapeHtml(contact)}</p>${retryButton}`;
+        if (retryButton) $('retryCheckoutBtn').addEventListener('click', () => retryPublicCheckout(container));
+      }
+
+      // Reenvia exatamente o mesmo pedido (mesma chave de idempotência): o servidor nunca cria outro pedido.
+      async function retryPublicCheckout(container) {
+        if (!lastSubmittedOrder) return;
+        const button = $('retryCheckoutBtn');
+        button.disabled = true;
+        button.textContent = 'Consultando...';
+        try {
+          const result = await apiPost(lastSubmittedOrder);
+          renderPaymentDetails(container, result.order?.checkout || {}, result.order || lastSubmittedOrder);
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Tentar gerar o pagamento novamente';
+          showToast(error.message || 'Não foi possível consultar o pagamento agora.');
+        }
       }
 
       function safeExternalUrl(value) {
@@ -2247,7 +2256,7 @@
       function safeCheckoutUrl(value) {
         try {
           const parsed = new URL(String(value || ''));
-          return parsed.protocol === 'https:' && parsed.hostname === 'checkout.infinitepay.com.br' ? parsed.toString() : '';
+          return parsed.protocol === 'https:' && ['checkout.infinitepay.com.br', 'checkout.infinitepay.io'].includes(parsed.hostname) ? parsed.toString() : '';
         } catch (_) {
           return '';
         }
@@ -2276,7 +2285,7 @@
         $('successStatus').textContent = order.status || DEFAULT_ORDER_STATUSES[0];
         const details = $('successPaymentDetails');
         renderPaymentDetails(details, order.checkout || {}, order);
-        const businessPhone = normalizedPhoneDigits(config.businessWhatsapp || config.commercialWhatsapp || '');
+        const businessPhone = businessWhatsappDigits();
         const whatsappButton = $('businessWhatsappBtn');
         whatsappButton.classList.toggle('hidden', !businessPhone);
         if (businessPhone) {
@@ -2292,12 +2301,12 @@
         $('orderForm').reset();
         orderItems = [];
         pendingOrderAttempt = null;
+        lastSubmittedOrder = null;
         clearMessage($('orderMessage'));
         clearFieldErrors();
         $('orderSuccessView').classList.remove('show');
         $('orderLayout').classList.remove('hidden');
         renderFlavorOptions();
-        renderPaymentOptions();
         renderOrderItems();
         applyPublicAvailability();
         updateSummary();
@@ -2354,7 +2363,6 @@
         const phoneDigits = $('customerPhone').value.replace(/\D/g, '');
         const date = $('orderDate').value;
         const time = $('pickupTime').value;
-        const payment = $('paymentSelect').value;
 
         if (!isOrdersOpenToday()) return { message: 'Os pedidos estão encerrados no momento.' };
         if (!name) return { message: 'Informe seu nome.', field: 'customerName' };
@@ -2364,7 +2372,6 @@
         if (!time) return { message: 'Escolha o horário preferido.', field: 'pickupTime' };
         if (!orderItems.length) return { message: 'Adicione pelo menos um sabor à encomenda.', field: 'orderItems' };
         if (orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) > 50) return { message: 'A encomenda aceita até 50 fatias.', field: 'orderItems' };
-        if (!payment) return { message: 'Escolha a forma de pagamento.', field: 'paymentSelect' };
         if ($('notes').value.trim().length > 500) return { message: 'As observações devem ter no máximo 500 caracteres.', field: 'notes' };
         return null;
       }
@@ -2512,6 +2519,7 @@
             ? `Pedido enviado com sucesso! Número: ${orderNumber}. Aguarde a confirmação pelo WhatsApp.`
             : 'Pedido enviado com sucesso! Aguarde a confirmação pelo WhatsApp.';
           pendingOrderAttempt = null;
+          lastSubmittedOrder = order;
           setMessage($('orderMessage'), 'success', confirmation);
           renderOrderSuccess(result.order || order, orderNumber);
         } catch (error) {
@@ -2520,7 +2528,7 @@
         } finally {
           isSubmitting = false;
           $('submitOrderBtn').disabled = false;
-          $('submitOrderBtn').textContent = 'Enviar encomenda';
+          $('submitOrderBtn').textContent = 'Finalizar encomenda';
         }
       }
 
@@ -2530,7 +2538,6 @@
         $('adminView').classList.add('hidden');
         renderBrand();
         renderFlavorOptions();
-        renderPaymentOptions();
         renderOrderItems();
         updateSummary();
         applyPublicAvailability();
@@ -2745,7 +2752,6 @@
       function applyConfigEverywhere() {
         renderBrand();
         renderFlavorOptions();
-        renderPaymentOptions();
         updateSummary();
         if (isPublic) applyPublicAvailability();
       }
@@ -3068,11 +3074,41 @@
         const checkAction = ['returned_unverified', 'paid_unverified', 'payment_amount_mismatch'].includes(checkout.state)
           ? `<button class="ghost-btn checkout-check" type="button" data-order-id="${escapeHtml(order.id || '')}">Conferir na InfinitePay</button>`
           : '';
-        const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${checkAction}<small>A confirmação do pedido permanece manual.</small></div>`;
+        const retryAction = checkout.canManualRetry && !url && order.status === 'Aguardando pagamento'
+          ? `<button class="ghost-btn checkout-retry" type="button" data-order-id="${escapeHtml(order.id || '')}">${checkout.state === 'not_created' || !checkout.state ? 'Gerar checkout' : 'Gerar checkout novamente'}</button>`
+          : '';
+        const diagnostic = checkout.diagnostic
+          ? `<span class="checkout-diagnostic">Falha: ${escapeHtml(checkoutDiagnosticText(checkout.diagnostic))}${checkout.attempts ? ` · ${escapeHtml(String(checkout.attempts))} tentativa(s)` : ''}</span>`
+          : '';
+        const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${diagnostic}${checkAction}${retryAction}<small>A confirmação do pedido permanece manual.</small></div>`;
         if (compact) {
           return `<div class="admin-item-list checkout-compact"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}<details class="order-row-details"><summary>Dados do checkout</summary>${details}</details></div>`;
         }
         return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
+      }
+
+      function checkoutDiagnosticText(diagnostic) {
+        const label = ({
+          invalid_request: 'Requisição recusada', auth: 'Credencial recusada', endpoint_not_found: 'Endereço da API não encontrado',
+          rate_limited: 'Limite de requisições', timeout: 'Tempo esgotado', network: 'Falha de conexão',
+          provider_error: 'Erro na InfinitePay', invalid_json: 'Resposta ilegível', missing_url: 'Resposta sem link',
+          invalid_url: 'Link fora do domínio oficial', total_mismatch: 'Total divergente', internal: 'Erro interno',
+          client_error: 'Requisição recusada', unexpected_status: 'Resposta inesperada', legacy: 'Registro anterior'
+        })[diagnostic.category] || 'Falha não classificada';
+        return [
+          label,
+          diagnostic.httpStatus ? `HTTP ${diagnostic.httpStatus}` : '',
+          diagnostic.providerMessage || '',
+          diagnostic.correlationId ? `correlação ${diagnostic.correlationId}` : ''
+        ].filter(Boolean).join(' · ');
+      }
+
+      async function retryAdminCheckout(orderId) {
+        const result = await apiPost({ action: 'retryCheckout', orderId }, { admin: true });
+        const order = appState.orders.find(item => String(item.id) === String(orderId));
+        if (order) order.checkout = result.checkout || order.checkout;
+        renderLocalOrders();
+        showToast(result.checkout?.available ? 'Checkout gerado. Envie o link ao cliente.' : 'A InfinitePay não gerou o checkout; veja o diagnóstico.');
       }
 
       async function checkCheckoutPayment(orderId) {
@@ -3174,6 +3210,13 @@
           catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível conferir o pagamento: ${error.message}`); }
           finally { button.disabled = false; }
         }));
+        qsa('.checkout-retry', container).forEach(button => button.addEventListener('click', async () => {
+          if (!window.confirm('Gerar o checkout deste pedido na InfinitePay? Faça isso somente depois de confirmar que não existe outra cobrança para ele.')) return;
+          button.disabled = true;
+          try { await retryAdminCheckout(button.dataset.orderId); }
+          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível gerar o checkout: ${error.message}`); }
+          finally { button.disabled = false; }
+        }));
       }
 
       // Eventos principais
@@ -3188,7 +3231,7 @@
       });
       $('endAdminSessionBtn').addEventListener('click', endAdminAccess);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
-      ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+      ['flavorSelect', 'orderDate'].forEach(id => $(id).addEventListener('change', updateSummary));
       $('itemQuantity').addEventListener('input', renderPricingEstimate);
       $('addOrderItemBtn').addEventListener('click', addSelectedOrderItem);
 

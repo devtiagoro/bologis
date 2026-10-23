@@ -21,6 +21,8 @@ source = source.replace(
         renderOrderSuccess,
         renderPaymentDetails,
         renderAdminCheckout,
+        retryPublicCheckout,
+        setLastSubmittedOrder(value) { lastSubmittedOrder = value; },
         safeCheckoutUrl,
         normalizeClientOrderItems,
         progressivePriceDetails,
@@ -288,7 +290,6 @@ test('confirmação pública usa itens e total definitivos do servidor', () => {
     progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 },
     businessWhatsapp: ''
   });
-  runtime.get('paymentSelect').value = 'pix';
   api.renderOrderSuccess({
     customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25', payment: 'PIX',
     status: 'Aguardando pagamento', totalQuantity: 3, total: 54.94,
@@ -312,8 +313,10 @@ test('confirmação pública oferece checkout InfinitePay válido', () => {
     items: [{ flavor: 'Chocolate', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' }],
     checkout: { state: 'active', available: true, url: 'https://checkout.infinitepay.com.br/teste', expectedAmountCents: 1997, expiresAt: '2026-10-22T23:59:59-03:00' }
   }, 'PF-CHECKOUT-1');
-  assert.match(runtime.get('successPaymentDetails').innerHTML, /Ir para pagamento/);
-  assert.match(runtime.get('successPaymentDetails').innerHTML, /checkout\.infinitepay\.com\.br/);
+  const markup = runtime.get('successPaymentDetails').innerHTML;
+  assert.match(markup, /data-payment-method="pix"/);
+  assert.match(markup, /data-payment-method="credit_card"/);
+  assert.match(markup, /checkout\.infinitepay\.com\.br/);
   assert.match(runtime.get('successPaymentDetails').innerHTML, /19,97/);
 });
 
@@ -335,6 +338,102 @@ test('central mostra estado identificador validade e link do checkout', () => {
   assert.match(markup, /invoice-123/);
   assert.match(markup, /Abrir checkout/);
   assert.match(markup, /Conferir na InfinitePay/);
+});
+
+// ---- Etapa 8.1: pagamento na confirmação ----
+
+const checkoutOrder = (checkout, extra = {}) => ({
+  customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25',
+  payment: 'InfinitePay — PIX ou cartão', status: 'Aguardando pagamento', totalQuantity: 2, total: 34.97,
+  items: [{ flavor: 'Choconinho', quantity: 2, subtotal: 34.97, savings: 4.97, pricingModel: 'progressive-v1' }],
+  checkout, ...extra
+});
+
+test('formulário inicial não tem seção nem campo de pagamento', () => {
+  assert.doesNotMatch(html, /id="paymentSelect"/);
+  assert.doesNotMatch(html, /id="summaryPayment"/);
+  assert.doesNotMatch(html, /<h2>[^<]*<span class="step-number"[^>]*>\d<\/span>Pagamento<\/h2>/);
+  assert.match(html, /id="submitOrderBtn"[^>]*>Finalizar encomenda</);
+  assert.match(html, /step-number" aria-hidden="true">3<\/span>Detalhes do pedido/);
+});
+
+test('confirmação mostra PIX e cartão de crédito para o mesmo checkout', () => {
+  const runtime = createRuntime();
+  runtime.window.__uxTest.renderOrderSuccess(checkoutOrder({ state: 'active', available: true, url: 'https://checkout.infinitepay.com.br/unico' }), 'PF-81');
+  const markup = runtime.get('successPaymentDetails').innerHTML;
+  const links = [...markup.matchAll(/href="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(links, ['https://checkout.infinitepay.com.br/unico', 'https://checkout.infinitepay.com.br/unico']);
+  assert.match(markup, />PIX</);
+  assert.match(markup, />Cartão de crédito</);
+  assert.match(markup, /escolha definitiva entre PIX e cartão de crédito/);
+  assert.doesNotMatch(markup, /débito/i);
+});
+
+test('domínio de checkout .io documentado é aceito', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.equal(api.safeCheckoutUrl('https://checkout.infinitepay.io/loja/abc'), 'https://checkout.infinitepay.io/loja/abc');
+  assert.equal(api.safeCheckoutUrl('http://checkout.infinitepay.io/loja/abc'), '');
+  assert.equal(api.safeCheckoutUrl('https://checkout.infinitepay.io.evil.example/x'), '');
+});
+
+test('botões de pagamento não aparecem sem URL válida', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  for (const checkout of [{ state: 'active', available: true, url: '' }, { state: 'active', available: false, url: 'https://checkout.infinitepay.com.br/x' }, { state: 'failed', available: false }]) {
+    const container = runtime.get('checkout-none');
+    api.renderPaymentDetails(container, checkout, { total: 34.97 });
+    assert.doesNotMatch(container.innerHTML, /payment-method-btn|href=/);
+    assert.match(container.innerHTML, /Seu pedido está registrado/);
+  }
+});
+
+test('falha definitiva oferece nova tentativa sem novo pedido', async () => {
+  let sent;
+  const runtime = createRuntime(async (_url, options) => {
+    sent = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ ok: true, order: checkoutOrder({ state: 'active', available: true, url: 'https://checkout.infinitepay.com.br/retry' }, { duplicate: true }) }) };
+  });
+  const api = runtime.window.__uxTest;
+  const original = { action: 'createOrder', customerName: 'Ana', items: [{ flavor: 'Choconinho', quantity: 2 }], idempotencyKey: 'chave-fixa-0000000001' };
+  api.setLastSubmittedOrder(original);
+  const container = runtime.get('checkout-retry');
+  api.renderPaymentDetails(container, { state: 'failed', available: false, canRetry: true }, { total: 34.97 });
+  assert.match(container.innerHTML, /id="retryCheckoutBtn"/);
+  assert.match(container.innerHTML, /nenhuma cobrança foi criada/);
+  await api.retryPublicCheckout(container);
+  assert.equal(sent.action, 'createOrder');
+  assert.equal(sent.idempotencyKey, 'chave-fixa-0000000001');
+  assert.match(container.innerHTML, /data-payment-method="pix"/);
+});
+
+test('estado ambíguo não oferece nova tentativa e indica contato', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({ flavors: [], sizes: [], payments: [], businessWhatsapp: '34999998888' });
+  api.setLastSubmittedOrder({ action: 'createOrder', idempotencyKey: 'chave-fixa-0000000002' });
+  const container = runtime.get('checkout-unknown');
+  api.renderPaymentDetails(container, { state: 'unknown', available: false, canRetry: false }, { total: 34.97 });
+  assert.doesNotMatch(container.innerHTML, /retryCheckoutBtn/);
+  assert.match(container.innerHTML, /duplicidade/);
+  assert.match(container.innerHTML, /WhatsApp abaixo/);
+});
+
+test('central exibe diagnóstico e só oferece nova geração quando seguro', () => {
+  const api = createRuntime().window.__uxTest;
+  const failed = api.renderAdminCheckout({
+    id: 'PF-FAIL', status: 'Aguardando pagamento',
+    checkout: { state: 'failed', available: false, canManualRetry: true, attempts: 1, diagnostic: { category: 'invalid_request', httpStatus: 400, providerMessage: 'invalid: handle', correlationId: 'req-1' } }
+  });
+  assert.match(failed, /Requisição recusada · HTTP 400 · invalid: handle · correlação req-1/);
+  assert.match(failed, /checkout-retry/);
+  const ambiguous = api.renderAdminCheckout({
+    id: 'PF-AMB', status: 'Aguardando pagamento',
+    checkout: { state: 'unknown', available: false, canManualRetry: false, diagnostic: { category: 'timeout' } }
+  });
+  assert.match(ambiguous, /Tempo esgotado/);
+  assert.doesNotMatch(ambiguous, /checkout-retry/);
+  const confirmed = api.renderAdminCheckout({ id: 'PF-OK', status: 'Confirmado', checkout: { state: 'failed', canManualRetry: true } });
+  assert.doesNotMatch(confirmed, /checkout-retry/);
 });
 
 (async () => {

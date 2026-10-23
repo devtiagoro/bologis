@@ -70,6 +70,7 @@ function createHarness(options = {}) {
     }
   };
   const response = options.response || { status: 201, body: { url: 'https://checkout.infinitepay.com.br/fictitious-link', id: 'charge-fictitious' } };
+  const responses = options.responses ? options.responses.slice() : null;
   const context = {
     Date, JSON, Math, String, Number, Object, Array, Error, RegExp, URL, encodeURIComponent, isFinite, isNaN,
     console: { log() {}, warn() {}, error() {} },
@@ -84,10 +85,12 @@ function createHarness(options = {}) {
     UrlFetchApp: {
       fetch(url, request) {
         fetches.push({ url, request, payload: JSON.parse(request.payload) });
-        if (options.networkFailure) throw new Error('NETWORK_FAILURE');
+        const current = responses ? (responses.length > 1 ? responses.shift() : responses[0]) : response;
+        if (options.networkFailure || current.networkFailure) throw new Error(options.networkMessage || current.networkMessage || 'NETWORK_FAILURE');
         return {
-          getResponseCode: () => response.status,
-          getContentText: () => JSON.stringify(response.body)
+          getResponseCode: () => current.status,
+          getContentText: () => current.text !== undefined ? current.text : JSON.stringify(current.body),
+          getAllHeaders: () => current.headers || {}
         };
       }
     },
@@ -202,16 +205,19 @@ test('falha da API preserva pedido com estado failed', () => {
   assert.equal(h.orderRows.length, 1);
 });
 
-test('resposta sem URL e rejeitada', () => {
+test('resposta 2xx sem URL fica em conciliacao sem recriar cobranca', () => {
   const h = createHarness({ response: { status: 201, body: { id: 'sem-url' } } });
-  assert.equal(h.post().order.checkout.state, 'failed');
+  assert.equal(h.post().order.checkout.state, 'unknown');
+  assert.equal(h.post().order.checkout.state, 'unknown');
+  assert.equal(h.fetches.length, 1);
 });
 
 test('URL maliciosa nunca e devolvida ao navegador', () => {
   const h = createHarness({ response: { status: 201, body: { url: 'https://evil.example/pay' } } });
   const checkout = h.post().order.checkout;
   assert.equal(checkout.available, false);
-  assert.equal(checkout.url, undefined);
+  assert.equal(Boolean(checkout.url), false);
+  assert.equal(JSON.stringify(checkout).includes('evil.example'), false);
 });
 
 test('pedido cancelado ou confirmado nao gera novo checkout', () => {
@@ -291,6 +297,182 @@ test('pedidos antigos continuam legiveis sem checkout', () => {
   assert.equal(orders[0].id, 'PF-LEGACY');
   assert.equal(orders[0].checkout.available, false);
   assert.equal(orders[0].status, 'Confirmado');
+});
+
+// ---- Etapa 8.1: contrato documentado, diagnóstico e recuperação segura ----
+
+const httpFailure = (status, body = { success: false, message: 'falha fictícia' }, headers = {}) => ({ response: { status, body, headers } });
+
+test('payload envia handle sem cifrao e preserva campos documentados', () => {
+  const h = createHarness();
+  h.properties.set('INFINITEPAY_HANDLE', '$primeira-fornada-teste');
+  h.post();
+  const payload = h.fetches[0].payload;
+  assert.equal(payload.handle, 'primeira-fornada-teste');
+  assert.equal(h.fetches[0].url, 'https://api.checkout.infinitepay.io/links');
+  assert.equal(payload.order_nsu, h.orderRows[0][0]);
+  assert.match(payload.redirect_url, /^https:\/\/devtiagoro\.github\.io\/bologis\/\?public=1&payment_return=1&checkout_token=/);
+  assert.equal(payload.customer.phone_number, '+5534999990000');
+  assert.equal(payload.options.valid_until, '2026-10-22T23:59:59-03:00');
+});
+
+test('duas fatias usam preco progressivo em centavos (34,97)', () => {
+  const h = createHarness();
+  h.post({ items: [{ flavor: 'Chocolate', quantity: 2 }] });
+  const items = h.fetches[0].payload.items;
+  assert.deepEqual(items.map(item => [item.quantity, item.price]), [[1, 1997], [1, 1500]]);
+  assert.equal(h.checkoutRows[0][4], 3497);
+});
+
+test('aceita checkout_url e dominio oficial checkout.infinitepay.io', () => {
+  const h = createHarness({ response: { status: 200, body: { checkout_url: 'https://checkout.infinitepay.io/primeira-fornada/1RxANX7tdF' } } });
+  const checkout = h.post().order.checkout;
+  assert.equal(checkout.available, true);
+  assert.equal(checkout.url, 'https://checkout.infinitepay.io/primeira-fornada/1RxANX7tdF');
+});
+
+test('HTTP 400 registra diagnostico sanitizado e permite retry seguro', () => {
+  const h = createHarness(httpFailure(400, { success: false, message: 'param is missing or the value is empty or invalid: handle inchk_vazado_123 (34) 99999-0000' }, { 'X-Request-Id': 'req-fict-400' }));
+  const checkout = h.post().order.checkout;
+  assert.equal(checkout.state, 'failed');
+  assert.equal(checkout.canRetry, true);
+  assert.equal(checkout.diagnostic, undefined, 'diagnóstico não pode ir ao navegador do cliente');
+  const references = JSON.parse(h.checkoutRows[0][9]);
+  assert.equal(references.lastError.httpStatus, 400);
+  assert.equal(references.lastError.category, 'invalid_request');
+  assert.equal(references.lastError.correlationId, 'req-fict-400');
+  assert.match(references.lastError.providerMessage, /invalid: handle/);
+  assert.doesNotMatch(JSON.stringify(h.checkoutRows), /inchk_vazado|99999-0000/);
+  assert.match(h.checkoutRows[0][8], /^HTTP 400 · invalid_request/);
+});
+
+test('HTTP 401 e 403 sao falhas de autenticacao sem cobranca', () => {
+  for (const status of [401, 403]) {
+    const h = createHarness(httpFailure(status));
+    assert.equal(h.post().order.checkout.state, 'failed');
+    assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'auth');
+  }
+});
+
+test('HTTP 429 e falha definitiva com categoria de limite', () => {
+  const h = createHarness(httpFailure(429));
+  assert.equal(h.post().order.checkout.state, 'failed');
+  assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'rate_limited');
+});
+
+test('HTTP 500 fica ambiguo e nao recria cobranca automaticamente', () => {
+  const h = createHarness(httpFailure(500));
+  const first = h.post().order.checkout;
+  assert.equal(first.state, 'unknown');
+  assert.equal(first.canRetry, false);
+  h.post();
+  assert.equal(h.fetches.length, 1);
+  assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'provider_error');
+});
+
+test('timeout fica ambiguo com categoria propria', () => {
+  const h = createHarness({ networkFailure: true, networkMessage: 'Timeout: https://api.checkout.infinitepay.io/links' });
+  assert.equal(h.post().order.checkout.state, 'unknown');
+  assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'timeout');
+});
+
+test('JSON invalido em 2xx fica ambiguo', () => {
+  const h = createHarness({ response: { status: 200, text: '<html>gateway</html>' } });
+  assert.equal(h.post().order.checkout.state, 'unknown');
+  assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'invalid_json');
+});
+
+test('URL fora do dominio oficial fica ambigua e nunca e exposta', () => {
+  const h = createHarness({ response: { status: 201, body: { url: 'https://evil.example/pay?token=x' } } });
+  const checkout = h.post().order.checkout;
+  assert.equal(checkout.state, 'unknown');
+  assert.equal(JSON.parse(h.checkoutRows[0][9]).lastError.category, 'invalid_url');
+  assert.doesNotMatch(JSON.stringify(h.checkoutRows), /token=x/);
+});
+
+test('retry apos falha definitiva reutiliza o mesmo registro', () => {
+  const h = createHarness({ responses: [{ status: 400, body: { message: 'invalid' } }, { status: 201, body: { url: 'https://checkout.infinitepay.com.br/apos-retry' } }] });
+  assert.equal(h.post().order.checkout.state, 'failed');
+  const second = h.post().order.checkout;
+  assert.equal(second.state, 'active');
+  assert.equal(second.url, 'https://checkout.infinitepay.com.br/apos-retry');
+  assert.equal(h.fetches.length, 2);
+  assert.equal(h.orderRows.length, 1);
+  assert.equal(h.checkoutRows.length, 1);
+  const references = JSON.parse(h.checkoutRows[0][9]);
+  assert.equal(references.attempts, 2);
+  assert.equal(references.lastError, undefined);
+  // Depois de ativo, novos reenvios não chamam a InfinitePay.
+  h.post();
+  assert.equal(h.fetches.length, 2);
+});
+
+test('retry automatico respeita limite de tentativas', () => {
+  const h = createHarness(httpFailure(400));
+  for (let index = 0; index < 5; index += 1) h.post();
+  assert.equal(h.fetches.length, 3);
+  assert.equal(h.post().order.checkout.canRetry, false);
+  assert.equal(h.checkoutRows.length, 1);
+});
+
+test('registro failed da versao anterior nao repete automaticamente', () => {
+  const h = createHarness();
+  const created = h.post().order;
+  h.checkoutRows[0][2] = '';
+  h.checkoutRows[0][7] = 'failed';
+  h.checkoutRows[0][8] = 'A InfinitePay não pôde criar o checkout neste momento.';
+  h.checkoutRows[0][9] = '{}';
+  const again = h.post().order.checkout;
+  assert.equal(again.state, 'failed');
+  assert.equal(again.canRetry, false);
+  assert.equal(h.fetches.length, 1);
+  assert.equal(h.context.getOrders_()[0].checkout.canManualRetry, true);
+  const retried = h.context.retryOrderCheckout_(created.id);
+  assert.equal(retried.state, 'active');
+  assert.equal(h.fetches.length, 2);
+  assert.equal(h.checkoutRows.length, 1);
+});
+
+test('nova tentativa administrativa e bloqueada para cobranca ativa ou ambigua', () => {
+  const active = createHarness();
+  const order = active.post().order;
+  assert.throws(() => active.context.retryOrderCheckout_(order.id), error => error.code === 'CHECKOUT_RETRY_NOT_ALLOWED');
+  const ambiguous = createHarness(httpFailure(503));
+  const second = ambiguous.post().order;
+  assert.throws(() => ambiguous.context.retryOrderCheckout_(second.id), error => error.code === 'CHECKOUT_RETRY_NOT_ALLOWED');
+  assert.equal(ambiguous.fetches.length, 1);
+});
+
+test('nova tentativa administrativa recusa pedido de fornada encerrada', () => {
+  const h = createHarness(httpFailure(400));
+  const order = h.post().order;
+  h.context.getOrderWindow_ = () => ({ open: true, deliveryDateText: '2026-11-01', deadlineText: '2026-10-29T23:59:59-03:00' });
+  assert.throws(() => h.context.retryOrderCheckout_(order.id), error => error.code === 'CHECKOUT_RETRY_EXPIRED');
+  assert.equal(h.fetches.length, 1);
+});
+
+test('central recebe diagnostico sem credencial', () => {
+  const h = createHarness(httpFailure(401, { message: 'invalid api key inchk_vazado_999' }, { 'cf-ray': 'ray-fict' }));
+  h.post();
+  const checkout = h.context.getOrders_()[0].checkout;
+  assert.equal(checkout.diagnostic.httpStatus, 401);
+  assert.equal(checkout.diagnostic.category, 'auth');
+  assert.equal(checkout.diagnostic.correlationId, 'ray-fict');
+  assert.doesNotMatch(JSON.stringify(checkout), /inchk_/);
+  assert.equal(checkout.canManualRetry, true);
+});
+
+test('acao administrativa de nova tentativa exige sessao', () => {
+  const h = createHarness();
+  const result = JSON.parse(h.context.doPost({ postData: { contents: JSON.stringify({ action: 'retryCheckout', orderId: 'PF-X' }) }, parameter: {} }).text);
+  assert.equal(result.ok, false);
+  assert.equal(h.fetches.length, 0);
+});
+
+test('configuracao publica expoe WhatsApp comercial para contato', () => {
+  const h = createHarness();
+  h.config.businessWhatsapp = '(34) 99999-8888';
+  assert.equal(h.context.getPublicConfig_().businessWhatsapp, '(34) 99999-8888');
 });
 
 (async () => {

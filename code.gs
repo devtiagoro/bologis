@@ -89,12 +89,17 @@ const PF_CHECKOUT = {
   handleProperty: 'INFINITEPAY_HANDLE',
   redirectUrlProperty: 'INFINITEPAY_REDIRECT_URL',
   returnSecretProperty: 'INFINITEPAY_RETURN_SECRET',
-  allowedCheckoutHosts: ['checkout.infinitepay.com.br'],
+  // A documentação oficial publica exemplos com os dois domínios de checkout.
+  allowedCheckoutHosts: ['checkout.infinitepay.com.br', 'checkout.infinitepay.io'],
   states: {
     creating: 'creating', active: 'active', returned: 'returned_unverified',
     paid: 'paid_unverified', mismatch: 'payment_amount_mismatch', expired: 'expired', failed: 'failed', unknown: 'unknown'
   },
-  maxErrorLength: 300
+  maxErrorLength: 300,
+  maxProviderMessageLength: 200,
+  maxAutomaticAttempts: 3,
+  // Mensagem gravada pela versão anterior para respostas HTTP fora de 2xx (sem código registrado).
+  legacyHttpFailureMessage: 'A InfinitePay não pôde criar o checkout neste momento.'
 };
 
 /** Execute manualmente no editor do Apps Script para criar ou rotacionar a chave. */
@@ -553,6 +558,11 @@ function doPost(e) {
       return json_({ ok: true, checkout: checkCheckoutPayment_(body.orderId) });
     }
 
+    if (action === 'retryCheckout') {
+      requireAdmin_(body);
+      return json_({ ok: true, checkout: retryOrderCheckout_(body.orderId) });
+    }
+
 
     if (action === 'saveConfig') {
 
@@ -751,6 +761,8 @@ function getConfig_() {
 
     orderStatuses: PF_ORDER.statuses.slice(),
 
+    businessWhatsapp: String(values.businessWhatsapp || '').replace(/[^\d+()\s-]/g, '').slice(0, 24),
+
     spreadsheetUrl: ss.getUrl(),
 
     revision: getConfigRevision_()
@@ -777,6 +789,7 @@ function getPublicConfig_() {
     })),
     progressivePricing: config.progressivePricing,
     availability: config.availability,
+    businessWhatsapp: config.businessWhatsapp || '',
     orderWindow: {
       open: orderWindow.open,
       code: orderWindow.code,
@@ -1550,13 +1563,118 @@ function parseCheckoutReferences_(value) {
 }
 
 function checkoutPublicView_(record) {
-  if (!record) return { state: 'not_created', available: false };
+  if (!record) return { state: 'not_created', available: false, canRetry: false };
   const url = safeInfinitePayCheckoutUrl_(record.url);
   return {
     state: record.state || 'unknown', available: Boolean(url) && ['active', 'returned_unverified', 'paid_unverified'].includes(record.state),
     url, chargeId: record.chargeId || '', expectedAmountCents: record.expectedAmountCents,
-    expiresAt: record.expiresAt || ''
+    expiresAt: record.expiresAt || '',
+    canRetry: checkoutRetryAllowed_(record, false)
   };
+}
+
+// Visão administrativa: inclui o diagnóstico sanitizado da última falha.
+function checkoutAdminView_(record) {
+  const view = checkoutPublicView_(record);
+  const references = record && record.references || {};
+  const lastError = references.lastError || null;
+  view.canManualRetry = !record || checkoutRetryAllowed_(record, true);
+  view.attempts = Number(references.attempts || (record ? 1 : 0));
+  view.diagnostic = lastError
+    ? {
+      category: String(lastError.category || ''), httpStatus: Number(lastError.httpStatus || 0),
+      providerMessage: String(lastError.providerMessage || ''), correlationId: String(lastError.correlationId || ''),
+      at: String(lastError.at || ''), retryable: lastError.retryable === true
+    }
+    : (record && record.error ? { category: 'legacy', httpStatus: 0, providerMessage: record.error, correlationId: '', at: record.updatedAt || '', retryable: false } : null);
+  return view;
+}
+
+function checkoutFailureRetryable_(record, manual) {
+  const lastError = record && record.references && record.references.lastError;
+  if (lastError) return lastError.retryable === true;
+  // Registros da versão anterior não guardavam o código HTTP: só a administração decide após conferir a InfinitePay.
+  return manual === true && String(record && record.error || '') === PF_CHECKOUT.legacyHttpFailureMessage;
+}
+
+function checkoutRetryAllowed_(record, manual) {
+  if (!record || record.state !== PF_CHECKOUT.states.failed) return false;
+  if (!checkoutFailureRetryable_(record, manual)) return false;
+  if (manual) return true;
+  return Number(record.references && record.references.attempts || 1) < PF_CHECKOUT.maxAutomaticAttempts;
+}
+
+function sanitizeProviderText_(value) {
+  return String(value == null ? '' : value)
+    .replace(/inchk_[A-Za-z0-9_-]+/g, '[chave]')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
+    .replace(/\+?\d[\d\s().-]{7,}\d/g, '[número]')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PF_CHECKOUT.maxProviderMessageLength);
+}
+
+function providerMessage_(data, text) {
+  if (data && typeof data === 'object') {
+    const candidate = data.message || data.error || data.error_message || data.errors;
+    if (candidate) return sanitizeProviderText_(typeof candidate === 'string' ? candidate : JSON.stringify(candidate));
+  }
+  return sanitizeProviderText_(text);
+}
+
+function providerCorrelationId_(response) {
+  let headers = {};
+  try { headers = response.getAllHeaders ? response.getAllHeaders() : (response.getHeaders ? response.getHeaders() : {}); } catch (_) {}
+  const names = ['x-request-id', 'x-correlation-id', 'request-id', 'x-amzn-requestid', 'x-amz-cf-id', 'cf-ray'];
+  const found = Object.keys(headers || {}).find(name => names.includes(String(name).toLowerCase()));
+  const value = found ? headers[found] : '';
+  return String(Array.isArray(value) ? value[0] : value || '').replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 100);
+}
+
+function checkoutHttpCategory_(status) {
+  if (status === 400 || status === 422) return { category: 'invalid_request', definitive: true };
+  if (status === 401 || status === 403) return { category: 'auth', definitive: true };
+  if (status === 404) return { category: 'endpoint_not_found', definitive: true };
+  if (status === 429) return { category: 'rate_limited', definitive: true };
+  if (status === 408) return { category: 'timeout', definitive: false };
+  if (status >= 500) return { category: 'provider_error', definitive: false };
+  if (status >= 400) return { category: 'client_error', definitive: status !== 409 };
+  return { category: 'unexpected_status', definitive: false };
+}
+
+// definitive=true significa que a InfinitePay comprovadamente não criou a cobrança.
+function checkoutFailure_(category, definitive, httpStatus, providerMessage, correlationId) {
+  const error = apiError_('INFINITEPAY_CHECKOUT_FAILED', 'A InfinitePay não gerou o checkout.');
+  error.definitive = definitive;
+  error.diagnostic = {
+    category, httpStatus: Number(httpStatus || 0), providerMessage: providerMessage || '',
+    correlationId: correlationId || '', retryable: definitive && category !== 'total_mismatch'
+  };
+  return error;
+}
+
+function checkoutDiagnosticFromError_(error) {
+  if (error && error.diagnostic) return error.diagnostic;
+  if (error && error.code === 'CHECKOUT_TOTAL_MISMATCH') {
+    return { category: 'total_mismatch', httpStatus: 0, providerMessage: '', correlationId: '', retryable: false };
+  }
+  return { category: 'internal', httpStatus: 0, providerMessage: sanitizeProviderText_(error && error.message), correlationId: '', retryable: false };
+}
+
+function checkoutErrorSummary_(diagnostic) {
+  return [
+    diagnostic.httpStatus ? 'HTTP ' + diagnostic.httpStatus : '',
+    diagnostic.category,
+    diagnostic.providerMessage,
+    diagnostic.correlationId ? 'correlação ' + diagnostic.correlationId : ''
+  ].filter(Boolean).join(' · ').slice(0, PF_CHECKOUT.maxErrorLength);
+}
+
+function checkoutDeadlineForOrder_(order, orderWindow) {
+  return String(order && order.deliveryDate || '') === String(orderWindow && orderWindow.deliveryDateText || '')
+    ? orderWindow.deadlineText
+    : '';
 }
 
 function findCheckoutRecord_(sheet, orderId, valueVersion) {
@@ -1602,43 +1720,58 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
     }
   };
   if (!payload.customer.phone_number) delete payload.customer.phone_number;
-  const response = UrlFetchApp.fetch(PF_CHECKOUT.apiUrl, {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'X-Api-Key': integration.apiKey }, payload: JSON.stringify(payload)
-  });
-  const status = Number(response.getResponseCode());
-  let data = {};
-  try { data = JSON.parse(response.getContentText() || '{}'); } catch (_) {}
-  if (status < 200 || status >= 300) {
-    const error = apiError_('INFINITEPAY_API_ERROR', 'A InfinitePay não pôde criar o checkout neste momento.');
-    error.definitive = true;
-    error.providerStatus = status;
-    throw error;
+  // A referência de desenvolvedores exige a InfiniteTag (handle) no corpo da criação do link.
+  if (integration.handle) payload.handle = integration.handle;
+  let response;
+  try {
+    response = UrlFetchApp.fetch(PF_CHECKOUT.apiUrl, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'X-Api-Key': integration.apiKey }, payload: JSON.stringify(payload)
+    });
+  } catch (networkError) {
+    // Sem resposta não é possível saber se a cobrança foi criada: estado ambíguo.
+    const timedOut = /timeout|timed out|tempo limite|excedeu/i.test(String(networkError && networkError.message || ''));
+    throw checkoutFailure_(timedOut ? 'timeout' : 'network', false, 0, '', '');
   }
-  const url = safeInfinitePayCheckoutUrl_(data.url);
+  const status = Number(response.getResponseCode());
+  let text = '';
+  try { text = String(response.getContentText() || ''); } catch (_) {}
+  let data = null;
+  try { data = JSON.parse(text); } catch (_) {}
+  const correlationId = providerCorrelationId_(response);
+  if (status < 200 || status >= 300) {
+    const classification = checkoutHttpCategory_(status);
+    throw checkoutFailure_(classification.category, classification.definitive, status, providerMessage_(data, text), correlationId);
+  }
+  // Com 2xx a cobrança pode ter sido criada mesmo sem URL utilizável: nunca recriar automaticamente.
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw checkoutFailure_('invalid_json', false, status, '', correlationId);
+  }
+  const rawUrl = data.url || data.checkout_url || data.link || '';
+  const url = safeInfinitePayCheckoutUrl_(rawUrl);
   if (!url) {
-    const error = apiError_('INFINITEPAY_INVALID_RESPONSE', 'A InfinitePay respondeu sem uma URL de checkout válida.');
-    error.definitive = true;
-    throw error;
+    throw checkoutFailure_(rawUrl ? 'invalid_url' : 'missing_url', false, status, rawUrl ? sanitizeProviderText_(String(rawUrl).split('?')[0]) : '', correlationId);
   }
   return { url, chargeId: String(data.id || data.slug || data.invoice_slug || ''), payload };
 }
 
-function ensureCheckoutForOrder_(order, expiresAt) {
+function ensureCheckoutForOrder_(order, expiresAt, options) {
+  const manual = Boolean(options && options.manual);
   const integration = getInfinitePayConfig_();
-  if (!integration.configured) return { state: 'not_configured', available: false };
+  if (!integration.configured) return { state: 'not_configured', available: false, canRetry: false };
   if (['Cancelado', 'Confirmado', 'Concluído'].includes(String(order.status || ''))) {
-    return { state: 'blocked_order_status', available: false };
+    return { state: 'blocked_order_status', available: false, canRetry: false };
   }
   const expectedAmountCents = Math.round(Number(order.total || order.price || 0) * 100);
   const valueVersion = checkoutValueVersion_(order);
   const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(PF.sheets.checkouts);
-  if (!sheet) return { state: 'not_configured', available: false };
+  if (!sheet) return { state: 'not_configured', available: false, canRetry: false };
   const now = currentBusinessDate_();
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   let rowNumber;
+  let references = {};
   try {
     const existing = findCheckoutRecord_(sheet, order.id, valueVersion);
     if (existing) {
@@ -1647,53 +1780,95 @@ function ensureCheckoutForOrder_(order, expiresAt) {
         updateCheckoutRecord_(sheet, existing.rowNumber, { state: PF_CHECKOUT.states.expired, updatedAt: now });
         existing.record.state = PF_CHECKOUT.states.expired;
       }
-      return checkoutPublicView_(existing.record);
+      // Só repete quando a falha anterior comprova que nenhuma cobrança foi criada.
+      if (!checkoutRetryAllowed_(existing.record, manual)) return checkoutPublicView_(existing.record);
     }
-    const createdAt = now;
     const expiry = new Date(expiresAt);
-    if (isNaN(expiry.getTime()) || expiry.getTime() <= createdAt.getTime()) {
-      return { state: PF_CHECKOUT.states.expired, available: false };
+    if (isNaN(expiry.getTime()) || expiry.getTime() <= now.getTime()) {
+      return existing ? checkoutPublicView_(existing.record) : { state: PF_CHECKOUT.states.expired, available: false, canRetry: false };
     }
-    sheet.appendRow([
-      order.id, valueVersion, '', '', expectedAmountCents, createdAt, expiry,
-      PF_CHECKOUT.states.creating, '', '{}', createdAt
-    ]);
-    rowNumber = sheet.getLastRow();
+    if (existing) {
+      // Reaproveita o mesmo registro: o histórico da cobrança nunca é apagado.
+      rowNumber = existing.rowNumber;
+      references = Object.assign({}, existing.record.references || {});
+      references.attempts = Number(references.attempts || 1) + 1;
+      updateCheckoutRecord_(sheet, rowNumber, { expiresAt: expiry, state: PF_CHECKOUT.states.creating, references, updatedAt: now });
+    } else {
+      references = { orderNsu: order.id, attempts: 1 };
+      sheet.appendRow([
+        order.id, valueVersion, '', '', expectedAmountCents, now, expiry,
+        PF_CHECKOUT.states.creating, '', JSON.stringify(references), now
+      ]);
+      rowNumber = sheet.getLastRow();
+    }
   } finally {
     lock.releaseLock();
   }
 
   try {
     const created = createInfinitePayCheckout_(order, expiresAt, valueVersion, integration);
+    const successReferences = Object.assign({}, references, { orderNsu: order.id });
+    delete successReferences.lastError;
     const commitLock = LockService.getScriptLock();
     commitLock.waitLock(10000);
     try {
       updateCheckoutRecord_(sheet, rowNumber, {
         url: created.url, chargeId: created.chargeId, state: PF_CHECKOUT.states.active,
-        error: '', references: { orderNsu: order.id }, updatedAt: currentBusinessDate_()
+        error: '', references: successReferences, updatedAt: currentBusinessDate_()
       });
     } finally {
       commitLock.releaseLock();
     }
     return checkoutPublicView_({
       url: created.url, chargeId: created.chargeId, expectedAmountCents,
-      expiresAt, state: PF_CHECKOUT.states.active
+      expiresAt, state: PF_CHECKOUT.states.active, references: successReferences
     });
   } catch (error) {
-    const failureState = error && error.definitive ? PF_CHECKOUT.states.failed : PF_CHECKOUT.states.unknown;
+    const diagnostic = checkoutDiagnosticFromError_(error);
+    const noChargeCreated = Boolean(error && error.definitive) || diagnostic.category === 'total_mismatch';
+    const failureState = noChargeCreated ? PF_CHECKOUT.states.failed : PF_CHECKOUT.states.unknown;
+    const failureReferences = Object.assign({}, references, {
+      orderNsu: order.id,
+      lastError: Object.assign({}, diagnostic, { at: currentBusinessDate_().toISOString() })
+    });
+    // Registro operacional sem credenciais nem dados pessoais.
+    console.warn('Checkout InfinitePay não gerado: ' + checkoutErrorSummary_(diagnostic));
     const failureLock = LockService.getScriptLock();
     failureLock.waitLock(10000);
     try {
       updateCheckoutRecord_(sheet, rowNumber, {
         state: failureState,
-        error: String(error && error.message || 'Falha de conexão com a InfinitePay.').slice(0, PF_CHECKOUT.maxErrorLength),
+        error: checkoutErrorSummary_(diagnostic),
+        references: failureReferences,
         updatedAt: currentBusinessDate_()
       });
     } finally {
       failureLock.releaseLock();
     }
-    return { state: failureState, available: false };
+    return checkoutPublicView_({ state: failureState, references: failureReferences, expectedAmountCents, expiresAt });
   }
+}
+
+function retryOrderCheckout_(orderId) {
+  const id = clean_(orderId);
+  if (!id) throw apiError_('ORDER_ID_REQUIRED', 'Informe o pedido para gerar o checkout.');
+  const ss = getSpreadsheet_();
+  const orderRecord = findOrderRecordById_(ss.getSheetByName(PF.sheets.orders), id);
+  if (!orderRecord) throw apiError_('ORDER_NOT_FOUND', 'O pedido informado não foi encontrado.');
+  const order = orderResponseFromRow_(orderRecord.row, PF_ORDER.timezone, false, getOrderItemsById_(ss.getSheetByName(PF.sheets.orderItems), id));
+  if (order.status !== PF_ORDER.initialStatus) {
+    throw apiError_('CHECKOUT_RETRY_BLOCKED', 'Somente pedidos aguardando pagamento podem receber um checkout.');
+  }
+  const checkoutSheet = ss.getSheetByName(PF.sheets.checkouts);
+  const existing = findCheckoutRecord_(checkoutSheet, id, '');
+  if (existing && !checkoutRetryAllowed_(existing.record, true)) {
+    throw apiError_('CHECKOUT_RETRY_NOT_ALLOWED', 'Este pedido já tem uma cobrança ativa ou em conciliação. Confira na InfinitePay antes de qualquer nova tentativa.');
+  }
+  const deadline = checkoutDeadlineForOrder_(order, getOrderWindow_(getConfig_(), currentBusinessDate_()));
+  if (!deadline) throw apiError_('CHECKOUT_RETRY_EXPIRED', 'O prazo de pagamento da fornada deste pedido já terminou.');
+  ensureCheckoutForOrder_(order, deadline, { manual: true });
+  const updated = findCheckoutRecord_(checkoutSheet, id, '');
+  return checkoutAdminView_(updated && updated.record);
 }
 
 function safeInfinitePayReferenceUrl_(value) {
@@ -2001,9 +2176,11 @@ function createOrder_(body) {
   const order = createOrderRecord_(body);
   try {
     const orderWindow = getOrderWindow_(getConfig_(), currentBusinessDate_());
-    order.checkout = ensureCheckoutForOrder_(order, orderWindow.deadlineText);
+    order.checkout = ensureCheckoutForOrder_(order, checkoutDeadlineForOrder_(order, orderWindow));
   } catch (error) {
-    order.checkout = { state: 'failed', available: false };
+    // Falha antes de qualquer chamada à InfinitePay: nenhuma cobrança existe, o reenvio é seguro.
+    console.warn('Checkout InfinitePay não iniciado: ' + sanitizeProviderText_(error && (error.code || error.message)));
+    order.checkout = { state: 'failed', available: false, canRetry: true };
   }
   return order;
 }
@@ -2397,7 +2574,7 @@ function getOrders_() {
   return dataRows_(sheet).reverse().map(row => {
     const order = orderResponseFromRow_(row, tz, false, itemsByOrder[String(row[0] || '')] || []);
     order.source = readableSheetText_(row[14]);
-    order.checkout = checkoutPublicView_(checkoutsByOrder[String(row[0] || '')]);
+    order.checkout = checkoutAdminView_(checkoutsByOrder[String(row[0] || '')]);
     delete order.duplicate;
     return order;
   });
