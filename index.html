@@ -280,6 +280,66 @@
       font-weight: 900;
     }
 
+    .item-builder-actions {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 12px;
+      align-items: end;
+      margin-top: 16px;
+    }
+
+    .add-item-btn { width: 100%; }
+
+    .order-items {
+      display: grid;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .order-items-empty {
+      padding: 16px;
+      border: 1px dashed #d8c8be;
+      border-radius: 14px;
+      color: var(--muted);
+      background: #fffaf7;
+      line-height: 1.5;
+    }
+
+    .order-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 94px auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+      animation: item-reveal .2s ease both;
+    }
+
+    .order-item:last-child { border-bottom: 0; }
+    .order-item-copy strong, .order-item-copy small { display: block; }
+    .order-item-copy small { color: var(--muted); margin-top: 4px; }
+    .order-item-quantity { min-height: 42px; padding: 8px 10px; }
+    .order-item-remove { min-height: 42px; padding: 8px 12px; }
+
+    .compact-item-list { display: grid; gap: 9px; }
+    .compact-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      line-height: 1.4;
+    }
+    .compact-item span { color: var(--muted); }
+    .compact-item strong { text-align: right; }
+
+    .admin-item-list { display: grid; gap: 5px; min-width: 210px; }
+    .admin-item-line { display: flex; justify-content: space-between; gap: 10px; }
+    .admin-item-line small { color: var(--muted); }
+
+    @keyframes item-reveal {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     .summary-card {
       position: sticky;
       top: 20px;
@@ -1008,6 +1068,9 @@
       .admin-heading-actions { width: 100%; justify-content: flex-start; }
       .summary-card { padding: 20px; border-radius: 22px; }
       .form-grid, .choice-grid, .admin-grid { grid-template-columns: 1fr; }
+      .item-builder-actions { grid-template-columns: 1fr; }
+      .order-item { grid-template-columns: minmax(0, 1fr) 78px; }
+      .order-item-remove { grid-column: 1 / -1; width: 100%; }
       .admin-tabs { width: 100%; }
       .admin-tabs button { flex: 1; }
       .order-success .primary-btn, .order-success .ghost-btn, .order-success .success-payment a { width: 88vw; max-width: 360px; margin-left: auto; margin-right: auto; }
@@ -1126,6 +1189,16 @@
                 <label>Qual tamanho?</label>
                 <div id="sizeChoices" class="choice-grid"></div>
               </div>
+
+              <div class="item-builder-actions">
+                <div class="field">
+                  <label for="itemQuantity">Quantidade</label>
+                  <input class="control" id="itemQuantity" type="number" min="1" max="20" step="1" value="1" inputmode="numeric" />
+                </div>
+                <button id="addOrderItemBtn" class="secondary-btn add-item-btn" type="button">Adicionar à encomenda</button>
+              </div>
+
+              <div id="orderItems" class="order-items" aria-live="polite"></div>
             </div>
 
             <div class="form-section">
@@ -1165,15 +1238,15 @@
           <p>Confira os principais detalhes antes de enviar.</p>
 
           <div class="summary-list">
-            <div class="summary-row"><span>Sabor</span><strong id="summaryFlavor">—</strong></div>
-            <div class="summary-row"><span>Tamanho</span><strong id="summarySize">—</strong></div>
+            <div class="summary-row"><span>Bolos</span><strong id="summaryQuantity">0</strong></div>
+            <div class="summary-row"><span>Itens</span><div id="summaryItems" class="compact-item-list"><span>Adicione seu primeiro bolo</span></div></div>
             <div class="summary-row"><span>Data</span><strong id="summaryDate">—</strong></div>
             <div class="summary-row"><span>Pagamento</span><strong id="summaryPayment">—</strong></div>
           </div>
 
           <div class="total-row">
             <div>
-              <span>Valor estimado</span>
+              <span>Valor total</span>
               <strong id="summaryTotal">R$ 0,00</strong>
             </div>
             <div style="font-size:28px" aria-hidden="true">🤎</div>
@@ -1194,9 +1267,9 @@
         <div class="success-summary">
           <div class="summary-row"><span>Cliente</span><strong id="successCustomer">—</strong></div>
           <div class="summary-row"><span>WhatsApp</span><strong id="successWhatsapp">—</strong></div>
-          <div class="summary-row"><span>Sabor</span><strong id="successFlavor">—</strong></div>
-          <div class="summary-row"><span>Tamanho</span><strong id="successSize">—</strong></div>
-          <div class="summary-row"><span>Valor</span><strong id="successPrice">—</strong></div>
+          <div class="summary-row"><span>Bolos</span><strong id="successQuantity">—</strong></div>
+          <div class="summary-row"><span>Itens</span><div id="successItems" class="compact-item-list"></div></div>
+          <div class="summary-row"><span>Total</span><strong id="successPrice">—</strong></div>
           <div class="summary-row"><span>Entrega</span><strong id="successDelivery">—</strong></div>
           <div class="summary-row"><span>Forma de pagamento</span><strong id="successPayment">—</strong></div>
           <div class="summary-row"><span>Status</span><strong id="successStatus" class="success-status">Aguardando pagamento</strong></div>
@@ -1481,13 +1554,14 @@
         orderWindow: null
       };
 
-      const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzhuaqON-iCR4mq7UnnrBy4-bi93InS5jxd4PRIMPdRF3qrqQuoJ-9FVMuaGUMDrvhc/exec';
+      const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxGo2UNf4RqgkJ9vAeWu0plD9RrjltOv2lJSSIWiVf6-SprYIGtapMgevX0MWm5aVd7/exec';
       const ORDERS_SPREADSHEET_URL = '';
       const params = new URLSearchParams(window.location.search);
       const isPublic = params.get('public') === '1';
       let config = normalizeConfig(DEFAULT_CONFIG);
       const appState = { config, orders: [] };
       let selectedSizeId = '';
+      let orderItems = [];
       let isSubmitting = false;
       let pendingOrderAttempt = null;
       let isOrdersOpen = false;
@@ -1921,14 +1995,107 @@
         });
       }
 
+      function normalizeClientOrderItems(items) {
+        const grouped = new Map();
+        (Array.isArray(items) ? items : []).forEach(item => {
+          const flavor = String(item?.flavor || '').trim();
+          const sizeId = String(item?.sizeId || '').trim();
+          const quantity = Number(item?.quantity);
+          if (!flavor || !sizeId || !Number.isInteger(quantity) || quantity < 1) return;
+          const key = `${flavor}\u0000${sizeId}`;
+          const current = grouped.get(key) || { flavor, sizeId, quantity: 0 };
+          current.quantity += quantity;
+          grouped.set(key, current);
+        });
+        return [...grouped.values()];
+      }
+
+      function addSelectedOrderItem() {
+        clearFieldErrors();
+        const flavor = $('flavorSelect').value;
+        const size = config.sizes.find(item => item.id === selectedSizeId && item.active !== false);
+        const quantity = Number($('itemQuantity').value);
+        if (!flavor) return showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
+        if (!size) return showFieldError('sizeChoices', 'Escolha o tamanho do bolo.');
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+          return showFieldError('itemQuantity', 'Informe uma quantidade entre 1 e 20.');
+        }
+        const existing = orderItems.find(item => item.flavor === flavor && item.sizeId === size.id);
+        if (existing) {
+          if (existing.quantity + quantity > 20) return showFieldError('itemQuantity', 'A quantidade deste item não pode passar de 20.');
+          existing.quantity += quantity;
+        } else {
+          if (orderItems.length >= 12) return showFieldError('orderItems', 'A encomenda aceita até 12 itens diferentes.');
+          orderItems.push({ flavor, sizeId: size.id, quantity });
+        }
+        $('itemQuantity').value = '1';
+        renderOrderItems();
+        updateSummary();
+        showToast(existing ? 'Quantidade atualizada' : 'Bolo adicionado');
+      }
+
+      function updateOrderItemQuantity(index, value) {
+        const quantity = Number(value);
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) return false;
+        if (!orderItems[index]) return false;
+        orderItems[index].quantity = quantity;
+        renderOrderItems();
+        updateSummary();
+        return true;
+      }
+
+      function removeOrderItem(index) {
+        orderItems.splice(index, 1);
+        renderOrderItems();
+        updateSummary();
+      }
+
+      function itemDetails(item) {
+        const size = config.sizes.find(option => option.id === item.sizeId);
+        const unitPrice = Number(size?.price || item.unitPrice || 0);
+        return {
+          ...item,
+          size: item.size || size?.name || 'Tamanho indisponível',
+          unitPrice,
+          subtotal: Number.isFinite(Number(item.subtotal)) ? Number(item.subtotal) : unitPrice * Number(item.quantity || 0)
+        };
+      }
+
+      function renderOrderItems() {
+        const container = $('orderItems');
+        if (!orderItems.length) {
+          container.innerHTML = '<div class="order-items-empty">Nenhum bolo adicionado. Escolha sabor, tamanho e quantidade acima.</div>';
+          return;
+        }
+        container.innerHTML = orderItems.map((raw, index) => {
+          const item = itemDetails(raw);
+          return `<div class="order-item" data-order-item="${index}">
+            <div class="order-item-copy"><strong>${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</strong><small>${brl(item.unitPrice)} cada · subtotal ${brl(item.subtotal)}</small></div>
+            <input class="control order-item-quantity" type="number" min="1" max="20" step="1" value="${item.quantity}" data-item-quantity="${index}" aria-label="Quantidade de ${escapeHtml(item.flavor)} ${escapeHtml(item.size)}">
+            <button class="danger-btn order-item-remove" type="button" data-remove-item="${index}">Remover</button>
+          </div>`;
+        }).join('');
+        qsa('[data-item-quantity]', container).forEach(input => input.addEventListener('change', () => {
+          if (!updateOrderItemQuantity(Number(input.dataset.itemQuantity), input.value)) {
+            input.value = String(orderItems[Number(input.dataset.itemQuantity)]?.quantity || 1);
+            setMessage($('orderMessage'), 'error', 'A quantidade deve ser um número inteiro entre 1 e 20.');
+          }
+        }));
+        qsa('[data-remove-item]', container).forEach(button => button.addEventListener('click', () => removeOrderItem(Number(button.dataset.removeItem))));
+      }
+
       function updateSummary() {
-        const size = config.sizes.find(item => item.id === selectedSizeId);
-        $('summaryFlavor').textContent = $('flavorSelect').value || '—';
-        $('summarySize').textContent = size ? size.name : '—';
+        const detailedItems = orderItems.map(itemDetails);
+        const totalQuantity = detailedItems.reduce((sum, item) => sum + item.quantity, 0);
+        const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        $('summaryQuantity').textContent = String(totalQuantity);
+        $('summaryItems').innerHTML = detailedItems.length
+          ? detailedItems.map(item => `<div class="compact-item"><span>${item.quantity}× ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><strong>${brl(item.subtotal)}</strong></div>`).join('')
+          : '<span>Adicione seu primeiro bolo</span>';
         $('summaryDate').textContent = formatDate($('orderDate').value);
         const payment = config.payments.find(item => item.id === $('paymentSelect').value);
         $('summaryPayment').textContent = payment?.name || '—';
-        $('summaryTotal').textContent = brl(size?.price || 0);
+        $('summaryTotal').textContent = brl(total);
         updatePaymentPreview();
       }
 
@@ -1936,13 +2103,21 @@
         return;
       }
 
-      function renderPaymentDetails(container, payment, size) {
+      function renderPaymentDetails(container, payment, items) {
         if (!payment) {
           container.innerHTML = '<p>Os dados de pagamento ainda não foram configurados.</p>';
           return;
         }
 
-        const paymentLink = safeExternalUrl(resolvePaymentLinkForSize(payment, size?.id));
+        const detailedItems = (Array.isArray(items) ? items : []).map(itemDetails);
+        const total = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        const isSingleUnit = detailedItems.length === 1 && detailedItems[0].quantity === 1;
+        if (!isSingleUnit) {
+          container.innerHTML = `<h4>${escapeHtml(payment.name || 'Pagamento')}</h4><p>O valor integral desta encomenda é <strong>${brl(total)}</strong>. Como os links disponíveis são vinculados a tamanhos individuais, a Primeira Fornada enviará as instruções seguras de pagamento e confirmará a reserva manualmente.</p>`;
+          return;
+        }
+
+        const paymentLink = safeExternalUrl(resolvePaymentLinkForSize(payment, detailedItems[0].sizeId));
         if (!paymentLink) {
           container.innerHTML = payment.type === 'other'
             ? '<p>Esta forma de pagamento será combinada diretamente após o pedido.</p>'
@@ -1972,22 +2147,26 @@
       }
 
       function renderOrderSuccess(order, orderNumber) {
-        const size = config.sizes.find(item => item.id === order.sizeId);
+        const items = Array.isArray(order.items) && order.items.length
+          ? order.items.map(itemDetails)
+          : [{ flavor: order.flavor, sizeId: order.sizeId, size: order.size, quantity: 1, unitPrice: Number(order.price || 0), subtotal: Number(order.price || 0) }];
+        const totalQuantity = Number(order.totalQuantity || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+        const total = Number.isFinite(Number(order.total)) ? Number(order.total) : Number(order.price || 0);
         const payment = config.payments.find(item => item.id === $('paymentSelect').value || item.name === order.payment);
         $('orderLayout').classList.add('hidden');
         $('orderSuccessView').classList.add('show');
         $('successOrderNumber').textContent = `Nº do pedido: ${orderNumber || 'aguardando identificação'}`;
         $('successCustomer').textContent = order.customerName;
         $('successWhatsapp').textContent = order.whatsapp;
-        $('successFlavor').textContent = order.flavor;
-        $('successSize').textContent = order.size || size?.name || '—';
-        $('successPrice').textContent = Number.isFinite(Number(order.price)) ? brl(order.price) : '—';
+        $('successQuantity').textContent = `${totalQuantity} ${totalQuantity === 1 ? 'bolo' : 'bolos'}`;
+        $('successItems').innerHTML = items.map(item => `<div class="compact-item"><span>${item.quantity}× ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><strong>${brl(item.unitPrice)} cada · ${brl(item.subtotal)}</strong></div>`).join('');
+        $('successPrice').textContent = brl(total);
         $('successDelivery').textContent = formatDate(order.deliveryDate || order.date);
         $('successPayment').textContent = order.payment || payment?.name || '—';
         $('successStatus').textContent = order.status || DEFAULT_ORDER_STATUSES[0];
         const details = $('successPaymentDetails');
         details.innerHTML = `<h3>Dados para pagamento</h3>`;
-        renderPaymentDetails(details, payment, size);
+        renderPaymentDetails(details, payment, items);
         const businessPhone = normalizedPhoneDigits(config.businessWhatsapp || config.commercialWhatsapp || '');
         const whatsappButton = $('businessWhatsappBtn');
         whatsappButton.classList.toggle('hidden', !businessPhone);
@@ -2003,6 +2182,7 @@
       function startAnotherOrder() {
         $('orderForm').reset();
         selectedSizeId = '';
+        orderItems = [];
         pendingOrderAttempt = null;
         clearMessage($('orderMessage'));
         clearFieldErrors();
@@ -2011,6 +2191,7 @@
         renderFlavorOptions();
         renderPaymentOptions();
         renderSizeChoices();
+        renderOrderItems();
         applyPublicAvailability();
         updateSummary();
         $('customerName').focus();
@@ -2049,6 +2230,7 @@
         $('deadlineSummary').textContent = `O pedido será registrado como aguardando pagamento. A reserva será confirmada manualmente após o pagamento, até ${deadlineText}.`;
         $('successDeadlineNote').textContent = `A reserva será confirmada manualmente após a conferência do pagamento, até ${deadlineText}.`;
         qsa('#orderForm input, #orderForm select, #orderForm textarea, #submitOrderBtn').forEach(element => element.disabled = !open);
+        $('addOrderItemBtn').disabled = !open;
         $('orderDate').value = toISODateLocal(delivery);
         if (!open) $('submitOrderBtn').disabled = true;
       }
@@ -2065,9 +2247,7 @@
         const phoneDigits = $('customerPhone').value.replace(/\D/g, '');
         const date = $('orderDate').value;
         const time = $('pickupTime').value;
-        const flavor = $('flavorSelect').value;
         const payment = $('paymentSelect').value;
-        const size = config.sizes.find(item => item.id === selectedSizeId);
 
         if (!isOrdersOpenToday()) return { message: 'Os pedidos estão encerrados no momento.' };
         if (!name) return { message: 'Informe seu nome.', field: 'customerName' };
@@ -2075,8 +2255,8 @@
         if (!/^\d{10,11}$/.test(phoneDigits)) return { message: 'Informe um WhatsApp válido com DDD.', field: 'customerPhone' };
         if (!date) return { message: 'Escolha a data desejada.', field: 'orderDate' };
         if (!time) return { message: 'Escolha o horário preferido.', field: 'pickupTime' };
-        if (!flavor) return { message: 'Escolha um sabor.', field: 'flavorSelect' };
-        if (!size) return { message: 'Escolha o tamanho do bolo.', field: 'sizeChoices' };
+        if (!orderItems.length) return { message: 'Adicione pelo menos um bolo à encomenda.', field: 'orderItems' };
+        if (orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) > 50) return { message: 'A encomenda aceita até 50 bolos.', field: 'orderItems' };
         if (!payment) return { message: 'Escolha a forma de pagamento.', field: 'paymentSelect' };
         if ($('notes').value.trim().length > 500) return { message: 'As observações devem ter no máximo 500 caracteres.', field: 'notes' };
         return null;
@@ -2116,7 +2296,6 @@
       }
 
       function makeOrderPayload() {
-        const size = config.sizes.find(item => item.id === selectedSizeId);
         const payment = config.payments.find(item => item.id === $('paymentSelect').value);
         return {
           action: 'createOrder',
@@ -2124,8 +2303,7 @@
           whatsapp: $('customerPhone').value.trim(),
           date: $('orderDate').value,
           time: $('pickupTime').value,
-          flavor: $('flavorSelect').value,
-          sizeId: size?.id || '',
+          items: orderItems.map(item => ({ flavor: item.flavor, sizeId: item.sizeId, quantity: item.quantity })),
           payment: payment?.name || '',
           notes: $('notes').value.trim(),
           source: 'site',
@@ -2221,6 +2399,7 @@
         renderFlavorOptions();
         renderPaymentOptions();
         renderSizeChoices();
+        renderOrderItems();
         updateSummary();
         applyPublicAvailability();
       }
@@ -2635,10 +2814,33 @@
         return String(order.deliveryDate || order.date || '').slice(0, 10);
       }
 
+      function orderDisplayItems(order) {
+        if (Array.isArray(order.items) && order.items.length) return order.items.map(itemDetails);
+        return [{
+          flavor: order.flavor || 'Item legado', sizeId: order.sizeId || '', size: order.size || '—',
+          quantity: 1, unitPrice: Number(order.price || 0), subtotal: Number(order.price || 0)
+        }];
+      }
+
+      function orderTotalQuantity(order) {
+        return Number(order.totalQuantity || 0) || orderDisplayItems(order).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      }
+
+      function orderTotal(order) {
+        return Number.isFinite(Number(order.total)) ? Number(order.total) : Number(order.price || 0);
+      }
+
+      function renderAdminOrderItems(order) {
+        return `<div class="admin-item-list">${orderDisplayItems(order).map(item =>
+          `<div class="admin-item-line"><span><strong>${item.quantity}×</strong> ${escapeHtml(item.flavor)} · ${escapeHtml(item.size)}</span><small>${brl(item.subtotal)}</small></div>`
+        ).join('')}<small>${orderTotalQuantity(order)} ${orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos'} no total</small></div>`;
+      }
+
       function filterAndSortOrders(orders = appState.orders, state = orderViewState) {
         const query = normalizeSearchText(state.search).trim();
         const filtered = orders.filter(order => {
-          const searchable = normalizeSearchText([order.id, order.customerName, order.whatsapp].join(' '));
+          const itemSearch = orderDisplayItems(order).map(item => `${item.flavor} ${item.size}`).join(' ');
+          const searchable = normalizeSearchText([order.id, order.customerName, order.whatsapp, itemSearch].join(' '));
           if (query && !searchable.includes(query)) return false;
           if (state.status && String(order.status || '') !== state.status) return false;
           if (state.deliveryDate && orderDeliveryDate(order) !== state.deliveryDate) return false;
@@ -2732,9 +2934,9 @@
                 ${orders.map(order => `
                   <tr class="${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
                     <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><small>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}<br>Recebido ${escapeHtml(formatCreatedAt(order.createdAt))}</small></td>
-                    <td class="order-main-cell"><strong>${escapeHtml(order.flavor || '—')}</strong><small>${escapeHtml(order.size || '—')} · ${escapeHtml(order.description || '')}</small></td>
+                    <td class="order-main-cell">${renderAdminOrderItems(order)}</td>
                     <td class="order-main-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small></td>
-                    <td class="order-main-cell"><strong>${escapeHtml(brl(order.price))}</strong><small>${escapeHtml(order.payment || '—')}</small></td>
+                    <td class="order-main-cell"><strong>${escapeHtml(brl(orderTotal(order)))}</strong><small>${escapeHtml(order.payment || '—')}</small></td>
                     <td class="order-note-preview">${escapeHtml(order.notes || 'Sem observações')}</td>
                     <td class="order-status-cell">
                       <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
@@ -2753,8 +2955,9 @@
                   <div><span class="order-id">#${escapeHtml(order.id || '—')}</span><h3>${escapeHtml(order.customerName || 'Cliente não informado')}</h3></div>
                   <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                 </div>
-                <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${escapeHtml(order.flavor || '—')} · ${escapeHtml(order.size || '—')}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(order.price))}</strong></div>
+                <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${orderTotalQuantity(order)} ${orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos'}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(orderTotal(order)))}</strong></div>
                 <details class="order-details"><summary>Ver detalhes</summary><div class="order-details-grid">
+                  <div><span>Itens</span>${renderAdminOrderItems(order)}</div>
                   <div><span>WhatsApp</span>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</div>
                   <div><span>Pagamento</span>${escapeHtml(order.payment || '—')}</div>
                   <div><span>Pedido recebido</span>${escapeHtml(formatCreatedAt(order.createdAt))}</div>
@@ -2793,6 +2996,7 @@
       $('endAdminSessionBtn').addEventListener('click', endAdminAccess);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
       ['flavorSelect', 'orderDate', 'paymentSelect'].forEach(id => $(id).addEventListener('change', updateSummary));
+      $('addOrderItemBtn').addEventListener('click', addSelectedOrderItem);
 
       $('copyPublicLinkBtn').addEventListener('click', copyPublicUrl);
 

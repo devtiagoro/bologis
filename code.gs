@@ -5,7 +5,8 @@ const PF = {
     sizes: 'Tamanhos',
     payments: 'Pagamentos',
     availability: 'Disponibilidade',
-    orders: 'Pedidos'
+    orders: 'Pedidos',
+    orderItems: 'PedidoItens'
   },
   headers: {
     Configuracoes: ['Chave', 'Valor'],
@@ -16,7 +17,11 @@ const PF = {
     Pedidos: [
       'Pedido ID', 'Criado em', 'Cliente', 'WhatsApp', 'Data desejada', 'Horário',
       'Sabor', 'Tamanho ID', 'Tamanho', 'Descrição/Porções', 'Valor', 'Pagamento',
-      'Observações', 'Status', 'Origem'
+      'Observações', 'Status', 'Origem', 'Quantidade total', 'Assinatura do pedido', 'Persistência'
+    ],
+    PedidoItens: [
+      'Pedido ID', 'Item', 'Sabor', 'Tamanho ID', 'Tamanho', 'Quantidade',
+      'Preço unitário', 'Subtotal'
     ]
   }
 };
@@ -41,6 +46,9 @@ const PF_ORDER = {
   maxNotesLength: 500,
   maxSourceLength: 40,
   maxIdempotencyKeyLength: 128,
+  maxDistinctItems: 12,
+  maxQuantityPerItem: 20,
+  maxTotalQuantity: 50,
   rateGlobalKey: 'order-attempts:global',
   rateKeyPrefix: 'order-attempts:key:',
   maxGlobalAttemptsPerMinute: 80,
@@ -381,6 +389,12 @@ function setupProject() {
     ss,
     PF.sheets.orders,
     PF.headers.Pedidos
+  );
+
+  ensureSheet_(
+    ss,
+    PF.sheets.orderItems,
+    PF.headers.PedidoItens
   );
 
 
@@ -1575,8 +1589,6 @@ function createOrder_(body) {
 
   const customerName = orderText_(body, ['customerName', 'name', 'cliente'], 'nome', PF_ORDER.maxNameLength, true);
   const whatsapp = orderText_(body, ['whatsapp', 'phone'], 'WhatsApp', PF_ORDER.maxWhatsappLength, true);
-  const flavor = orderText_(body, ['flavor'], 'sabor', 120, true);
-  const sizeId = orderText_(body, ['sizeId'], 'tamanho', 80, true);
   const payment = orderText_(body, ['payment'], 'forma de pagamento', 120, true);
   const time = orderText_(body, ['time'], 'horário', 5, true);
   const notes = orderText_(body, ['notes', 'observations'], 'observações', PF_ORDER.maxNotesLength, false);
@@ -1599,25 +1611,12 @@ function createOrder_(body) {
     throw apiError_('INVALID_DATE', 'Informe uma data válida.');
   }
 
-  const sheet = getSpreadsheet_().getSheetByName(PF.sheets.orders);
-  const orderId = makeIdempotentOrderId_(idempotencyKey);
-  const duplicateLock = LockService.getScriptLock();
-  duplicateLock.waitLock(10000);
-  try {
-    const existingRow = findOrderRowById_(sheet, orderId);
-    if (existingRow) return orderResponseFromRow_(existingRow, PF_ORDER.timezone, true);
-  } finally {
-    duplicateLock.releaseLock();
-  }
-
   const config = getConfig_();
   const now = currentBusinessDate_();
   const timezone = PF_ORDER.timezone;
   const orderWindow = getOrderWindow_(config, now);
-  if (!orderWindow.open) throw apiError_(orderWindow.code, orderWindow.message);
-  if (!config.flavors.includes(flavor)) {
-    throw apiError_('INVALID_FLAVOR', 'O sabor selecionado não está disponível.');
-  }
+
+  const items = normalizeOrderItems_(body.items, config);
 
   const paymentOption = config.payments.find(item =>
     (String(item.id) === payment || String(item.name) === payment) && item.active !== false
@@ -1626,22 +1625,50 @@ function createOrder_(body) {
     throw apiError_('INVALID_PAYMENT', 'A forma de pagamento selecionada não está disponível.');
   }
 
-  const size = config.sizes.find(item => String(item.id) === sizeId && item.active !== false);
-  if (!size) throw apiError_('INVALID_SIZE', 'O tamanho selecionado não está disponível.');
-  const numericPrice = Number(size.price);
-  if (!isFinite(numericPrice) || numericPrice < 0) {
-    throw apiError_('INVALID_CATALOG', 'Não foi possível calcular o valor deste pedido.');
-  }
+  const total = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  const fingerprint = orderFingerprint_({
+    customerName, whatsapp, requestedDate, time, payment: paymentOption.id || paymentOption.name,
+    notes, source, items
+  });
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(PF.sheets.orders);
+  const itemSheet = ss.getSheetByName(PF.sheets.orderItems);
+  if (!itemSheet) throw apiError_('ORDER_ITEMS_NOT_CONFIGURED', 'Execute setupProject() para preparar o registro de itens.');
+  const orderId = makeIdempotentOrderId_(idempotencyKey);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
 
   try {
-    const existingRow = findOrderRowById_(sheet, orderId);
-    if (existingRow) return orderResponseFromRow_(existingRow, timezone, true);
+    const existing = findOrderRecordById_(sheet, orderId);
+    if (existing) {
+      const existingFingerprint = String(existing.row[16] || '');
+      if (existingFingerprint && !constantTimeEqual_(existingFingerprint, fingerprint)) {
+        throw apiError_('IDEMPOTENCY_CONFLICT', 'Esta tentativa já foi usada com dados diferentes. Atualize a página e envie novamente.');
+      }
+      const existingItems = getOrderItemsById_(itemSheet, orderId);
+      if (String(existing.row[17] || '') === 'pending') {
+        const expectedCount = Number(existing.row[15] || 0);
+        const persistedCount = existingItems.reduce((sum, item) => sum + item.quantity, 0);
+        if (expectedCount !== persistedCount || !existingItems.length) {
+          removeOrderPersistence_(sheet, itemSheet, existing.rowNumber, orderId);
+        } else {
+          sheet.getRange(existing.rowNumber, 18).setValue('committed');
+          existing.row[17] = 'committed';
+          return orderResponseFromRow_(existing.row, timezone, true, existingItems);
+        }
+      } else {
+        return orderResponseFromRow_(existing.row, timezone, true, existingItems);
+      }
+    }
 
+    if (!orderWindow.open) throw apiError_(orderWindow.code, orderWindow.message);
     enforceOrderRateLimit_(idempotencyKey);
     const deliveryDate = orderWindow.deliveryDate;
+    const firstItem = items[0];
+    const flavorSummary = items.map(item => item.flavor + ' × ' + item.quantity).join('; ');
+    const sizeSummary = items.map(item => item.size + ' × ' + item.quantity).join('; ');
     const row = [
       orderId,
       now,
@@ -1649,21 +1676,113 @@ function createOrder_(body) {
       sheetSafeText_(whatsapp),
       deliveryDate,
       time,
-      sheetSafeText_(flavor),
-      sheetSafeText_(String(size.id)),
-      sheetSafeText_(String(size.name || '')),
-      sheetSafeText_(String(size.description || '')),
-      numericPrice,
+      sheetSafeText_(flavorSummary),
+      items.length === 1 ? sheetSafeText_(firstItem.sizeId) : '',
+      sheetSafeText_(sizeSummary),
+      sheetSafeText_(totalQuantity + (totalQuantity === 1 ? ' bolo' : ' bolos') + ' · ' + items.length + (items.length === 1 ? ' item' : ' itens')),
+      total,
       sheetSafeText_(String(paymentOption.name || '')),
       sheetSafeText_(notes),
       PF_ORDER.initialStatus,
-      sheetSafeText_(source)
+      sheetSafeText_(source),
+      totalQuantity,
+      fingerprint,
+      'pending'
     ];
-    sheet.appendRow(row);
-    return orderResponseFromRow_(row, timezone, false);
+    let headerRowNumber = 0;
+    let itemStartRow = 0;
+    try {
+      sheet.appendRow(row);
+      headerRowNumber = sheet.getLastRow();
+      itemStartRow = itemSheet.getLastRow() + 1;
+      const itemRows = items.map((item, index) => [
+        orderId, index + 1, sheetSafeText_(item.flavor), sheetSafeText_(item.sizeId),
+        sheetSafeText_(item.size), item.quantity, item.unitPrice, item.subtotal
+      ]);
+      itemSheet.getRange(itemStartRow, 1, itemRows.length, PF.headers.PedidoItens.length).setValues(itemRows);
+      sheet.getRange(headerRowNumber, 18).setValue('committed');
+      row[17] = 'committed';
+      return orderResponseFromRow_(row, timezone, false, items);
+    } catch (persistenceError) {
+      try {
+        if (itemStartRow && itemSheet.getLastRow() >= itemStartRow) {
+          itemSheet.deleteRows(itemStartRow, itemSheet.getLastRow() - itemStartRow + 1);
+        }
+        if (headerRowNumber && sheet.getLastRow() >= headerRowNumber) sheet.deleteRow(headerRowNumber);
+      } catch (_) {
+        throw apiError_('ORDER_RECOVERY_FAILED', 'O pedido não foi concluído e requer conferência administrativa antes de um novo envio.');
+      }
+      throw apiError_('ORDER_PERSISTENCE_FAILED', 'O pedido não foi concluído. Nenhum item foi confirmado; tente novamente.');
+    }
   } finally {
     lock.releaseLock();
   }
+}
+
+function normalizeOrderItems_(rawItems, config) {
+  if (!Array.isArray(rawItems) || !rawItems.length) {
+    throw apiError_('ORDER_ITEMS_REQUIRED', 'Adicione pelo menos um bolo à encomenda.');
+  }
+  if (rawItems.length > PF_ORDER.maxDistinctItems) {
+    throw apiError_('TOO_MANY_ORDER_ITEMS', 'A encomenda excede o limite de itens diferentes.');
+  }
+  const groups = {};
+  rawItems.forEach(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw apiError_('INVALID_ORDER_ITEM', 'Um item da encomenda não possui formato válido.');
+    }
+    if (typeof raw.flavor !== 'string' || typeof raw.sizeId !== 'string') {
+      throw apiError_('INVALID_ORDER_ITEM', 'Sabor e tamanho devem ser informados em cada item.');
+    }
+    const flavor = clean_(raw.flavor);
+    const sizeId = clean_(raw.sizeId);
+    const quantity = Number(raw.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > PF_ORDER.maxQuantityPerItem) {
+      throw apiError_('INVALID_ITEM_QUANTITY', 'A quantidade de cada item deve ser um número inteiro entre 1 e ' + PF_ORDER.maxQuantityPerItem + '.');
+    }
+    if (!config.flavors.includes(flavor)) {
+      throw apiError_('INVALID_FLAVOR', 'Um sabor selecionado não está disponível.');
+    }
+    const size = config.sizes.find(item => String(item.id) === sizeId && item.active !== false);
+    if (!size) throw apiError_('INVALID_SIZE', 'Um tamanho selecionado não está disponível.');
+    const unitPrice = Number(size.price);
+    if (!isFinite(unitPrice) || unitPrice < 0) {
+      throw apiError_('INVALID_CATALOG', 'Não foi possível calcular o valor desta encomenda.');
+    }
+    const key = flavor + '\u0000' + sizeId;
+    if (!groups[key]) {
+      groups[key] = { flavor, sizeId, size: String(size.name || ''), description: String(size.description || ''), quantity: 0, unitPrice };
+    }
+    groups[key].quantity += quantity;
+    if (groups[key].quantity > PF_ORDER.maxQuantityPerItem) {
+      throw apiError_('INVALID_ITEM_QUANTITY', 'A quantidade agrupada de um item excede o limite de ' + PF_ORDER.maxQuantityPerItem + '.');
+    }
+  });
+  const items = Object.keys(groups).map(key => {
+    const item = groups[key];
+    item.subtotal = Number((item.unitPrice * item.quantity).toFixed(2));
+    return item;
+  });
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  if (totalQuantity > PF_ORDER.maxTotalQuantity) {
+    throw apiError_('ORDER_QUANTITY_LIMIT', 'A encomenda excede o limite total de ' + PF_ORDER.maxTotalQuantity + ' bolos.');
+  }
+  return items;
+}
+
+function orderFingerprint_(order) {
+  const canonical = {
+    customerName: order.customerName,
+    whatsapp: order.whatsapp.replace(/\D/g, ''),
+    requestedDate: order.requestedDate,
+    time: order.time,
+    payment: String(order.payment || ''),
+    notes: order.notes,
+    source: order.source,
+    items: order.items.map(item => ({ flavor: item.flavor, sizeId: item.sizeId, quantity: item.quantity }))
+      .sort((left, right) => (left.flavor + '\u0000' + left.sizeId).localeCompare(right.flavor + '\u0000' + right.sizeId))
+  };
+  return hashCredential_(JSON.stringify(canonical));
 }
 
 function orderText_(body, keys, label, maxLength, required) {
@@ -1698,14 +1817,52 @@ function makeIdempotentOrderId_(key) {
   return 'PF-I-' + hashCredential_(key).replace(/[^A-Za-z0-9]/g, '').slice(0, 26).toUpperCase();
 }
 
-function findOrderRowById_(sheet, orderId) {
+function findOrderRecordById_(sheet, orderId) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
   const rows = sheet.getRange(2, 1, lastRow - 1, PF.headers.Pedidos.length).getValues();
   for (let index = 0; index < rows.length; index += 1) {
-    if (String(rows[index][0] || '') === orderId) return rows[index];
+    if (String(rows[index][0] || '') === orderId) return { row: rows[index], rowNumber: index + 2 };
   }
   return null;
+}
+
+function findOrderRowById_(sheet, orderId) {
+  const record = findOrderRecordById_(sheet, orderId);
+  return record && record.row;
+}
+
+function getOrderItemsMap_(sheet) {
+  const itemsByOrder = {};
+  if (!sheet || sheet.getLastRow() < 2) return itemsByOrder;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, PF.headers.PedidoItens.length).getValues()
+    .sort((left, right) => Number(left[1] || 0) - Number(right[1] || 0))
+    .forEach(row => {
+      const orderId = String(row[0] || '');
+      if (!orderId) return;
+      if (!itemsByOrder[orderId]) itemsByOrder[orderId] = [];
+      itemsByOrder[orderId].push({
+      flavor: readableSheetText_(row[2]),
+      sizeId: readableSheetText_(row[3]),
+      size: readableSheetText_(row[4]),
+      quantity: Number(row[5] || 0),
+      unitPrice: Number(row[6] || 0),
+      subtotal: Number(row[7] || 0)
+      });
+    });
+  return itemsByOrder;
+}
+
+function getOrderItemsById_(sheet, orderId) {
+  return getOrderItemsMap_(sheet)[String(orderId)] || [];
+}
+
+function removeOrderPersistence_(orderSheet, itemSheet, orderRowNumber, orderId) {
+  for (let rowNumber = itemSheet.getLastRow(); rowNumber >= 2; rowNumber -= 1) {
+    const value = itemSheet.getRange(rowNumber, 1).getValues()[0][0];
+    if (String(value || '') === String(orderId)) itemSheet.deleteRow(rowNumber);
+  }
+  orderSheet.deleteRow(orderRowNumber);
 }
 
 function sheetSafeText_(value) {
@@ -1718,11 +1875,23 @@ function readableSheetText_(value) {
   return /^'[\s]*[=+\-@]/.test(text) ? text.slice(1) : text;
 }
 
-function orderResponseFromRow_(row, timezone, duplicate) {
+function orderResponseFromRow_(row, timezone, duplicate, persistedItems) {
   const createdAt = row[1] instanceof Date ? row[1] : new Date(row[1]);
   const deliveryDate = row[4] instanceof Date ? row[4] : new Date(row[4]);
   const validCreatedAt = !isNaN(createdAt.getTime());
   const validDeliveryDate = !isNaN(deliveryDate.getTime());
+  const legacyItem = {
+    flavor: readableSheetText_(row[6]),
+    sizeId: readableSheetText_(row[7]),
+    size: readableSheetText_(row[8]),
+    description: readableSheetText_(row[9]),
+    quantity: 1,
+    unitPrice: Number(row[10] || 0),
+    subtotal: Number(row[10] || 0)
+  };
+  const items = Array.isArray(persistedItems) && persistedItems.length ? persistedItems : (legacyItem.flavor ? [legacyItem] : []);
+  const totalQuantity = Number(row[15] || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const total = Number(row[10] || 0);
   return {
     id: String(row[0] || ''),
     createdAt: validCreatedAt ? createdAt.toISOString() : String(row[1] || ''),
@@ -1735,7 +1904,11 @@ function orderResponseFromRow_(row, timezone, duplicate) {
     sizeId: readableSheetText_(row[7]),
     size: readableSheetText_(row[8]),
     description: readableSheetText_(row[9]),
-    price: Number(row[10] || 0),
+    price: total,
+    total,
+    totalQuantity,
+    itemCount: items.length,
+    items,
     payment: readableSheetText_(row[11]),
     notes: readableSheetText_(row[12]),
     status: String(row[13] || ''),
@@ -1756,104 +1929,17 @@ function enforceOrderRateLimit_(idempotencyKey) {
 }
 
 function getOrders_() {
-
-  const ss =
-    getSpreadsheet_();
-
-
-  const sheet =
-    ss.getSheetByName(
-      PF.sheets.orders
-    );
-
-
-  const rows =
-    dataRows_(sheet);
-
-
-  const tz =
-    ss.getSpreadsheetTimeZone();
-
-
-
-  return rows
-    .reverse()
-    .map(
-      row => ({
-
-        id:
-          String(
-            row[0] || ''
-          ),
-
-        createdAt:
-          row[1] instanceof Date
-
-          ? row[1].toISOString()
-
-          : String(
-              row[1] || ''
-            ),
-
-        customerName:
-          readableSheetText_(row[2]),
-
-        whatsapp:
-          readableSheetText_(row[3]),
-
-        date:
-          row[4] instanceof Date
-
-          ? Utilities.formatDate(
-              row[4],
-              tz,
-              'yyyy-MM-dd'
-            )
-
-          : String(
-              row[4] || ''
-            ),
-
-        time:
-          String(
-            row[5] || ''
-          ),
-
-        flavor:
-          readableSheetText_(row[6]),
-
-        sizeId:
-          readableSheetText_(row[7]),
-
-        size:
-          readableSheetText_(row[8]),
-
-        description:
-          readableSheetText_(row[9]),
-
-        price:
-          Number(
-            row[10] || 0
-          ),
-
-        payment:
-          readableSheetText_(row[11]),
-
-        notes:
-          readableSheetText_(row[12]),
-
-        status:
-          String(
-            row[13]
-            || PF_ORDER.initialStatus
-          ),
-
-        source:
-          readableSheetText_(row[14])
-
-      })
-    );
-
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(PF.sheets.orders);
+  const itemSheet = ss.getSheetByName(PF.sheets.orderItems);
+  const itemsByOrder = getOrderItemsMap_(itemSheet);
+  const tz = ss.getSpreadsheetTimeZone();
+  return dataRows_(sheet).reverse().map(row => {
+    const order = orderResponseFromRow_(row, tz, false, itemsByOrder[String(row[0] || '')] || []);
+    order.source = readableSheetText_(row[14]);
+    delete order.duplicate;
+    return order;
+  });
 }
 
 
@@ -2255,6 +2341,15 @@ function formatSheets_(ss) {
       PF.sheets.orders
     )
     .getRange('K2:K')
+    .setNumberFormat(
+      'R$ #,##0.00'
+    );
+
+  ss
+    .getSheetByName(
+      PF.sheets.orderItems
+    )
+    .getRange('G2:H')
     .setNumberFormat(
       'R$ #,##0.00'
     );

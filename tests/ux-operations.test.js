@@ -18,11 +18,21 @@ source = source.replace(
         renderSizeEditor,
         renderPaymentEditor,
         renderOrderSuccess,
+        normalizeClientOrderItems,
+        itemDetails,
+        orderDisplayItems,
+        orderTotalQuantity,
+        orderTotal,
+        renderAdminOrderItems,
+        updateOrderItemQuantity,
+        removeOrderItem,
         changeOrderStatus,
         normalizedPhoneDigits,
         setOrders(value) { appState.orders = value; },
         setOrderView(value) { Object.assign(orderViewState, value); },
         setConfig(value) { config = normalizeConfig(value); appState.config = config; },
+        setOrderItems(value) { orderItems = normalizeClientOrderItems(value); },
+        getOrderItems() { return orderItems.map(item => ({ ...item })); },
         state() { return { orders: appState.orders, orderViewState: { ...orderViewState } }; }
       };
     })();`
@@ -199,6 +209,69 @@ test('confirmação destaca número e só mostra WhatsApp comercial válido', ()
   api.renderOrderSuccess({ customerName: 'Ana', whatsapp: '', flavor: '', price: 0 }, 'PF-201');
   assert.equal(runtime.get('businessWhatsappBtn').classList.contains('hidden'), true);
   assert.match(html, /id="newOrderBtn"/);
+});
+
+test('frontend agrupa repetição do mesmo sabor e tamanho', () => {
+  const api = createRuntime().window.__uxTest;
+  const items = api.normalizeClientOrderItems([
+    { flavor: 'Chocolate', sizeId: 'm', quantity: 2 },
+    { flavor: 'Chocolate', sizeId: 'm', quantity: 3 },
+    { flavor: 'Chocolate', sizeId: 'g', quantity: 1 }
+  ]);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].quantity, 5);
+});
+
+test('frontend permite alterar quantidade e remover item', () => {
+  const api = createRuntime().window.__uxTest;
+  api.setOrderItems([
+    { flavor: 'Chocolate', sizeId: 'm', quantity: 1 },
+    { flavor: 'Cenoura', sizeId: 'g', quantity: 2 }
+  ]);
+  assert.equal(api.updateOrderItemQuantity(0, 4), true);
+  assert.equal(api.getOrderItems()[0].quantity, 4);
+  api.removeOrderItem(1);
+  assert.equal(api.getOrderItems().length, 1);
+});
+
+test('central administrativa exibe itens quantidades subtotais e total', () => {
+  const api = createRuntime().window.__uxTest;
+  const order = {
+    items: [
+      { flavor: 'Chocolate', sizeId: 'm', size: 'Médio', quantity: 2, unitPrice: 129, subtotal: 258 },
+      { flavor: 'Cenoura', sizeId: 'g', size: 'Grande', quantity: 1, unitPrice: 179, subtotal: 179 }
+    ],
+    totalQuantity: 3, total: 437
+  };
+  const markup = api.renderAdminOrderItems(order);
+  assert.match(markup, /2×/);
+  assert.match(markup, /Chocolate/);
+  assert.match(markup, /3 bolos no total/);
+  assert.equal(api.orderTotal(order), 437);
+});
+
+test('confirmação pública usa itens e total definitivos do servidor', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({
+    flavors: ['Chocolate', 'Cenoura'],
+    sizes: [{ id: 'p', name: 'Pequeno', price: 89 }, { id: 'g', name: 'Grande', price: 169 }],
+    payments: [{ id: 'pix', name: 'PIX', type: 'pix', active: true, paymentLink: 'https://pay.example/p' }],
+    businessWhatsapp: ''
+  });
+  runtime.get('paymentSelect').value = 'pix';
+  api.renderOrderSuccess({
+    customerName: 'Ana', whatsapp: '34999991111', deliveryDate: '2026-10-25', payment: 'PIX',
+    status: 'Aguardando pagamento', totalQuantity: 3, total: 347,
+    items: [
+      { flavor: 'Chocolate', sizeId: 'p', size: 'Pequeno', quantity: 2, unitPrice: 89, subtotal: 178 },
+      { flavor: 'Cenoura', sizeId: 'g', size: 'Grande', quantity: 1, unitPrice: 169, subtotal: 169 }
+    ]
+  }, 'PF-MULTI-1');
+  assert.match(runtime.get('successItems').innerHTML, /Chocolate/);
+  assert.match(runtime.get('successItems').innerHTML, /Cenoura/);
+  assert.match(runtime.get('successPrice').textContent, /347,00/);
+  assert.match(runtime.get('successPaymentDetails').innerHTML, /valor integral/);
 });
 
 (async () => {

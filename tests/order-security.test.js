@@ -10,29 +10,40 @@ function bytes(value) { return Array.from(Buffer.from(value)); }
 
 function createHarness(options = {}) {
   const rows = (options.rows || []).map(row => row.slice());
+  const itemRows = (options.itemRows || []).map(row => row.slice());
   const cache = new Map();
   let lockWaits = 0;
   let lockReleases = 0;
-  const sheet = {
-    getLastRow: () => rows.length + 1,
-    getLastColumn: () => 15,
-    appendRow: row => rows.push(row.slice()),
-    getRange(row, column, rowCount, columnCount) {
-      return {
-        getValues() {
-          return rows.slice(row - 2, row - 2 + rowCount).map(item =>
-            Array.from({ length: columnCount }, (_, index) => item[column - 1 + index] ?? '')
-          );
-        },
-        setValue(value) {
-          if (!rows[row - 2]) rows[row - 2] = [];
-          rows[row - 2][column - 1] = value;
-        }
-      };
-    }
-  };
+  function makeSheet(storage, columns, isItemSheet = false) {
+    return {
+      getLastRow: () => storage.length + 1,
+      getLastColumn: () => columns,
+      appendRow: row => storage.push(row.slice()),
+      deleteRow(row) { storage.splice(row - 2, 1); },
+      deleteRows(row, count) { storage.splice(row - 2, count); },
+      getRange(row, column, rowCount = 1, columnCount = 1) {
+        return {
+          getValues() {
+            return storage.slice(row - 2, row - 2 + rowCount).map(item =>
+              Array.from({ length: columnCount }, (_, index) => item[column - 1 + index] ?? '')
+            );
+          },
+          setValue(value) {
+            if (!storage[row - 2]) storage[row - 2] = [];
+            storage[row - 2][column - 1] = value;
+          },
+          setValues(values) {
+            if (isItemSheet && options.failItemWrite) throw new Error('ITEM_WRITE_FAILED');
+            values.forEach((valuesRow, index) => { storage[row - 2 + index] = valuesRow.slice(); });
+          }
+        };
+      }
+    };
+  }
+  const sheet = makeSheet(rows, 18);
+  const itemSheet = makeSheet(itemRows, 8, true);
   const spreadsheet = {
-    getSheetByName: () => sheet,
+    getSheetByName: name => name === 'PedidoItens' ? itemSheet : sheet,
     getSpreadsheetTimeZone: () => 'America/Sao_Paulo'
   };
   const config = options.config || {
@@ -107,7 +118,7 @@ function createHarness(options = {}) {
   function post(overrides = {}) {
     const payload = {
       action: 'createOrder', customerName: 'Cliente Ficticio', whatsapp: '(34) 99999-0000',
-      date: '2026-10-25', time: '00:00', flavor: 'Chocolate ficticio', sizeId: 'p',
+      date: '2026-10-25', time: '00:00', items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 }],
       payment: 'PIX', notes: '', source: 'site', website: '',
       idempotencyKey: 'attempt-fictitious-00000001', ...overrides
     };
@@ -115,7 +126,7 @@ function createHarness(options = {}) {
     return JSON.parse(output.text);
   }
   return {
-    context, rows, cache, config, post,
+    context, rows, itemRows, cache, config, post,
     statuses: vm.runInContext('PF_ORDER.statuses.slice()', context),
     get lockWaits() { return lockWaits; }, get lockReleases() { return lockReleases; }
   };
@@ -146,6 +157,68 @@ test('pedido valido e publico usa preco do catalogo no servidor', () => {
   assert.equal(h.rows.length, 1);
 });
 
+test('um item com quantidade maior calcula subtotal e quantidade total', () => {
+  const h = createHarness();
+  const result = h.post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 3 }] });
+  assert.equal(result.order.total, 267);
+  assert.equal(result.order.totalQuantity, 3);
+  assert.equal(result.order.items[0].subtotal, 267);
+  assert.equal(h.itemRows[0][5], 3);
+});
+
+test('dois sabores diferentes sao persistidos sob um unico pedido', () => {
+  const config = businessConfig();
+  config.flavors.push('Cenoura ficticia');
+  const h = createHarness({ config });
+  const result = h.post({ items: [
+    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 },
+    { flavor: 'Cenoura ficticia', sizeId: 'p', quantity: 2 }
+  ] });
+  assert.equal(result.order.itemCount, 2);
+  assert.equal(result.order.totalQuantity, 3);
+  assert.equal(h.rows.length, 1);
+  assert.equal(h.itemRows.length, 2);
+});
+
+test('mesmo sabor com tamanhos diferentes usa os precos corretos', () => {
+  const config = businessConfig();
+  config.sizes.push({ id: 'g', name: 'Grande', description: 'Serve 20 pessoas', price: 179 });
+  const h = createHarness({ config });
+  const result = h.post({ items: [
+    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1 },
+    { flavor: 'Chocolate ficticio', sizeId: 'g', quantity: 2 }
+  ] });
+  assert.equal(result.order.total, 447);
+  assert.deepEqual(Array.from(result.order.items, item => item.subtotal), [89, 358]);
+});
+
+test('itens repetidos sao agrupados e o preco enviado pelo cliente e ignorado', () => {
+  const h = createHarness();
+  const result = h.post({ items: [
+    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1, unitPrice: 0.01 },
+    { flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 2, subtotal: 0.03 }
+  ], total: 0.03 });
+  assert.equal(result.order.items.length, 1);
+  assert.equal(result.order.items[0].quantity, 3);
+  assert.equal(result.order.items[0].unitPrice, 89);
+  assert.equal(result.order.total, 267);
+});
+
+test('pedido sem itens e quantidades invalidas sao rejeitados', () => {
+  assert.equal(createHarness().post({ items: [] }).code, 'ORDER_ITEMS_REQUIRED');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 0 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 1.5 }] }).code, 'INVALID_ITEM_QUANTITY');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'p', quantity: 21 }] }).code, 'INVALID_ITEM_QUANTITY');
+});
+
+test('falha ao persistir itens remove o cabecalho incompleto', () => {
+  const h = createHarness({ failItemWrite: true });
+  const result = h.post();
+  assert.equal(result.code, 'ORDER_PERSISTENCE_FAILED');
+  assert.equal(h.rows.length, 0);
+  assert.equal(h.itemRows.length, 0);
+});
+
 test('nome ausente e tipo inesperado sao rejeitados', () => {
   assert.equal(createHarness().post({ customerName: '' }).code, 'REQUIRED_ORDER_FIELD');
   assert.equal(createHarness().post({ customerName: { injected: true } }).code, 'INVALID_ORDER_FIELD');
@@ -156,11 +229,11 @@ test('WhatsApp invalido e rejeitado', () => {
 });
 
 test('sabor inexistente e rejeitado', () => {
-  assert.equal(createHarness().post({ flavor: 'Sabor inventado' }).code, 'INVALID_FLAVOR');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Sabor inventado', sizeId: 'p', quantity: 1 }] }).code, 'INVALID_FLAVOR');
 });
 
 test('tamanho invalido e rejeitado', () => {
-  assert.equal(createHarness().post({ sizeId: 'xx' }).code, 'INVALID_SIZE');
+  assert.equal(createHarness().post({ items: [{ flavor: 'Chocolate ficticio', sizeId: 'xx', quantity: 1 }] }).code, 'INVALID_SIZE');
 });
 
 test('pagamento desativado e rejeitado', () => {
@@ -189,11 +262,21 @@ test('formula e neutralizada na planilha e preservada na resposta', () => {
 test('mesma chave de idempotencia retorna o pedido original sem nova linha', () => {
   const h = createHarness();
   const first = h.post();
-  const second = h.post({ customerName: 'Payload alterado' });
+  const second = h.post();
   assert.equal(first.orderId, second.orderId);
   assert.equal(second.duplicate, true);
   assert.equal(second.order.customerName, 'Cliente Ficticio');
   assert.equal(h.rows.length, 1);
+  assert.equal(h.itemRows.length, 1);
+});
+
+test('reutilizacao da chave com payload diferente e rejeitada', () => {
+  const h = createHarness();
+  assert.equal(h.post().ok, true);
+  const retry = h.post({ customerName: 'Payload alterado' });
+  assert.equal(retry.code, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(h.rows.length, 1);
+  assert.equal(h.itemRows.length, 1);
 });
 
 test('pedido sem chave de idempotencia e rejeitado sem gravacao', () => {
@@ -210,8 +293,8 @@ test('duas requisicoes serializadas pelo lock geram somente uma linha', async ()
   ]);
   assert.equal(first.orderId, second.orderId);
   assert.equal(h.rows.length, 1);
-  assert.equal(h.lockWaits, 3);
-  assert.equal(h.lockReleases, 3);
+  assert.equal(h.lockWaits, 2);
+  assert.equal(h.lockReleases, 2);
 });
 
 test('reenvio idempotente recupera pedido mesmo depois do fechamento da janela', () => {
