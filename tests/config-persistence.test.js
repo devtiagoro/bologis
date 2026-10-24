@@ -410,7 +410,8 @@ test('setupProject pode ser repetido: colunas e chaves sao acrescentadas sem sob
     h.context.ensureSheet_(h.spreadsheet, 'Pedidos', headers);
     h.context.ensureConfigDefaults_(h.spreadsheet);
   }
-  assert.equal(orders.data[0].length, 31);
+  assert.equal(orders.data[0].length, 32);
+  assert.equal(orders.data[0][31], 'Arquivado em');
   assert.equal(orders.data[0][18], 'Modalidade de recebimento');
   assert.deepEqual([...orders.data[1]], legacyRow);
   const keys = h.rows('Configuracoes').map(row => row[0]);

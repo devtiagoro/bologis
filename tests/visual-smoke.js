@@ -74,7 +74,9 @@ function classListFor(dom, id) {
 // Chrome DevTools Protocol: viewport exata (o --window-size do headless não reduz abaixo de ~500px).
 async function launchDevTools() {
   const profile = fs.mkdtempSync(path.join(tempDir, 'profile-'));
-  const child = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--remote-debugging-port=0',
+    // Headless não informa dispositivo apontador; simula mouse fino (o toque é emulado por página).
+    '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = '';
     const timer = setTimeout(() => reject(new Error('Chrome DevTools não respondeu.')), 20_000);
@@ -431,6 +433,70 @@ const DRAG_HELPERS = `(() => {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Arquivamento: prepara um pedido Concluído pelo modal e mede o botão, filtros e desarquivamento.
+const ARCHIVE_HELPERS = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  window.__calls = [];
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => { window.__calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
+  document.getElementById('ordersKanbanViewBtn').click();
+  await frames();
+  const card = id => document.querySelector('[data-kanban-card="' + id + '"]');
+  const paidId = 'PF-20260831-113122-AB3E86';
+  card(paidId).querySelector('.kanban-card-items').click();
+  await frames();
+  const select = document.getElementById('orderModalStatus');
+  select.value = 'Concluído';
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  for (let attempt = 0; attempt < 60 && card(paidId)?.classList.contains('is-saving'); attempt++) await wait(50);
+  document.getElementById('orderModalClose').click();
+  await frames();
+  // Fechar o modal devolve o foco ao card (o que já revela o botão); a medição parte sem foco.
+  document.activeElement?.blur?.();
+  window.__archive = {
+    show(id) {
+      card(id).scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const box = card(id).getBoundingClientRect();
+      const button = card(id).querySelector('[data-archive-order], [data-unarchive-order]')?.getBoundingClientRect();
+      return { card: { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height - 14) }, button: button ? { x: Math.round(button.left + button.width / 2), y: Math.round(button.top + button.height / 2), width: Math.round(button.width), height: Math.round(button.height) } : null };
+    },
+    button(id) {
+      const element = card(id)?.querySelector('.kanban-archive-btn');
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      const top = card(id).querySelector('.kanban-card-top').getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      return { opacity: Number(style.opacity), background: style.backgroundColor, label: element.getAttribute('aria-label'), overlapsChip: rect.left < card(id).querySelector('.kanban-chip').getBoundingClientRect().right && rect.top < top.bottom };
+    },
+    focusCard(id) { card(id).querySelector('.kanban-card-open').focus(); return document.activeElement === card(id).querySelector('.kanban-card-open'); },
+    filter(value) { const element = document.getElementById('orderArchiveFilter'); element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })); },
+    state(id) {
+      return {
+        column: card(id)?.closest('.kanban-column')?.dataset.kanbanColumn || '',
+        archiving: /Arquivando|Desarquivando/.test(card(id)?.textContent || ''),
+        archivedMeta: card(id)?.querySelector('.kanban-archived-meta')?.textContent || '',
+        unarchive: Boolean(card(id)?.querySelector('[data-unarchive-order]')),
+        concluded: Number(document.querySelector('.kanban-column[data-kanban-column="Concluído"] .kanban-count')?.textContent || 0),
+        total: document.querySelector('#ordersContainer .orders-total-summary strong')?.textContent || '',
+        modalOpen: document.getElementById('orderModal').open,
+        ghost: Boolean(document.querySelector('.kanban-drag-ghost')),
+        pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        calls: window.__calls.filter(call => ['archiveOrder', 'unarchiveOrder'].includes(call.action)).map(call => [call.action, call.orderId, call.expectedStatus])
+      };
+    },
+    async settle(id) { for (let attempt = 0; attempt < 60 && /Arquivando|Desarquivando/.test(card(id)?.textContent || ''); attempt++) await wait(50); },
+    frames
+  };
+  return true;
+})()`;
+
+async function mouseClick(page, point) {
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none', buttons: 0 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', buttons: 1, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', buttons: 0, clickCount: 1 });
+}
+
 async function mouseDrag(page, from, to, { steps = 8, beforeRelease } = {}) {
   await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
@@ -439,7 +505,7 @@ async function mouseDrag(page, from, to, { steps = 8, beforeRelease } = {}) {
     const y = Math.round(from.y + (to.y - from.y) * step / steps);
     await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
   }
-  await page.evaluate('window.__drag.frames()');
+  await page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   const during = beforeRelease ? await beforeRelease() : null;
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
   return during;
@@ -456,6 +522,10 @@ const server = http.createServer((request, response) => {
       response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       if (body.action === 'updateOrderStatus') {
         return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.status, previousStatus: body.expectedStatus } })), 350);
+      }
+      if (body.action === 'archiveOrder' || body.action === 'unarchiveOrder') {
+        const archivedAt = body.action === 'archiveOrder' ? '2026-10-23T18:30:00.000Z' : '';
+        return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.expectedStatus, archivedAt, unchanged: false } })), 350);
       }
       if (body.action === 'registerCheckoutReturn') return response.end(JSON.stringify({ ok: true, checkout: { state: 'returned_unverified' } }));
       if (body.action === 'verifyCheckoutPayment') {
@@ -767,6 +837,80 @@ const server = http.createServer((request, response) => {
         assert.equal(touchFinal.modalOpen, false, `Arraste por toque abriu o modal em ${label}.`);
         assert.deepEqual(touchFinal.calls, [[paidId, 'Em produção', 'Confirmado'], [waitingId, 'Confirmado', 'Aguardando pagamento']], `Requisições do quadro incorretas em ${label}.`);
 
+        const archivePage = await devTools.openPage(`${origin}/admin-preview`, viewport);
+        const touchLayout = viewport.width <= 768;
+        if (touchLayout) {
+          await archivePage.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+        }
+        await archivePage.evaluate(STABLE_PROBE);
+        await archivePage.evaluate(ARCHIVE_HELPERS);
+        const archiveId = 'PF-20260831-113122-AB3E86';
+        const archiveState = () => archivePage.evaluate(`window.__archive.state('${archiveId}')`);
+        let spot = await archivePage.evaluate(`window.__archive.show('${archiveId}')`);
+        assert.equal((await archiveState()).column, 'Concluído', `Pedido de teste não ficou Concluído em ${label}.`);
+        assert.ok(spot.button, `Botão de arquivar ausente no card Concluído em ${label}.`);
+        await archivePage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none', buttons: 0 });
+        await sleep(250);
+        const idle = await archivePage.evaluate(`window.__archive.button('${archiveId}')`);
+        assert.equal(idle.label, 'Arquivar pedido', `Nome acessível do botão incorreto em ${label}.`);
+        assert.equal(idle.overlapsChip, false, `Botão de arquivar sobrepõe a modalidade em ${label}.`);
+        if (touchLayout) {
+          assert.equal(idle.opacity, 1, `Botão de arquivar oculto no toque em ${label}.`);
+          assert.ok(spot.button.width >= 44 && spot.button.height >= 44, `Botão de arquivar menor que 44px no toque em ${label}.`);
+        } else {
+          assert.equal(idle.opacity, 0, `Botão de arquivar visível sem hover em ${label}.`);
+          await archivePage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: spot.card.x, y: spot.card.y, button: 'none', buttons: 0 });
+          await sleep(250);
+          const hovered = await archivePage.evaluate(`window.__archive.button('${archiveId}')`);
+          assert.equal(hovered.opacity, 1, `Botão de arquivar não apareceu no hover do card em ${label}.`);
+          await archivePage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: spot.button.x, y: spot.button.y, button: 'none', buttons: 0 });
+          await sleep(250);
+          const onButton = await archivePage.evaluate(`window.__archive.button('${archiveId}')`);
+          assert.notEqual(onButton.background, hovered.background, `Hover do botão sem destaque em ${label}.`);
+          await archivePage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none', buttons: 0 });
+          assert.equal(await archivePage.evaluate(`window.__archive.focusCard('${archiveId}')`), true);
+          await sleep(250);
+          assert.equal((await archivePage.evaluate(`window.__archive.button('${archiveId}')`)).opacity, 1, `Botão de arquivar não apareceu com foco no card em ${label}.`);
+          await archivePage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: spot.card.x, y: spot.card.y, button: 'none', buttons: 0 });
+          await sleep(250);
+        }
+        await mouseClick(archivePage, spot.button);
+        const archiving = await archiveState();
+        assert.equal(archiving.modalOpen, false, `Botão de arquivar abriu o modal em ${label}.`);
+        assert.equal(archiving.ghost, false, `Botão de arquivar iniciou arraste em ${label}.`);
+        assert.equal(archiving.archiving, true, `Indicação de arquivamento ausente em ${label}.`);
+        assert.equal(archiving.column, 'Concluído', `Card saiu antes da confirmação em ${label}.`);
+        await archivePage.evaluate(`window.__archive.settle('${archiveId}')`);
+        const archivedNow = await archiveState();
+        assert.equal(archivedNow.column, '', `Card arquivado continuou nos Ativos em ${label}.`);
+        assert.equal(archivedNow.concluded, 0, `Contador de Concluído não foi atualizado em ${label}.`);
+        assert.match(archivedNow.total, /159,88/, `Total não excluiu o pedido arquivado em ${label}.`);
+        assert.deepEqual(archivedNow.calls, [['archiveOrder', archiveId, 'Concluído']], `Requisição de arquivamento incorreta em ${label}.`);
+        await archivePage.evaluate("window.__archive.filter('archived')");
+        await archivePage.evaluate('window.__archive.frames()');
+        const archivedView = await archiveState();
+        assert.equal(archivedView.column, 'Concluído', `Pedido arquivado ausente no filtro Arquivados em ${label}.`);
+        assert.match(archivedView.archivedMeta, /^Arquivado em \d{2}\/\d{2}\/2026/, `Data do arquivamento ausente em ${label}.`);
+        assert.equal(archivedView.unarchive, true, `Ação Desarquivar ausente em ${label}.`);
+        assert.match(archivedView.total, /49,97/, `Total do filtro Arquivados incorreto em ${label}.`);
+        assert.equal(archivedView.pageOverflow, false, `Filtro Arquivados provocou overflow em ${label}.`);
+        spot = await archivePage.evaluate(`window.__archive.show('${archiveId}')`);
+        await archivePage.screenshot(path.join(tempDir, `admin-archived-${label}.png`));
+        await mouseDrag(archivePage, { x: spot.card.x, y: spot.card.y - 30 }, { x: spot.card.x - 120, y: spot.card.y }, { steps: 5, beforeRelease: () => archiveState() })
+          .then(during => assert.equal(during.ghost, false, `Pedido arquivado pôde ser arrastado em ${label}.`));
+        await sleep(400);
+        spot = await archivePage.evaluate(`window.__archive.show('${archiveId}')`);
+        await mouseClick(archivePage, spot.button);
+        await archivePage.evaluate(`window.__archive.settle('${archiveId}')`);
+        assert.equal((await archiveState()).column, '', `Pedido desarquivado continuou em Arquivados em ${label}.`);
+        await archivePage.evaluate("window.__archive.filter('all')");
+        const allView = await archiveState();
+        assert.equal(allView.column, 'Concluído', `Desarquivar não preservou o status em ${label}.`);
+        assert.match(allView.total, /209,85/, `Total do filtro Todos incorreto em ${label}.`);
+        assert.deepEqual(allView.calls, [['archiveOrder', archiveId, 'Concluído'], ['unarchiveOrder', archiveId, 'Concluído']], `Requisições de arquivamento incorretas em ${label}.`);
+        await archivePage.evaluate("window.__archive.filter('active'); document.getElementById('ordersListViewBtn').click()");
+        await archivePage.close();
+
         const modalPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
         await modalPage.evaluate(STABLE_PROBE);
         const modal = await modalPage.evaluate(MODAL_PROBE);
@@ -876,6 +1020,8 @@ const server = http.createServer((request, response) => {
     console.log('PASS toque: deslize rápido preserva a rolagem; pressão longa arrasta; clique abre o modal e soltar não abre');
     console.log('PASS modal do pedido: clique, teclado, Escape, X, foco restaurado, fundo inerte, sem abrir após arraste e contido nas seis resoluções');
     console.log('PASS modal compacto (390, 768): Gestão logo abaixo do cabeçalho; desktop (1024+) mantém duas colunas; um único seletor de status');
+    console.log('PASS arquivamento: botão no hover/foco (desktop) e sempre visível com 44px (toque), sem abrir modal ou arrastar; some dos Ativos após confirmação');
+    console.log('PASS filtros Ativos, Arquivados e Todos com data do arquivamento, total correto, sem arrastar arquivados e com desarquivamento');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
     console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');

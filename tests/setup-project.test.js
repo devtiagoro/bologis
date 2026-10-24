@@ -135,7 +135,8 @@ test('planilha comum: cria abas, cabecalhos, padroes e todos os formatos', () =>
   for (const name of ['Configuracoes', 'Sabores', 'Tamanhos', 'Pagamentos', 'Disponibilidade', 'Pedidos', 'PedidoItens', 'CheckoutCobrancas']) {
     assert.ok(runtime.sheets.get(name), name);
   }
-  assert.equal(runtime.sheets.get('Pedidos').rows[0].length, 31);
+  assert.equal(runtime.sheets.get('Pedidos').rows[0].length, 32);
+  assert.equal(runtime.sheets.get('Pedidos').rows[0][31], 'Arquivado em');
   assert.equal(runtime.sheets.get('CheckoutCobrancas').rows[0][9], 'Referências JSON');
   assert.equal(runtime.state.formats['Pedidos:11'], 'R$ #,##0.00');
   assert.equal(runtime.state.formats['PedidoItens:7'], 'R$ #,##0.00');

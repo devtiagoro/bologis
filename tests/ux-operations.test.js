@@ -54,6 +54,9 @@ source = source.replace(
         builderQuantity() { return builderQuantity; },
         changeOrderStatus,
         moveOrderToStatus,
+        setOrderArchived,
+        matchesArchiveScope,
+        renderOrderFilterOptions,
         handleKanbanCardClick,
         openOrderModal,
         closeOrderModal,
@@ -1925,6 +1928,247 @@ test('kanban: atualizar a página com salvamento pendente mostra apenas o estado
   commit();
   same(await pending, { moved: true });
   assert.equal(columnOf(await open(), 'PF-K-2'), 'Concluído', 'Depois da confirmação, a leitura reflete o novo status.');
+});
+
+// Etapa 11.4: arquivamento
+const archivedAt = '2026-10-23T18:30:00.000Z';
+const archiveResponse = payload => ({ ok: true, order: { id: payload.orderId, status: payload.expectedStatus, archivedAt: payload.action === 'archiveOrder' ? archivedAt : '', unchanged: false } });
+const archiveRequests = k => k.requests.filter(payload => ['archiveOrder', 'unarchiveOrder'].includes(payload.action)).map(({ adminToken, ...payload }) => payload);
+const withArchived = () => kanbanOrders.map(order => order.id === 'PF-K-5' ? { ...order, archivedAt } : { ...order });
+
+test('arquivamento: botão "Arquivar pedido" só aparece em Concluído e Cancelado', () => {
+  const k = kanbanRuntime();
+  const layout = k.layout();
+  const button = /<button class="kanban-archive-btn" type="button" data-no-drag data-archive-order="([^"]+)" aria-label="Arquivar pedido" title="Arquivar pedido" >/g;
+  same([...k.runtime.get('ordersContainer').innerHTML.matchAll(button)].map(match => match[1]).sort(), ['PF-K-4', 'PF-K-5']);
+  assert.match(layout[3].markup, /class="kanban-card can-archive"/);
+  for (const index of [0, 1, 2, 5]) assert.doesNotMatch(layout[index].markup, /kanban-archive-btn/);
+  assert.match(layout[3].markup, /<svg viewBox="0 0 24 24"[^>]*aria-hidden="true" focusable="false">/);
+});
+
+test('arquivamento: arquivar Concluído e Cancelado confirma no servidor e remove dos Ativos', async () => {
+  for (const id of ['PF-K-4', 'PF-K-5']) {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let prompts = 0;
+    const k = kanbanRuntime(async payload => { await gate; return archiveResponse(payload); }, { confirm: () => { prompts += 1; return true; } });
+    const status = k.statusOf(id);
+    const totalBefore = Number(renderedTotals(k.runtime).cards[0]);
+    const pending = k.api.setOrderArchived(id, true);
+    const card = k.layout().find(column => column.ids.includes(id)).markup.split('<article').find(chunk => chunk.includes(`data-kanban-card="${id}"`));
+    assert.match(card, /data-movable="false" aria-busy="true"/);
+    assert.match(card, /data-archive-order="[^"]+" aria-label="Arquivar pedido" title="Arquivar pedido" disabled aria-busy="true"/);
+    assert.match(card, /Arquivando\.\.\./);
+    assert.equal(columnOf(k.runtime, id), status, 'O card só sai depois da confirmação.');
+    assert.equal(k.api.kanbanDropKind('PF-K-2', 'Concluído'), 'allowed', 'Os demais cards continuam livres.');
+    release();
+    same(await pending, { done: true });
+    assert.equal(prompts, 0, 'Sem diálogo de confirmação.');
+    same(archiveRequests(k), [{ action: 'archiveOrder', orderId: id, expectedStatus: status }]);
+    assert.equal(columnOf(k.runtime, id), undefined, 'Some da visualização Ativos.');
+    assert.equal(k.layout().find(column => column.title === status).count, 0);
+    assert.equal(Number(renderedTotals(k.runtime).cards[0]), totalBefore - 1997);
+    assert.equal(k.api.state().orders.find(order => order.id === id).archivedAt, archivedAt);
+    assert.equal(k.statusOf(id), status, 'O status operacional é preservado.');
+    assert.match(k.runtime.get('toast').textContent, new RegExp(`Pedido #${id} arquivado`));
+  }
+});
+
+test('arquivamento: outros status, pedido em salvamento e clique repetido não geram requisição extra', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const k = kanbanRuntime(async payload => { await gate; return payload.action === 'updateOrderStatus' ? savedStatus(payload) : archiveResponse(payload); });
+  for (const id of ['PF-20261020-120000-KANB01', 'PF-K-2', 'PF-K-3', 'PF-K-6']) same(await k.api.setOrderArchived(id, true), { done: false, reason: 'not_eligible' });
+  const first = k.api.setOrderArchived('PF-K-4', true);
+  same(await k.api.setOrderArchived('PF-K-4', true), { done: false, reason: 'unavailable' });
+  k.api.handleKanbanDrop('PF-K-2', 'Concluído');
+  same(await k.api.setOrderArchived('PF-K-2', true), { done: false, reason: 'unavailable' }, 'Status ainda pendente não é arquivável.');
+  release();
+  await first;
+  assert.equal(archiveRequests(k).length, 1);
+});
+
+test('arquivamento: erro de rede mantém o card visível e informa a falha', async () => {
+  const runtime = createRuntime(async () => { throw new TypeError('Failed to fetch'); });
+  const api = runtime.window.__uxTest;
+  api.setOrders(kanbanOrders.map(order => ({ ...order })));
+  api.setOrderView({ ...noFilters });
+  api.setOrdersView('kanban');
+  assert.equal((await api.setOrderArchived('PF-K-4', true)).reason, 'error');
+  assert.equal(columnOf(runtime, 'PF-K-4'), 'Concluído');
+  assert.equal(api.state().orders.find(order => order.id === 'PF-K-4').archivedAt, undefined);
+  assert.match(runtime.get('ordersMessage').textContent, /Não foi possível arquivar o pedido #PF-K-4: falha de conexão\./);
+  assert.doesNotMatch(runtime.get('ordersContainer').innerHTML, /Arquivando/);
+});
+
+test('arquivamento: conflito com outra sessão recarrega sem arquivar', async () => {
+  const fresh = kanbanOrders.map(order => order.id === 'PF-K-4' ? { ...order, status: 'Em produção' } : order);
+  const k = kanbanRuntime(payload => payload.action === 'getOrders'
+    ? { ok: true, orders: fresh }
+    : { ok: false, code: 'STATUS_CONFLICT', message: 'O pedido foi atualizado por outra operação. Os pedidos foram recarregados com o status mais recente.', currentStatus: 'Em produção' });
+  assert.equal((await k.api.setOrderArchived('PF-K-4', true)).reason, 'conflict');
+  assert.equal(columnOf(k.runtime, 'PF-K-4'), 'Em produção');
+  assert.match(k.runtime.get('ordersMessage').textContent, /atualizado por outra operação[\s\S]*tente novamente/);
+  assert.doesNotMatch(k.runtime.get('ordersContainer').innerHTML, /data-archive-order="PF-K-4"/);
+});
+
+test('arquivamento: filtros Ativos, Arquivados e Todos na Lista e no Kanban', () => {
+  const k = kanbanRuntime();
+  k.api.setOrders(withArchived());
+  const ids = () => k.layout().flatMap(column => column.ids).sort();
+  k.api.setOrderView({ ...noFilters });
+  k.api.renderLocalOrders();
+  assert.equal(ids().includes('PF-K-5'), false, 'Ativos é o padrão.');
+  k.api.setOrderView({ archive: 'archived' });
+  k.api.renderLocalOrders();
+  same(ids(), ['PF-K-5']);
+  const card = k.layout()[4].markup;
+  assert.match(card, /class="kanban-card is-archived"[^>]*data-movable="false"/);
+  assert.match(card, /Arquivado em \d{2}\/\d{2}\/2026/);
+  assert.match(card, /<button class="ghost-btn kanban-unarchive-btn" type="button" data-no-drag data-unarchive-order="PF-K-5" >Desarquivar<\/button>/);
+  assert.doesNotMatch(card, /kanban-archive-btn/);
+  k.api.setOrderView({ archive: 'all' });
+  k.api.renderLocalOrders();
+  assert.equal(ids().length, kanbanOrders.length);
+  k.api.setOrdersView('list');
+  assert.match(k.runtime.get('ordersContainer').innerHTML, /data-order-id="PF-K-5"[^>]*disabled>[\s\S]*Arquivado em[\s\S]*data-unarchive-order="PF-K-5"/);
+  k.api.setOrderView({ archive: 'active' });
+  k.api.renderLocalOrders();
+  assert.doesNotMatch(k.runtime.get('ordersContainer').innerHTML, /PF-K-5/);
+});
+
+test('arquivamento: combina com pesquisa, status, data e ordenação; total só dos exibidos', () => {
+  const k = kanbanRuntime();
+  const orders = withArchived().concat([{ ...kanbanOrders[3], id: 'PF-K-8', customerName: 'Davi Arquivado', archivedAt, total: 50 }]);
+  k.api.setOrders(orders);
+  const cases = [
+    [{ archive: 'active', status: 'Concluído' }, ['PF-K-4'], 1997],
+    [{ archive: 'archived', status: 'Concluído' }, ['PF-K-8'], 5000],
+    [{ archive: 'all', status: 'Concluído' }, ['PF-K-4', 'PF-K-8'], 6997],
+    [{ archive: 'archived', search: 'eva' }, ['PF-K-5'], 1997],
+    [{ archive: 'all', search: 'davi', sort: 'created-desc' }, ['PF-K-4', 'PF-K-8'], 6997],
+    [{ archive: 'archived', deliveryDate: '2026-10-21' }, ['PF-K-5'], 1997],
+    [{ archive: 'archived', deliveryDate: '2026-10-25' }, [], 0]
+  ];
+  for (const [filters, expected, total] of cases) {
+    k.api.setOrderView({ ...noFilters, ...filters });
+    k.api.renderLocalOrders();
+    same(k.api.filterAndSortOrders().map(order => order.id).sort(), expected, JSON.stringify(filters));
+    same(renderedTotals(k.runtime).cards, [String(total)], JSON.stringify(filters));
+    k.api.setOrdersView('list');
+    assert.equal(renderedTotals(k.runtime).table ?? renderedTotals(k.runtime).cards[0], String(total));
+    k.api.setOrdersView('kanban');
+  }
+});
+
+test('arquivamento: contadores de status respeitam o filtro e "Limpar filtros" volta para Ativos', () => {
+  const k = kanbanRuntime();
+  k.api.setOrders(withArchived());
+  k.api.setOrderView({ ...noFilters, archive: 'archived' });
+  k.api.renderOrderFilterOptions();
+  assert.match(k.runtime.get('statusCounters').innerHTML, /Todos · 1<\/button>/);
+  assert.match(k.runtime.get('statusCounters').innerHTML, /Cancelado · 1</);
+  k.runtime.get('clearOrderFiltersBtn').dispatch('click');
+  assert.equal(k.api.state().orderViewState.archive, 'active');
+  assert.equal(k.runtime.get('orderArchiveFilter').value, 'active');
+  assert.match(k.runtime.get('statusCounters').innerHTML, /Todos · 6<\/button>/);
+  k.runtime.get('orderArchiveFilter').value = 'all';
+  k.runtime.get('orderArchiveFilter').dispatch('change');
+  assert.equal(k.api.state().orderViewState.archive, 'all');
+  k.runtime.get('orderArchiveFilter').value = '<script>';
+  k.runtime.get('orderArchiveFilter').dispatch('change');
+  assert.equal(k.api.state().orderViewState.archive, 'active');
+});
+
+test('arquivamento: desarquivar preserva o status e devolve aos Ativos', async () => {
+  const k = kanbanRuntime(archiveResponse);
+  k.api.setOrders(withArchived());
+  k.api.setOrderView({ ...noFilters, archive: 'archived' });
+  k.api.renderLocalOrders();
+  same(await k.api.setOrderArchived('PF-K-5', false), { done: true });
+  same(archiveRequests(k), [{ action: 'unarchiveOrder', orderId: 'PF-K-5', expectedStatus: 'Cancelado' }]);
+  assert.equal(k.layout().flatMap(column => column.ids).length, 0, 'Sai da visualização Arquivados.');
+  k.api.setOrderView({ archive: 'active' });
+  k.api.renderLocalOrders();
+  assert.equal(columnOf(k.runtime, 'PF-K-5'), 'Cancelado');
+  assert.match(k.layout()[4].markup, /data-archive-order="PF-K-5"/);
+  same(await k.api.setOrderArchived('PF-K-5', false), { done: false, reason: 'not_eligible' });
+});
+
+test('arquivamento: pedido arquivado não é arrastado nem muda de status antes de desarquivar', async () => {
+  const m = modalRuntime(savedStatus);
+  m.api.setOrders(withArchived());
+  m.api.setOrderView({ ...noFilters, archive: 'archived' });
+  m.api.renderLocalOrders();
+  assert.equal(m.api.kanbanDropKind('PF-K-5', 'Em produção'), 'none');
+  same(await m.api.handleKanbanDrop('PF-K-5', 'Em produção'), { moved: false, reason: 'none' });
+  assert.equal((await m.api.moveOrderToStatus('PF-K-5', 'Em produção')).reason, 'archived');
+  assert.equal(m.statusUpdates().length, 0);
+  assert.match(m.runtime.get('ordersMessage').textContent, /Desarquive o pedido #PF-K-5 antes de alterar o status/);
+  m.open('PF-K-5');
+  assert.match(m.body(), /<select id="orderModalStatus" class="control" data-order-id="PF-K-5" disabled>/);
+  assert.match(m.body(), /Desarquive o pedido para alterar o status\./);
+  assert.match(m.body(), /Arquivado em<\/dt><dd>\d{2}\/\d{2}\/2026/);
+  assert.match(m.body(), /<button id="orderModalArchive" class="ghost-btn" type="button" data-archive-action="unarchive" >Desarquivar pedido<\/button>/);
+});
+
+test('arquivamento: modal oferece arquivar para pedido elegível e mantém aberto após arquivar', async () => {
+  const m = modalRuntime(archiveResponse);
+  m.open('PF-K-4');
+  assert.match(m.body(), /data-archive-action="archive" >Arquivar pedido<\/button>/);
+  m.open('PF-K-2');
+  assert.doesNotMatch(m.body(), /orderModalArchive/);
+  m.open('PF-K-4');
+  same(await m.api.setOrderArchived('PF-K-4', true), { done: true });
+  assert.equal(m.api.modalOrderId(), 'PF-K-4');
+  assert.match(m.body(), /data-archive-action="unarchive" >Desarquivar pedido<\/button>/);
+  assert.match(m.modalMessage().textContent, /Pedido #PF-K-4 arquivado/);
+});
+
+test('arquivamento: clique no botão não abre o modal nem é tratado como arraste', () => {
+  const m = modalRuntime();
+  const onButton = { closest: selector => (selector.includes('[data-no-drag]') ? {} : null) };
+  assert.equal(m.api.handleKanbanCardClick('PF-K-4', onButton), false);
+  assert.equal(m.dialog.showModalCalls, 0);
+  assert.match(html, /event\.target\?\.closest\?\.\('a, select, input, textarea, \[data-no-drag\]'\)\) return;/);
+});
+
+test('arquivamento: estado persiste após atualizar a página', async () => {
+  const sheet = new Map(kanbanOrders.map(order => [order.id, '']));
+  const server = payload => {
+    if (payload.action === 'getOrders') return { ok: true, orders: kanbanOrders.map(order => ({ ...order, archivedAt: sheet.get(order.id) })) };
+    sheet.set(payload.orderId, payload.action === 'archiveOrder' ? archivedAt : '');
+    return archiveResponse(payload);
+  };
+  const open = async () => {
+    const runtime = createRuntime(async (_url, options) => apiResponse(server(JSON.parse(options.body))), { localStorage: memoryStorage({ 'bologis:orders-view': 'kanban' }) });
+    await runtime.window.__uxTest.loadAdminOrders();
+    return runtime;
+  };
+  const first = await open();
+  await first.window.__uxTest.setOrderArchived('PF-K-4', true);
+  const reloaded = await open();
+  assert.equal(columnOf(reloaded, 'PF-K-4'), undefined);
+  reloaded.window.__uxTest.setOrderView({ archive: 'archived' });
+  reloaded.window.__uxTest.renderLocalOrders();
+  assert.equal(columnOf(reloaded, 'PF-K-4'), 'Concluído');
+});
+
+test('arquivamento: pedidos históricos sem archivedAt são ativos', () => {
+  const api = createRuntime().window.__uxTest;
+  for (const order of [{ id: 'A' }, { id: 'B', archivedAt: '' }, { id: 'C', archivedAt: null }]) {
+    assert.equal(api.matchesArchiveScope(order, 'active'), true);
+    assert.equal(api.matchesArchiveScope(order, 'archived'), false);
+    assert.equal(api.matchesArchiveScope(order, 'all'), true);
+  }
+  assert.equal(api.matchesArchiveScope({ archivedAt }, undefined), false, 'Sem filtro definido, vale Ativos.');
+});
+
+test('arquivamento: estilos de hover, foco e toque', () => {
+  assert.match(html, /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.kanban-archive-btn \{ opacity: 0; \}\s*\.kanban-card:hover \.kanban-archive-btn, \.kanban-card:focus-within \.kanban-archive-btn, \.kanban-archive-btn:disabled \{ opacity: 1; \}/);
+  assert.match(html, /\.kanban-archive-btn:hover \{ border-color: var\(--line\); background: var\(--surface-2\); color: var\(--accent-strong\); \}/);
+  assert.match(html, /@media not all and \(hover: hover\) and \(pointer: fine\) \{\s*\.kanban-archive-btn \{ top: 4px; right: 4px; width: 44px; height: 44px; \}/);
+  assert.match(html, /<select id="orderArchiveFilter" class="control">\s*<option value="active" selected>Ativos<\/option>\s*<option value="archived">Arquivados<\/option>\s*<option value="all">Todos<\/option>/);
 });
 
 (async () => {

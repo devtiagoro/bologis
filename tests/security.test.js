@@ -209,6 +209,21 @@ test('updateOrderStatus passa pelo doPost autenticado', () => {
   assert.deepEqual(Object.keys(received.options), ['expectedStatus']);
 });
 
+test('arquivar e desarquivar passam pelo doPost autenticado', () => {
+  const h = createHarness();
+  h.configure();
+  const received = [];
+  h.context.setOrderArchived_ = (orderId, archive, options) => { received.push({ orderId, archive, options }); return { id: orderId, archivedAt: archive ? 'x' : '' }; };
+  for (const action of ['archiveOrder', 'unarchiveOrder']) {
+    const result = h.post({ action, adminToken: h.login(), orderId: 'HML-FAKE-2', expectedStatus: 'Concluído', archivedAt: 'forjado' });
+    assert.equal(result.ok, true);
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(received)), [
+    { orderId: 'HML-FAKE-2', archive: true, options: { expectedStatus: 'Concluído' } },
+    { orderId: 'HML-FAKE-2', archive: false, options: { expectedStatus: 'Concluído' } }
+  ], 'A data vem do servidor; archivedAt enviado pelo cliente é ignorado.');
+});
+
 test('endAdminSession passa pelo doPost e impede reutilizacao do token', () => {
   const h = createHarness();
   h.configure();
@@ -256,6 +271,7 @@ test('rotas administrativas sem token bloqueiam antes de dados ou mutacoes', () 
   h.context.getConfig_ = () => { calls += 1; return {}; };
   h.context.saveConfigDomain_ = () => { calls += 1; return {}; };
   h.context.updateOrderStatus_ = () => { calls += 1; return {}; };
+  h.context.setOrderArchived_ = () => { calls += 1; return {}; };
   for (const payload of [
     { action: 'getOrders' },
     { action: 'getAdminConfig' },
@@ -264,6 +280,8 @@ test('rotas administrativas sem token bloqueiam antes de dados ou mutacoes', () 
     { action: 'getConfigBackups' },
     { action: 'restoreConfigBackup', backupId: 'fake', revision: '1' },
     { action: 'updateOrderStatus', orderId: 'fake', status: 'Confirmado' },
+    { action: 'archiveOrder', orderId: 'fake', expectedStatus: 'Concluído' },
+    { action: 'unarchiveOrder', orderId: 'fake', expectedStatus: 'Concluído' },
     { action: 'endAdminSession' }
   ]) {
     assert.equal(h.post(payload).code, 'AUTH_REQUIRED');

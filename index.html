@@ -949,7 +949,7 @@
 
     .orders-toolbar {
       display: grid;
-      grid-template-columns: minmax(0, 1.45fr) repeat(2, minmax(0, .82fr)) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, .82fr)) minmax(0, 1fr);
       gap: 10px;
       margin: 18px 0 14px;
       min-width: 0;
@@ -1160,6 +1160,24 @@
     .kanban-saving .loading-spinner { width: 16px; height: 16px; margin: 0; border-width: 2px; }
     .kanban-card { position: relative; cursor: pointer; }
     .kanban-card:hover { border-color: #dcc6b8; box-shadow: 0 8px 18px rgba(76, 49, 37, .09); }
+    .kanban-archive-btn { position: absolute; top: 8px; right: 8px; z-index: 1; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 10px; background: rgba(255, 253, 251, .94); color: var(--muted); transition: opacity .15s ease, background-color .15s ease, color .15s ease, border-color .15s ease; }
+    .kanban-archive-btn:hover { border-color: var(--line); background: var(--surface-2); color: var(--accent-strong); }
+    .kanban-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .kanban-archive-btn:disabled { cursor: progress; }
+    .kanban-card.can-archive .kanban-card-top { padding-right: 38px; }
+    .kanban-card.is-archived { background: var(--surface-2); }
+    .kanban-archived-meta { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+    .kanban-unarchive-btn { width: 100%; min-height: 44px; margin-top: 10px; }
+    .order-unarchive { min-height: 40px; margin-top: 8px; padding: 8px 12px; }
+    /* Com mouse, o botão aparece ao passar sobre o card ou ao receber foco; no toque fica sempre visível. */
+    @media (hover: hover) and (pointer: fine) {
+      .kanban-archive-btn { opacity: 0; }
+      .kanban-card:hover .kanban-archive-btn, .kanban-card:focus-within .kanban-archive-btn, .kanban-archive-btn:disabled { opacity: 1; }
+    }
+    @media not all and (hover: hover) and (pointer: fine) {
+      .kanban-archive-btn { top: 4px; right: 4px; width: 44px; height: 44px; }
+      .kanban-card.can-archive .kanban-card-top { padding-right: 46px; }
+    }
     .kanban-card-open { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
     .kanban-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 
@@ -1888,6 +1906,14 @@
                 <input id="orderDeliveryFilter" class="control" type="date" />
               </div>
               <div class="filter-field">
+                <label for="orderArchiveFilter">Arquivamento</label>
+                <select id="orderArchiveFilter" class="control">
+                  <option value="active" selected>Ativos</option>
+                  <option value="archived">Arquivados</option>
+                  <option value="all">Todos</option>
+                </select>
+              </div>
+              <div class="filter-field">
                 <label for="orderSort">Ordenar</label>
                 <select id="orderSort" class="control">
                   <option value="delivery-asc">Entrega mais próxima</option>
@@ -1983,7 +2009,8 @@
       let configSaveInFlight = false;
       const dirtyConfigDomains = new Set();
       const ORDERS_VIEW_STORAGE_KEY = 'bologis:orders-view';
-      const orderViewState = { search: '', status: '', deliveryDate: '', sort: 'delivery-asc', loading: false, error: '', view: readStoredOrdersView() };
+      // archive: 'active' (padrão), 'archived' ou 'all' — vale para Lista, Kanban, contadores e total.
+      const orderViewState = { search: '', status: '', deliveryDate: '', archive: 'active', sort: 'delivery-asc', loading: false, error: '', view: readStoredOrdersView() };
       // Etapa 11.3: movimentações otimistas aguardando o Apps Script (pedido → status de destino).
       // O status confirmado continua em appState.orders; o destino só é exibido enquanto pendente.
       const pendingStatusMoves = new Map();
@@ -3033,6 +3060,50 @@
         return appState.orders.find(order => String(order.id) === String(orderId));
       }
 
+      // Etapa 11.4: arquivamento separado do status, confirmado pelo Apps Script antes de sair da tela.
+      const ARCHIVABLE_STATUSES = ['Concluído', 'Cancelado'];
+      const archivingOrderIds = new Set();
+
+      function canArchiveOrder(order) {
+        const id = String(order.id || '');
+        return !order.archivedAt && ARCHIVABLE_STATUSES.includes(String(order.status || '')) && !pendingStatusMoves.has(id) && !archivingOrderIds.has(id);
+      }
+
+      function formatArchivedAt(value) {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value || '') : date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      }
+
+      async function setOrderArchived(orderId, archive) {
+        const id = String(orderId || '');
+        const order = appState.orders.find(item => String(item.id) === id);
+        if (!order || archivingOrderIds.has(id) || pendingStatusMoves.has(id)) return { done: false, reason: 'unavailable' };
+        if (archive ? !canArchiveOrder(order) : !order.archivedAt) return { done: false, reason: 'not_eligible' };
+        clearOrdersMessage();
+        archivingOrderIds.add(id);
+        renderLocalOrders();
+        try {
+          const result = await apiPost({ action: archive ? 'archiveOrder' : 'unarchiveOrder', orderId: id, expectedStatus: String(order.status || '') }, { admin: true });
+          appState.orders.filter(item => String(item.id) === id).forEach(item => { item.archivedAt = String(result?.order?.archivedAt || ''); });
+          showToast(`Pedido #${shortOrderId(id)} ${archive ? 'arquivado' : 'desarquivado'}`);
+          return { done: true };
+        } catch (error) {
+          archivingOrderIds.delete(id);
+          if (error.code === 'STATUS_CONFLICT') {
+            await loadAdminOrders({ silent: true });
+            if (!orderViewState.error) showOrdersMessage('error', `${error.message} Confira o pedido e tente novamente.`);
+          } else if (!isAdminAuthError(error)) {
+            const reason = error.code ? String(error.message || '').replace(/\.$/, '') : 'falha de conexão';
+            showOrdersMessage('error', `Não foi possível ${archive ? 'arquivar' : 'desarquivar'} o pedido #${shortOrderId(id)}: ${reason}.`);
+          }
+          return { done: false, reason: error.code === 'STATUS_CONFLICT' ? 'conflict' : 'error', error };
+        } finally {
+          archivingOrderIds.delete(id);
+          renderOrderFilterOptions();
+          renderLocalOrders();
+        }
+      }
+
       function displayedOrderStatus(order) {
         return pendingStatusMoves.get(String(order.id || '')) ?? String(order.status || '');
       }
@@ -3049,6 +3120,11 @@
         if (String(order.status || '') === nextStatus) {
           renderLocalOrders();
           return { moved: false, reason: 'same' };
+        }
+        if (order.archivedAt || archivingOrderIds.has(id)) {
+          showOrdersMessage('error', `Desarquive o pedido #${shortOrderId(id)} antes de alterar o status.`);
+          renderLocalOrders();
+          return { moved: false, reason: 'archived' };
         }
         clearOrdersMessage();
         pendingStatusMoves.set(id, nextStatus);
@@ -3560,9 +3636,17 @@
           if (query && !searchable.includes(query)) return false;
           if (state.status && String(order.status || '') !== state.status) return false;
           if (state.deliveryDate && orderDeliveryDate(order) !== state.deliveryDate) return false;
+          if (!matchesArchiveScope(order, state.archive)) return false;
           return true;
         });
         return filtered.sort(orderComparator(state.sort));
+      }
+
+      // Pedidos sem archivedAt (inclusive os anteriores à Etapa 11.4) são ativos.
+      function matchesArchiveScope(order, scope = 'active') {
+        const archived = Boolean(order.archivedAt);
+        if (scope === 'all') return true;
+        return scope === 'archived' ? archived : !archived;
       }
 
       function orderComparator(sort) {
@@ -3591,8 +3675,9 @@
         }
         const counters = $('statusCounters');
         if (!counters) return;
-        const countFor = status => appState.orders.filter(order => String(order.status || '') === status).length;
-        counters.innerHTML = `<button class="status-counter ${orderViewState.status ? '' : 'active'}" type="button" data-order-status="">Todos · ${appState.orders.length}</button>` +
+        const scoped = appState.orders.filter(order => matchesArchiveScope(order, orderViewState.archive));
+        const countFor = status => scoped.filter(order => String(order.status || '') === status).length;
+        counters.innerHTML = `<button class="status-counter ${orderViewState.status ? '' : 'active'}" type="button" data-order-status="">Todos · ${scoped.length}</button>` +
           statuses.map(status => `<button class="status-counter ${orderViewState.status === status ? 'active' : ''}" type="button" data-order-status="${escapeHtml(status)}">${escapeHtml(status)} · ${countFor(status)}</button>`).join('');
         qsa('.status-counter', counters).forEach(button => button.addEventListener('click', () => {
           orderViewState.status = button.dataset.orderStatus || '';
@@ -3702,7 +3787,7 @@
       }
 
       function orderStatusControl(order, mobile = false) {
-        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(displayedOrderStatus(order))}" aria-label="Status do pedido ${escapeHtml(order.id || '')}" ${pendingStatusMoves.has(String(order.id || '')) ? 'disabled aria-busy="true"' : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select></label>`;
+        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(displayedOrderStatus(order))}" aria-label="Status do pedido ${escapeHtml(order.id || '')}" ${pendingStatusMoves.has(String(order.id || '')) ? 'disabled aria-busy="true"' : order.archivedAt ? 'disabled' : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select></label>${order.archivedAt ? `<small class="order-meta">Arquivado em ${escapeHtml(formatArchivedAt(order.archivedAt))}</small><button class="ghost-btn order-unarchive" type="button" data-unarchive-order="${escapeHtml(order.id || '')}" ${archivingOrderIds.has(String(order.id || '')) ? 'disabled aria-busy="true"' : ''}>Desarquivar</button>` : ''}`;
       }
 
       function checkoutStateLabel(state) {
@@ -3867,15 +3952,22 @@
       function renderKanbanCard(order, legacyColumn) {
         const id = String(order.id || '');
         const saving = pendingStatusMoves.has(id);
+        const archiving = archivingOrderIds.has(id);
+        const archived = Boolean(order.archivedAt);
+        const archivable = canArchiveOrder(order) || (archiving && !archived);
         const customer = order.customerName || 'Cliente não informado';
-        return `<article class="kanban-card${saving ? ' is-saving' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(displayedOrderStatus(order))}" data-movable="${!saving}" aria-busy="${saving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
+        const movable = !saving && !archiving && !archived;
+        return `<article class="kanban-card${saving ? ' is-saving' : ''}${archivable ? ' can-archive' : ''}${archived ? ' is-archived' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(displayedOrderStatus(order))}" data-movable="${movable}" aria-busy="${saving || archiving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
           <div class="kanban-card-top"><span class="order-id" title="${escapeHtml(id)}">#${escapeHtml(shortOrderId(id) || '—')}</span><span class="kanban-chip order-fulfillment">${escapeHtml(orderFulfillmentShortLabel(order))}</span></div>
           <h4><button class="kanban-card-open" type="button" data-order-id="${escapeHtml(id)}" aria-haspopup="dialog" aria-label="Abrir detalhes do pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">${escapeHtml(customer)}</button></h4>
           <p class="kanban-card-items">${escapeHtml(orderFlavorSummary(order))} · ${escapeHtml(orderSlicesText(order))}</p>
           <div class="kanban-card-foot"><span>${escapeHtml(orderReceiptDateText(order))}</span><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong></div>
           ${legacyColumn ? `<span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || 'Sem status')}</span>` : ''}
           ${isPaymentDeadlineExpired(order) ? '<small class="order-meta">Prazo de pagamento encerrado</small>' : ''}
+          ${archivable ? `<button class="kanban-archive-btn" type="button" data-no-drag data-archive-order="${escapeHtml(id)}" aria-label="Arquivar pedido" title="Arquivar pedido" ${archiving ? 'disabled aria-busy="true"' : ''}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M3.5 4.5h17v4h-17zM5.5 8.5v10a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-10M10 12.5h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` : ''}
+          ${archived ? `<p class="kanban-archived-meta">Arquivado em ${escapeHtml(formatArchivedAt(order.archivedAt))}</p><button class="ghost-btn kanban-unarchive-btn" type="button" data-no-drag data-unarchive-order="${escapeHtml(id)}" ${archiving ? 'disabled aria-busy="true"' : ''}>${archiving ? 'Desarquivando...' : 'Desarquivar'}</button>` : ''}
           ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
+          ${archiving && !archived ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Arquivando...</p>' : ''}
         </article>`;
       }
 
@@ -3892,7 +3984,7 @@
       // "same" (mesma coluna) e "none" (fora do quadro, coluna de status legados ou card em salvamento) não geram requisição.
       function kanbanDropKind(orderId, targetStatus) {
         const order = appState.orders.find(item => String(item.id) === String(orderId));
-        if (!order || !DEFAULT_ORDER_STATUSES.includes(targetStatus) || pendingStatusMoves.has(String(orderId))) return 'none';
+        if (!order || order.archivedAt || archivingOrderIds.has(String(orderId)) || !DEFAULT_ORDER_STATUSES.includes(targetStatus) || pendingStatusMoves.has(String(orderId))) return 'none';
         return String(order.status || '') === targetStatus ? 'same' : 'allowed';
       }
 
@@ -3919,11 +4011,15 @@
       const KANBAN_EDGE_SCROLL = 48;
       let kanbanPointer = null;
       let kanbanRenderDeferred = false;
+      // Início do último toque/clique em um card: um gesto que se deslocou não conta como clique,
+      // mesmo em cards que não podem ser arrastados (arquivados ou em salvamento).
+      let cardPointerStart = null;
 
       function startKanbanPointer(event, card) {
         if (kanbanPointer || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
         const id = card.dataset.kanbanCard;
-        if (pendingStatusMoves.has(id) || event.target?.closest?.('a, select, input, textarea')) return;
+        // Botões de arquivar/desarquivar e cards arquivados ou em salvamento não iniciam arraste.
+        if (card.dataset.movable !== 'true' || pendingStatusMoves.has(id) || event.target?.closest?.('a, select, input, textarea, [data-no-drag]')) return;
         const rect = card.getBoundingClientRect();
         kanbanPointer = {
           id, card, pointerId: event.pointerId, touch: event.pointerType === 'touch', active: false, target: '', frame: 0,
@@ -4082,8 +4178,19 @@
 
       function bindKanban(container) {
         qsa('.kanban-card', container).forEach(card => {
-          card.addEventListener('pointerdown', event => startKanbanPointer(event, card));
-          card.addEventListener('click', event => handleKanbanCardClick(card.dataset.kanbanCard, event.target));
+          card.addEventListener('pointerdown', event => {
+            cardPointerStart = { x: event.clientX, y: event.clientY };
+            startKanbanPointer(event, card);
+          });
+          card.addEventListener('click', event => {
+            const start = cardPointerStart;
+            cardPointerStart = null;
+            // detail 0 = clique gerado pelo teclado (Enter/Espaço), sempre aceito.
+            if (event.detail > 0 && start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > KANBAN_DRAG_THRESHOLD) return;
+            handleKanbanCardClick(card.dataset.kanbanCard, event.target);
+          });
+          card.querySelector('[data-archive-order]')?.addEventListener('click', () => setOrderArchived(card.dataset.kanbanCard, true));
+          card.querySelector('[data-unarchive-order]')?.addEventListener('click', () => setOrderArchived(card.dataset.kanbanCard, false));
           // Evita o arraste nativo de textos e o menu de contexto da pressão longa no celular.
           card.addEventListener('dragstart', event => event.preventDefault());
           card.addEventListener('contextmenu', event => { if (kanbanPointer?.touch) event.preventDefault(); });
@@ -4136,6 +4243,8 @@
         const finance = financialSituation(order);
         const payment = checkoutPresentation(order);
         const saving = pendingStatusMoves.has(id);
+        const archived = Boolean(order.archivedAt);
+        const archiving = archivingOrderIds.has(id);
         const phone = whatsappLink(order.whatsapp);
         const row = (label, value, className = '') => `<div${className ? ` class="${className}"` : ''}><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
         const itemLine = item => {
@@ -4174,9 +4283,11 @@
         const managementSection = `<section class="order-modal-section order-modal-status" aria-labelledby="orderModalStatusTitle">
             <h3 id="orderModalStatusTitle">Gestão</h3>
             <label for="orderModalStatus">Status do pedido</label>
-            <select id="orderModalStatus" class="control" data-order-id="${escapeHtml(id)}" ${saving ? 'disabled aria-busy="true"' : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select>
+            <select id="orderModalStatus" class="control" data-order-id="${escapeHtml(id)}" ${saving || archived || archiving ? `disabled${saving || archiving ? ' aria-busy="true"' : ''}` : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select>
             ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
-            <p class="order-modal-note">Alterar o status não muda a situação financeira da cobrança.</p>
+            <p class="order-modal-note">${archived ? 'Desarquive o pedido para alterar o status.' : 'Alterar o status não muda a situação financeira da cobrança.'}</p>
+            ${archived ? `<dl class="order-modal-rows"><div><dt>Arquivado em</dt><dd>${escapeHtml(formatArchivedAt(order.archivedAt))}</dd></div></dl>` : ''}
+            ${archived || canArchiveOrder(order) || archiving ? `<div class="order-modal-actions"><button id="orderModalArchive" class="ghost-btn" type="button" data-archive-action="${archived ? 'unarchive' : 'archive'}" ${archiving ? 'disabled aria-busy="true"' : ''}>${archiving ? (archived ? 'Desarquivando...' : 'Arquivando...') : (archived ? 'Desarquivar pedido' : 'Arquivar pedido')}</button></div>` : ''}
           </section>`;
         const paymentSection = `<section class="order-modal-section" aria-labelledby="orderModalPaymentTitle">
             <h3 id="orderModalPaymentTitle">Pagamento</h3>
@@ -4236,6 +4347,9 @@
         $('orderModalBody').innerHTML = renderOrderModalBody(order);
         const select = $('orderModalStatus');
         select.addEventListener('change', () => moveOrderToStatus(select.dataset.orderId, select.value));
+        $('orderModalBody').querySelector?.('#orderModalArchive')?.addEventListener('click', event => {
+          setOrderArchived(orderModalState.orderId, event.currentTarget.dataset.archiveAction === 'archive');
+        });
         bindOrderDetailActions($('orderModalBody'));
         if (focusedId && focusedId !== 'orderModalClose' && $(focusedId)) $(focusedId).focus();
       }
@@ -4276,7 +4390,7 @@
       // Qualquer área do card abre o modal, exceto controles próprios e o clique que encerra um arraste.
       function handleKanbanCardClick(orderId, target) {
         if (draggedOrderId || Date.now() < suppressCardClickUntil) return false;
-        if (target?.closest?.('select, label, a, input, textarea')) return false;
+        if (target?.closest?.('select, label, a, input, textarea, [data-no-drag]')) return false;
         return openOrderModal(orderId);
       }
 
@@ -4306,11 +4420,14 @@
         }
         const orders = filterAndSortOrders();
         const hasFilters = Boolean(orderViewState.search || orderViewState.status || orderViewState.deliveryDate);
+        const archivedOnly = orderViewState.archive === 'archived';
         const totalCents = ordersTotalCents(orders);
         $('ordersResultCount').innerHTML = `<strong>${orders.length}</strong> ${orders.length === 1 ? 'pedido encontrado' : 'pedidos encontrados'}`;
         if (!orders.length) {
           container.innerHTML = hasFilters
             ? '<div class="empty-state"><strong>Nenhum pedido corresponde aos filtros.</strong><br>Ajuste a pesquisa, o status ou a data de entrega.</div>'
+            : archivedOnly
+            ? '<div class="empty-state"><strong>Nenhum pedido arquivado.</strong><br>Pedidos concluídos ou cancelados arquivados no Kanban aparecem aqui.</div>'
             : '<div class="empty-state"><strong>Ainda não há pedidos recebidos.</strong><br>Novas encomendas aparecerão aqui assim que forem registradas.</div>';
           container.innerHTML += renderOrdersTotalSummary(totalCents);
           return;
@@ -4395,6 +4512,7 @@
           button.textContent = expanded ? 'Mais informações' : 'Ocultar informações';
           if (row) row.hidden = expanded;
         }));
+        qsa('.order-unarchive', container).forEach(button => button.addEventListener('click', () => setOrderArchived(button.dataset.unarchiveOrder, false)));
         qsa('.order-status', container).forEach(select => select.addEventListener('change', () => {
           select.title = select.value;
           select.disabled = true;
@@ -4442,8 +4560,14 @@
         orderViewState.sort = event.target.value;
         renderLocalOrders();
       });
+      $('orderArchiveFilter').addEventListener('change', event => {
+        orderViewState.archive = ['archived', 'all'].includes(event.target.value) ? event.target.value : 'active';
+        renderOrderFilterOptions();
+        renderLocalOrders();
+      });
       $('clearOrderFiltersBtn').addEventListener('click', () => {
-        Object.assign(orderViewState, { search: '', status: '', deliveryDate: '' });
+        Object.assign(orderViewState, { search: '', status: '', deliveryDate: '', archive: 'active' });
+        $('orderArchiveFilter').value = 'active';
         $('orderSearch').value = '';
         $('orderStatusFilter').value = '';
         $('orderDeliveryFilter').value = '';

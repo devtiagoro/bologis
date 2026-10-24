@@ -45,7 +45,7 @@ function createHarness(options = {}) {
     properties.set('INFINITEPAY_RETURN_SECRET', 'fictitious-return-secret');
   }
   const sheets = {
-    Pedidos: createSheet(orderRows, 31),
+    Pedidos: createSheet(orderRows, 32),
     PedidoItens: createSheet(itemRows, 12),
     CheckoutCobrancas: createSheet(checkoutRows, 11)
   };
@@ -977,6 +977,22 @@ test('kanban: reativar pedido cancelado com pagamento aprovado preserva a confer
   const checkoutBefore = JSON.stringify(h.checkoutRows);
   assert.equal(h.context.updateOrderStatus_(order.id, 'Em produção', { expectedStatus: 'Cancelado' }).status, 'Em produção');
   assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore);
+});
+
+test('arquivamento nao altera cobranca e pagamento aprovado nao altera o arquivamento', () => {
+  const { h, order } = returnedOrder();
+  h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento' });
+  const checkoutBefore = JSON.stringify(h.checkoutRows);
+  const archived = h.context.setOrderArchived_(order.id, true, { expectedStatus: 'Cancelado' });
+  assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore, 'Arquivar não toca na cobrança.');
+  const orderColumns = JSON.stringify(h.orderRows[0].slice(0, 31));
+  h.setPaymentCheck(approved());
+  h.context.verifyCheckoutPayment_(order.id);
+  assert.equal(checkoutRefs(h).reviewReason, 'order_cancelled', 'A conferência financeira segue a regra existente.');
+  assert.equal(h.orderRows[0][13], 'Cancelado');
+  assert.equal(JSON.stringify(h.orderRows[0].slice(0, 31)), orderColumns, 'Webhook/conferência não altera dados do pedido arquivado.');
+  assert.equal(h.context.getOrders_()[0].archivedAt, archived.archivedAt);
+  assert.equal(h.context.getOrders_()[0].checkout.state, h.checkoutRows[0][7]);
 });
 
 test('central recebe confirmacao automatica pela consulta administrativa', () => {

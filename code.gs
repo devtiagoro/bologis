@@ -22,7 +22,9 @@ const PF = {
       // Etapa 9: colunas aditivas; pedidos anteriores ficam com estas células vazias.
       'Modalidade de recebimento', 'CEP', 'Logradouro', 'Número', 'Complemento', 'Bairro', 'Cidade', 'UF',
       'Referência', 'Subtotal produtos (centavos)', 'Taxa de entrega (centavos)', 'Total final (centavos)',
-      'Orientações de recebimento'
+      'Orientações de recebimento',
+      // Etapa 11.4: data/hora do arquivamento registrada pelo servidor; vazio = pedido ativo.
+      'Arquivado em'
     ],
     PedidoItens: [
       'Pedido ID', 'Item', 'Sabor', 'Tamanho ID', 'Tamanho', 'Quantidade',
@@ -34,6 +36,12 @@ const PF = {
       'Criado em', 'Expira em', 'Estado', 'Último erro', 'Referências JSON', 'Atualizado em'
     ]
   }
+};
+
+const PF_ARCHIVE = {
+  header: 'Arquivado em',
+  // Arquivamento não é status: o pedido mantém o status operacional original.
+  statuses: ['Concluído', 'Cancelado']
 };
 
 const PF_AUTH = {
@@ -638,6 +646,15 @@ function doPost(e) {
       const restored = restoreConfigBackup_(body.backupId, body.revision);
       return json_({ ok: true, config: restored.config, revision: restored.revision });
 
+    }
+
+
+    if (action === 'archiveOrder' || action === 'unarchiveOrder') {
+      requireAdmin_(body);
+      return json_({
+        ok: true,
+        order: setOrderArchived_(body.orderId, action === 'archiveOrder', { expectedStatus: body.expectedStatus })
+      });
     }
 
 
@@ -3045,11 +3062,17 @@ function makeIdempotentOrderId_(key) {
 function findOrderRecordById_(sheet, orderId) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
-  const rows = sheet.getRange(2, 1, lastRow - 1, PF.headers.Pedidos.length).getValues();
+  const rows = sheet.getRange(2, 1, lastRow - 1, orderSheetWidth_(sheet)).getValues();
   for (let index = 0; index < rows.length; index += 1) {
     if (String(rows[index][0] || '') === orderId) return { row: rows[index], rowNumber: index + 2 };
   }
   return null;
+}
+
+// Planilhas anteriores à Etapa 11.4 podem ter menos colunas que o cabeçalho atual.
+function orderSheetWidth_(sheet) {
+  const width = PF.headers.Pedidos.length;
+  return typeof sheet.getMaxColumns === 'function' ? Math.max(1, Math.min(width, sheet.getMaxColumns())) : width;
 }
 
 function findOrderRowById_(sheet, orderId) {
@@ -3150,6 +3173,7 @@ function orderResponseFromRow_(row, timezone, duplicate, persistedItems) {
     subtotal: fulfillment.productsCents / 100,
     deliveryFee: fulfillment.feeCents / 100,
     deliveryFeeCents: fulfillment.feeCents,
+    archivedAt: archivedAtText_(row[PF.headers.Pedidos.indexOf(PF_ARCHIVE.header)]),
     duplicate: duplicate === true
   };
 }
@@ -3251,6 +3275,9 @@ function writeOrderStatus_(orderId, status, options) {
     throw statusConflictError_(currentStatus);
   }
   if (currentStatus === status) return { id, status: currentStatus, previousStatus: currentStatus, unchanged: true };
+  if (archivedAtText_(record.row[PF.headers.Pedidos.indexOf(PF_ARCHIVE.header)])) {
+    throw apiError_('ORDER_ARCHIVED', 'Desarquive o pedido antes de alterar o status.');
+  }
 
   const cell = sheet.getRange(record.rowNumber, 14);
   cell.setValue(status);
@@ -3259,6 +3286,61 @@ function writeOrderStatus_(orderId, status, options) {
   const persisted = String(cell.getValues()[0][0] || '');
   if (persisted !== status) throw apiError_('STATUS_WRITE_FAILED', 'Não foi possível confirmar a gravação do status na planilha.');
   return { id, status: persisted, previousStatus: currentStatus, unchanged: false };
+}
+
+
+
+function archivedAtText_(value) {
+  if (value instanceof Date) return isNaN(value.getTime()) ? '' : value.toISOString();
+  return String(value == null ? '' : value).trim();
+}
+
+// Cria a coluna "Arquivado em" no primeiro uso, sem tocar nas demais colunas ou linhas.
+function ensureOrderArchiveColumn_(sheet) {
+  const column = PF.headers.Pedidos.indexOf(PF_ARCHIVE.header) + 1;
+  if (typeof sheet.getMaxColumns === 'function' && sheet.getMaxColumns() < column) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns());
+  }
+  const header = sheet.getRange(1, column);
+  if (!String((header.getValues()[0] || [])[0] || '')) header.setValue(PF_ARCHIVE.header);
+  return column;
+}
+
+/**
+ * Etapa 11.4: arquiva ou desarquiva sem excluir linhas nem alterar status, valores ou cobrança.
+ * Idempotente; relê o pedido dentro do mesmo lock usado por status, webhook e conciliação.
+ */
+function setOrderArchived_(orderId, archive, options) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const settings = options || {};
+    const id = String(orderId == null ? '' : orderId);
+    const sheet = getSpreadsheet_().getSheetByName(PF.sheets.orders);
+    const record = id ? findOrderRecordById_(sheet, id) : null;
+    if (!record) throw apiError_('ORDER_NOT_FOUND', 'Pedido não encontrado.');
+    const currentStatus = String(record.row[13] || '');
+    if (typeof settings.expectedStatus !== 'string' || settings.expectedStatus !== currentStatus) {
+      throw statusConflictError_(currentStatus);
+    }
+    const currentArchivedAt = archivedAtText_(record.row[PF.headers.Pedidos.indexOf(PF_ARCHIVE.header)]);
+    if (Boolean(currentArchivedAt) === archive) {
+      return { id, status: currentStatus, archivedAt: currentArchivedAt, unchanged: true };
+    }
+    if (archive && !PF_ARCHIVE.statuses.includes(currentStatus)) {
+      throw apiError_('ORDER_NOT_ARCHIVABLE', 'Somente pedidos concluídos ou cancelados podem ser arquivados.');
+    }
+    const cell = sheet.getRange(record.rowNumber, ensureOrderArchiveColumn_(sheet));
+    cell.setValue(archive ? currentBusinessDate_() : '');
+    if (typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
+    const persisted = archivedAtText_(cell.getValues()[0][0]);
+    if (Boolean(persisted) !== archive) {
+      throw apiError_('ARCHIVE_WRITE_FAILED', 'Não foi possível confirmar a gravação do arquivamento na planilha.');
+    }
+    return { id, status: currentStatus, archivedAt: persisted, unchanged: false };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 

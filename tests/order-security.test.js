@@ -40,7 +40,7 @@ function createHarness(options = {}) {
       }
     };
   }
-  const sheet = makeSheet(rows, 31);
+  const sheet = makeSheet(rows, 32);
   const itemSheet = makeSheet(itemRows, 12, true);
   const spreadsheet = {
     getSheetByName: name => name === 'PedidoItens' ? itemSheet : sheet,
@@ -546,6 +546,142 @@ test('mesma coluna nao grava status e pedido inexistente retorna erro claro', ()
   assert.equal(result.unchanged, true);
   assert.equal(writes, 0);
   assert.throws(() => h.context.updateOrderStatus_('PF-INEXISTENTE', 'Cancelado', { expectedStatus: '' }), error => error.code === 'ORDER_NOT_FOUND');
+});
+
+// Etapa 11.4: arquivamento
+function archive(h, id, options = {}) {
+  return h.context.setOrderArchived_(id, true, { expectedStatus: h.rows.find(row => row[0] === id)[13], ...options });
+}
+
+function unarchive(h, id, options = {}) {
+  return h.context.setOrderArchived_(id, false, { expectedStatus: h.rows.find(row => row[0] === id)[13], ...options });
+}
+
+function countingWrites(h) {
+  const writes = [];
+  const original = h.context.getSpreadsheet_;
+  h.context.getSpreadsheet_ = () => {
+    const ss = original();
+    return { ...ss, getSheetByName: name => {
+      const sheet = ss.getSheetByName(name);
+      return { ...sheet, getRange: (row, column, ...rest) => {
+        const range = sheet.getRange(row, column, ...rest);
+        return { ...range, setValue: value => { writes.push([row, column, value]); range.setValue(value); } };
+      } };
+    } };
+  };
+  return writes;
+}
+
+test('arquivamento: concluido e cancelado recebem archivedAt do servidor sem mudar status nem dados', () => {
+  for (const status of ['Concluído', 'Cancelado']) {
+    const h = createHarness({ rows: [statusRow('PF-ARQ-1', status)] });
+    const before = JSON.stringify(h.rows[0]);
+    const result = archive(h, 'PF-ARQ-1');
+    assert.equal(JSON.stringify(result), JSON.stringify({ id: 'PF-ARQ-1', status, archivedAt: '2026-10-20T15:00:00.000Z', unchanged: false }));
+    assert.ok(h.rows[0][31] instanceof Date, 'Data registrada pelo servidor na coluna "Arquivado em".');
+    assert.equal(JSON.stringify(h.rows[0].slice(0, 15)), before, 'Nenhuma outra coluna é alterada.');
+    assert.ok(h.rows[0].slice(15, 31).every(value => value === undefined || value === ''), 'Colunas intermediárias permanecem vazias.');
+    assert.equal(h.rows.length, 1, 'Nenhuma linha é excluída ou acrescentada.');
+    const reloaded = h.context.getOrders_()[0];
+    assert.equal(reloaded.archivedAt, '2026-10-20T15:00:00.000Z');
+    assert.equal(reloaded.status, status);
+    assert.equal(h.lockReleases, h.lockWaits);
+  }
+});
+
+test('arquivamento: demais status sao recusados pelo servidor', () => {
+  for (const status of ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Novo', '']) {
+    const h = createHarness({ rows: [statusRow('PF-ARQ-2', status)] });
+    const writes = countingWrites(h);
+    assert.throws(() => archive(h, 'PF-ARQ-2'), error => error.code === 'ORDER_NOT_ARCHIVABLE', status || '(vazio)');
+    assert.equal(writes.length, 0);
+    assert.equal(h.context.getOrders_()[0].archivedAt, '');
+  }
+});
+
+test('arquivamento: e idempotente e desarquivar preserva o status original', () => {
+  const h = createHarness({ rows: [statusRow('PF-ARQ-3', 'Cancelado')] });
+  const writes = countingWrites(h);
+  const first = archive(h, 'PF-ARQ-3');
+  const second = archive(h, 'PF-ARQ-3');
+  assert.equal(second.unchanged, true);
+  assert.equal(second.archivedAt, first.archivedAt);
+  assert.equal(writes.filter(([row]) => row === 2).length, 1, 'Requisição repetida não grava de novo.');
+  const restored = unarchive(h, 'PF-ARQ-3');
+  assert.equal(JSON.stringify(restored), JSON.stringify({ id: 'PF-ARQ-3', status: 'Cancelado', archivedAt: '', unchanged: false }));
+  assert.equal(h.rows[0][31], '');
+  assert.equal(h.rows[0][13], 'Cancelado');
+  assert.equal(unarchive(h, 'PF-ARQ-3').unchanged, true);
+  assert.equal(writes.filter(([row]) => row === 2).length, 2);
+});
+
+test('arquivamento: conflito de status entre sessoes nao grava', () => {
+  const h = createHarness({ rows: [statusRow('PF-ARQ-4', 'Em produção')] });
+  const writes = countingWrites(h);
+  assert.throws(() => h.context.setOrderArchived_('PF-ARQ-4', true, { expectedStatus: 'Concluído' }), error => error.code === 'STATUS_CONFLICT' && error.currentStatus === 'Em produção');
+  assert.throws(() => h.context.setOrderArchived_('PF-ARQ-4', true, {}), error => error.code === 'STATUS_CONFLICT');
+  assert.throws(() => h.context.setOrderArchived_('PF-INEXISTENTE', true, { expectedStatus: 'Concluído' }), error => error.code === 'ORDER_NOT_FOUND');
+  assert.equal(writes.length, 0);
+  assert.equal(h.lockReleases, h.lockWaits);
+});
+
+test('arquivamento: pedido arquivado nao muda de status ate ser desarquivado', () => {
+  const h = createHarness({ rows: [statusRow('PF-ARQ-5', 'Concluído')] });
+  archive(h, 'PF-ARQ-5');
+  assert.throws(() => moveStatus(h, 'PF-ARQ-5', 'Em produção'), error => error.code === 'ORDER_ARCHIVED');
+  assert.equal(h.rows[0][13], 'Concluído');
+  assert.ok(h.rows[0][31] instanceof Date, 'A tentativa de status não sobrescreve o arquivamento.');
+  assert.equal(moveStatus(h, 'PF-ARQ-5', 'Concluído').unchanged, true);
+  unarchive(h, 'PF-ARQ-5');
+  assert.equal(moveStatus(h, 'PF-ARQ-5', 'Em produção').status, 'Em produção');
+});
+
+test('arquivamento: falha de gravacao nao responde sucesso', () => {
+  const h = createHarness({ rows: [statusRow('PF-ARQ-6', 'Concluído')] });
+  const original = h.context.getSpreadsheet_;
+  h.context.getSpreadsheet_ = () => {
+    const ss = original();
+    return { ...ss, getSheetByName: name => {
+      const sheet = ss.getSheetByName(name);
+      return { ...sheet, getRange: (row, column, ...rest) => ({ ...sheet.getRange(row, column, ...rest), setValue(value) { if (row === 1) sheet.getRange(row, column).setValue(value); } }) };
+    } };
+  };
+  assert.throws(() => archive(h, 'PF-ARQ-6'), error => error.code === 'ARCHIVE_WRITE_FAILED');
+  assert.equal(h.rows[0][31] ?? '', '');
+  assert.equal(h.lockReleases, h.lockWaits);
+});
+
+test('arquivamento: pedidos historicos sem a coluna sao ativos e a coluna e criada no primeiro uso', () => {
+  const legacy = statusRow('PF-ARQ-7', 'Concluído');
+  const h = createHarness({ rows: [legacy] });
+  assert.equal(h.context.getOrders_()[0].archivedAt, '');
+  // Planilha de produção com 31 colunas: leitura limitada e coluna criada sem tocar nas demais.
+  const inserted = [];
+  let maxColumns = 31;
+  let header = '';
+  const original = h.context.getSpreadsheet_;
+  h.context.getSpreadsheet_ = () => {
+    const ss = original();
+    return { ...ss, getSheetByName: name => {
+      const sheet = ss.getSheetByName(name);
+      return {
+        ...sheet,
+        getMaxColumns: () => maxColumns,
+        insertColumnsAfter(after, count) { inserted.push([after, count]); maxColumns += count; },
+        getRange(row, column, rowCount = 1, columnCount = 1) {
+          assert.ok(column + columnCount - 1 <= maxColumns, `Leitura fora da planilha: coluna ${column + columnCount - 1} de ${maxColumns}.`);
+          if (row === 1) return { getValues: () => [[header]], setValue: value => { header = value; } };
+          return sheet.getRange(row, column, rowCount, columnCount);
+        }
+      };
+    } };
+  };
+  assert.equal(h.context.findOrderRecordById_(h.context.getSpreadsheet_().getSheetByName('Pedidos'), 'PF-ARQ-7').row.length, 31);
+  archive(h, 'PF-ARQ-7');
+  assert.equal(JSON.stringify(inserted), JSON.stringify([[31, 1]]));
+  assert.equal(header, 'Arquivado em');
+  assert.ok(h.rows[0][31] instanceof Date);
 });
 
 test('configuracao comercial rejeita dia e horario invalidos', () => {
