@@ -965,10 +965,10 @@
     .orders-result-line strong { color: var(--text); }
     .orders-table { min-width: 940px; table-layout: fixed; }
     .orders-table th { white-space: nowrap; }
-    .orders-table th:nth-child(1) { width: 22%; }
-    .orders-table th:nth-child(2) { width: 23%; }
-    .orders-table th:nth-child(3) { width: 12%; }
-    .orders-table th:nth-child(4) { width: 22%; }
+    .orders-table th:nth-child(1) { width: 25%; }
+    .orders-table th:nth-child(2) { width: 24%; }
+    .orders-table th:nth-child(3) { width: 18%; }
+    .orders-table th:nth-child(4) { width: 12%; }
     .orders-table th:nth-child(5) { width: 21%; }
     .orders-table td { vertical-align: top; overflow-wrap: anywhere; }
     .order-main-cell { min-width: 0; }
@@ -980,14 +980,9 @@
     .order-status-cell { min-width: 0; }
     .order-status-cell label { display: block; margin-top: 8px; }
     .order-status-cell .control { width: 100%; min-width: 0; min-height: 40px; padding: 8px 9px; font-size: 12px; }
-    .order-row-details { margin-top: 9px; color: var(--muted); font-size: 12px; }
-    .order-row-details summary { cursor: pointer; color: var(--accent-strong); font-weight: 800; }
-    .order-row-details > div { display: grid; gap: 5px; margin-top: 7px; line-height: 1.4; }
-    .order-row-details p { margin: 0; overflow-wrap: anywhere; }
-    .order-payment-cell .admin-item-list { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
-    .order-payment-cell .ghost-btn { width: 100%; padding: 8px 9px; white-space: normal; }
     .admin-item-list, .admin-item-line, .admin-item-line > span { min-width: 0; }
     .admin-item-line > span { overflow-wrap: anywhere; }
+    .admin-item-line > small { flex: 0 0 auto; white-space: nowrap; }
 
     .status-badge {
       display: inline-flex;
@@ -1013,7 +1008,7 @@
       padding: 16px;
     }
     .order-mobile-card + .order-mobile-card { margin-top: 10px; }
-    .order-card-heading, .order-card-price {
+    .order-card-heading {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -1022,19 +1017,30 @@
     .order-card-heading > div { min-width: 0; }
     .order-card-heading .status-badge { flex: 0 1 auto; max-width: 48%; text-align: center; white-space: normal; }
     .order-card-heading h3 { margin: 4px 0 0; font-size: 17px; }
-    .order-card-price { margin: 16px 0 12px; align-items: flex-end; }
-    .order-card-price strong { font-size: 21px; }
-    .order-card-summary { color: var(--muted); font-size: 13px; line-height: 1.5; }
-    .order-card-items { margin: 14px 0 4px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .order-card-facts { display: grid; gap: 8px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--line); font-size: 14px; }
+    .order-card-facts > div { display: flex; justify-content: space-between; gap: 12px; min-width: 0; }
+    .order-card-facts dt { color: var(--muted); flex: 0 0 auto; }
+    .order-card-facts dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
     .order-details {
       margin-top: 12px;
       border-top: 1px solid var(--line);
       padding-top: 12px;
     }
     .order-details summary { cursor: pointer; font-weight: 850; color: var(--accent-strong); }
-    .order-details-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 12px; font-size: 13px; }
-    .order-details-grid > div { min-width: 0; overflow-wrap: anywhere; }
-    .order-details-grid span { color: var(--muted); display: block; margin-bottom: 2px; }
+    .order-details-toggle { display: inline-block; margin-top: 7px; padding: 0; border: 0; background: none; color: var(--accent-strong); font-size: 12px; font-weight: 800; cursor: pointer; }
+    .order-details-toggle::before { content: '▸ '; }
+    .order-details-toggle[aria-expanded="true"]::before { content: '▾ '; }
+    .order-details-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+    .order-details-row td { background: #fffaf6; padding: 16px 18px 18px; }
+    .order-details-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 14px 22px; margin-top: 12px; font-size: 13px; }
+    .orders-table .order-details-sections { margin-top: 0; }
+    .order-details-sections section { min-width: 0; overflow-wrap: anywhere; }
+    .order-details-sections h4 { margin: 0 0 8px; font-size: 13px; color: var(--text); }
+    .order-details-sections p { margin: 0 0 6px; line-height: 1.4; }
+    .order-details-sections p > span:first-child { display: block; color: var(--muted); font-size: 12px; }
+    .order-details-sections .admin-item-list { margin-bottom: 8px; }
+    .order-checkout-section .admin-item-list > div { display: grid; gap: 4px; }
+    .order-full-id { overflow-wrap: anywhere; }
     .order-mobile-actions { margin-top: 14px; }
     .order-mobile-actions .control { min-height: 46px; }
 
@@ -3213,6 +3219,95 @@
         }));
       }
 
+      // O formulário envia o horário fixo "00:00" e o Sheets o converte em hora pura, que o Apps Script
+      // devolve como data de 30/12/1899 ("Sat Dec 30 1899 00:00:00 GMT-0306"). Só um horário real é exibido.
+      function orderTimeText(value) {
+        const text = String(value || '').trim();
+        const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/) || text.match(/\b(\d{2}):(\d{2}):\d{2}\s+GMT/);
+        if (!match) return '';
+        const hours = Number(match[1]);
+        const minutes = Number(match[2]);
+        if (hours > 23 || minutes > 59 || (hours === 0 && minutes === 0)) return '';
+        return `${String(hours).padStart(2, '0')}:${match[2]}`;
+      }
+
+      function shortOrderId(id) {
+        const text = String(id || '');
+        return text.length > 8 ? text.slice(-6) : text;
+      }
+
+      function shortFlavorName(flavor) {
+        const name = String(flavor || '').replace(/\s*\([^)]*\)/g, '').replace(/^bolo\s+(de|da|do)\s+/i, '').trim();
+        return name || String(flavor || 'Item');
+      }
+
+      // Pedidos por tamanho ("3 Fatias") são convertidos em fatias quando o nome do tamanho permite.
+      function orderSlicesText(order) {
+        const items = orderDisplayItems(order);
+        if (orderUsesProgressivePricing(order)) {
+          const total = orderTotalQuantity(order);
+          return `${total} ${total === 1 ? 'fatia' : 'fatias'}`;
+        }
+        const slices = items.map(item => {
+          const match = String(item.size || '').match(/(\d+)\s*fatias?/i);
+          return match ? Number(match[1]) * Number(item.quantity || 1) : null;
+        });
+        if (slices.every(value => value !== null)) {
+          const total = slices.reduce((sum, value) => sum + value, 0);
+          return `${total} ${total === 1 ? 'fatia' : 'fatias'}`;
+        }
+        const total = orderTotalQuantity(order);
+        return `${total} ${total === 1 ? 'bolo' : 'bolos'}`;
+      }
+
+      function orderFlavorSummary(order) {
+        const names = [...new Set(orderDisplayItems(order).map(item => shortFlavorName(item.flavor)))];
+        if (names.length <= 1) return names[0] || 'Itens não informados';
+        return `${names[0]} + ${names.length - 1} ${names.length === 2 ? 'sabor' : 'sabores'}`;
+      }
+
+      function orderFulfillmentShortLabel(order) {
+        const mode = order.fulfillment?.mode;
+        return mode === 'delivery' ? 'Entrega' : mode === 'pickup' ? 'Retirada' : 'Não informado';
+      }
+
+      function orderReceiptDateText(order) {
+        const time = orderTimeText(order.time);
+        return `${formatDate(orderDeliveryDate(order))}${time ? ` · ${time}` : ''}`;
+      }
+
+      // Conteúdo único de "Mais informações", usado pela tabela e pelos cards.
+      function renderOrderDetailsContent(order) {
+        const phone = whatsappLink(order.whatsapp)
+          ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>`
+          : escapeHtml(order.whatsapp || '—');
+        const fulfillment = orderFulfillmentSummary(order);
+        const total = orderTotal(order);
+        const subtotal = order.subtotal !== undefined && Number.isFinite(Number(order.subtotal)) ? Number(order.subtotal) : total;
+        const fee = Number(order.deliveryFee || 0);
+        return `<div class="order-details-sections">
+          <section><h4>Pedido</h4>
+            <p><span>Número</span><strong class="order-full-id">${escapeHtml(order.id || '—')}</strong></p>
+            <p><span>WhatsApp</span>${phone}</p>
+            <p><span>Criado em</span>${escapeHtml(formatCreatedAt(order.createdAt))}</p>
+            <p><span>Pagamento</span>${escapeHtml(order.payment || '—')}</p>
+          </section>
+          <section><h4>Itens</h4>
+            ${renderAdminOrderItems(order)}
+            <p><span>Subtotal</span>${escapeHtml(brl(subtotal))}</p>
+            <p><span>Taxa de entrega</span>${order.fulfillment?.mode === 'delivery' ? escapeHtml(fee > 0 ? brl(fee) : 'Sem taxa') : '—'}</p>
+            <p><span>Total</span><strong>${escapeHtml(brl(total))}</strong></p>
+          </section>
+          <section><h4>Recebimento</h4>
+            <p><span>Modalidade</span>${escapeHtml(fulfillment.label || 'Não informado')}</p>
+            <p><span>Data</span>${escapeHtml(orderReceiptDateText(order))}</p>
+            <p class="pre-line">${escapeHtml(fulfillment.details)}</p>
+          </section>
+          <section><h4>Observações</h4><p class="pre-line">${escapeHtml(order.notes || 'Sem observações')}</p></section>
+          <section class="order-checkout-section"><h4>Dados do checkout</h4>${renderAdminCheckout(order)}</section>
+        </div>`;
+      }
+
       function formatCreatedAt(value) {
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
@@ -3236,7 +3331,7 @@
         })[state] || 'Sem checkout';
       }
 
-      function renderAdminCheckout(order, compact = false) {
+      function renderAdminCheckout(order) {
         const checkout = order.checkout || {};
         const url = safeCheckoutUrl(checkout.url);
         const expiry = new Date(checkout.expiresAt || '');
@@ -3251,35 +3346,19 @@
           ? `<span class="checkout-diagnostic">Falha: ${escapeHtml(checkoutDiagnosticText(checkout.diagnostic))}${checkout.attempts ? ` · ${escapeHtml(String(checkout.attempts))} tentativa(s)` : ''}</span>`
           : '';
         const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${diagnostic}${checkAction}${retryAction}<small>A confirmação do pedido permanece manual.</small></div>`;
-        if (compact) {
-          return `<div class="admin-item-list checkout-compact"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}<details class="order-row-details"><summary>Dados do checkout</summary>${details}</details></div>`;
-        }
         return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
       }
 
       function orderFulfillmentSummary(order) {
         const fulfillment = order.fulfillment || {};
         const mode = fulfillment.mode === 'delivery' || fulfillment.mode === 'pickup' ? fulfillment.mode : '';
-        if (!mode) return { label: '', details: 'Não informado (pedido anterior à escolha de recebimento)', amounts: '' };
-        const feeCents = Math.round(Number(order.deliveryFee || 0) * 100);
+        if (!mode) return { label: '', details: 'Não informado (pedido anterior à escolha de recebimento)' };
         return {
           label: fulfillmentLabel(mode),
           details: mode === 'delivery'
             ? [formatAddress(fulfillment.address), fulfillment.instructions].filter(Boolean).join('\n')
-            : pickupGuidance(fulfillment.instructions),
-          amounts: order.subtotal !== undefined
-            ? `Subtotal ${brl(Number(order.subtotal))}${mode === 'delivery' ? ` · taxa ${feeCents > 0 ? brl(feeCents / 100) : 'sem taxa'}` : ''}`
-            : ''
+            : pickupGuidance(fulfillment.instructions)
         };
-      }
-
-      function renderAdminFulfillment(order, tag) {
-        const summary = orderFulfillmentSummary(order);
-        const title = summary.label || 'Recebimento';
-        if (tag === 'div') {
-          return `<div><span>Recebimento</span><strong>${escapeHtml(title)}</strong><span class="pre-line">${escapeHtml(summary.details)}</span>${summary.amounts ? `<small>${escapeHtml(summary.amounts)}</small>` : ''}</div>`;
-        }
-        return `<p>Recebimento: ${escapeHtml(title)}</p><p class="pre-line">${escapeHtml(summary.details)}</p>${summary.amounts ? `<p>${escapeHtml(summary.amounts)}</p>` : ''}`;
       }
 
       function renderFulfillmentEditor() {
@@ -3370,24 +3449,27 @@
               <thead>
                 <tr>
                   <th>Pedido / cliente</th>
-                  <th>Sabores / quantidades</th>
-                  <th>Entrega</th>
-                  <th>Pagamento / checkout</th>
+                  <th>Encomenda</th>
+                  <th>Recebimento</th>
+                  <th>Total</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                ${orders.map(order => `
-                  <tr class="${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
-                    <td class="order-main-cell"><span class="order-id">#${escapeHtml(order.id || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><details class="order-row-details"><summary>Mais informações</summary><div><p>WhatsApp: ${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</p><p>Recebido: ${escapeHtml(formatCreatedAt(order.createdAt))}</p><p>Observações: ${escapeHtml(order.notes || 'Sem observações')}</p>${renderAdminFulfillment(order, 'p')}</div></details></td>
-                    <td class="order-main-cell">${renderAdminOrderItems(order)}</td>
-                    <td class="order-main-cell order-date-cell"><strong>${escapeHtml(formatDate(orderDeliveryDate(order)))}</strong><small>${escapeHtml(order.time || 'Horário não informado')}</small>${orderFulfillmentSummary(order).label ? `<small class="order-fulfillment">${escapeHtml(orderFulfillmentSummary(order).label)}</small>` : ''}</td>
-                    <td class="order-main-cell order-payment-cell"><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong><small>${escapeHtml(order.payment || '—')}</small>${renderAdminCheckout(order, true)}</td>
+                ${orders.map((order, index) => `
+                  <tr class="order-row ${isPaymentDeadlineExpired(order) ? 'order-expired' : ''}">
+                    <td class="order-main-cell"><span class="order-id" title="${escapeHtml(order.id || '')}">#${escapeHtml(shortOrderId(order.id) || '—')}</span><strong>${escapeHtml(order.customerName || 'Cliente não informado')}</strong><button class="order-details-toggle" type="button" aria-expanded="false" aria-controls="order-details-${index}">Mais informações</button></td>
+                    <td class="order-main-cell"><strong>${escapeHtml(orderFlavorSummary(order))}</strong><small>${escapeHtml(orderSlicesText(order))}</small></td>
+                    <td class="order-main-cell order-date-cell"><strong>${escapeHtml(orderReceiptDateText(order))}</strong><small class="order-fulfillment">${escapeHtml(orderFulfillmentShortLabel(order))}</small></td>
+                    <td class="order-main-cell"><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong></td>
                     <td class="order-status-cell">
                       <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                       ${orderStatusControl(order)}
                       ${isPaymentDeadlineExpired(order) ? '<small class="order-meta">Prazo de pagamento encerrado</small>' : ''}
                     </td>
+                  </tr>
+                  <tr id="order-details-${index}" class="order-details-row" hidden>
+                    <td colspan="5">${renderOrderDetailsContent(order)}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -3397,23 +3479,27 @@
             ${orders.map(order => `
               <article class="order-mobile-card" data-order-card="${escapeHtml(order.id || '')}">
                 <div class="order-card-heading">
-                  <div><span class="order-id">#${escapeHtml(order.id || '—')}</span><h3>${escapeHtml(order.customerName || 'Cliente não informado')}</h3></div>
+                  <div><span class="order-id" title="${escapeHtml(order.id || '')}">#${escapeHtml(shortOrderId(order.id) || '—')}</span><h3>${escapeHtml(order.customerName || 'Cliente não informado')}</h3></div>
                   <span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || '—')}</span>
                 </div>
-                <div class="order-card-items">${renderAdminOrderItems(order)}</div>
-                <div class="order-card-price"><div class="order-card-summary"><strong class="order-detail-primary">${orderTotalQuantity(order)} ${orderUsesProgressivePricing(order) ? (orderTotalQuantity(order) === 1 ? 'fatia' : 'fatias') : (orderTotalQuantity(order) === 1 ? 'bolo' : 'bolos')}</strong>Entrega em ${escapeHtml(formatDate(orderDeliveryDate(order)))}</div><strong>${escapeHtml(brl(orderTotal(order)))}</strong></div>
-                <details class="order-details"><summary>Ver detalhes</summary><div class="order-details-grid">
-                  <div><span>WhatsApp</span>${whatsappLink(order.whatsapp) ? `<a href="${whatsappLink(order.whatsapp)}" target="_blank" rel="noopener">${escapeHtml(order.whatsapp)}</a>` : escapeHtml(order.whatsapp || '—')}</div>
-                  <div><span>Pagamento</span>${escapeHtml(order.payment || '—')}</div>
-                  <div><span>Checkout</span>${renderAdminCheckout(order)}</div>
-                  <div><span>Pedido recebido</span>${escapeHtml(formatCreatedAt(order.createdAt))}</div>
-                  <div><span>Observações</span>${escapeHtml(order.notes || 'Sem observações')}</div>${renderAdminFulfillment(order, 'div')}
-                </div></details>
+                <dl class="order-card-facts">
+                  <div><dt>Encomenda</dt><dd>${escapeHtml(orderFlavorSummary(order))} · ${escapeHtml(orderSlicesText(order))}</dd></div>
+                  <div><dt>Recebimento</dt><dd>${escapeHtml(orderReceiptDateText(order))} · <span class="order-fulfillment">${escapeHtml(orderFulfillmentShortLabel(order))}</span></dd></div>
+                  <div><dt>Total</dt><dd><strong>${escapeHtml(brl(orderTotal(order)))}</strong></dd></div>
+                </dl>
+                <details class="order-details"><summary>Mais informações</summary>${renderOrderDetailsContent(order)}</details>
                 <div class="order-mobile-actions">${orderStatusControl(order, true)}</div>
               </article>
             `).join('')}
           </div>
         `;
+        qsa('.order-details-toggle', container).forEach(button => button.addEventListener('click', () => {
+          const row = $(button.getAttribute('aria-controls'));
+          const expanded = button.getAttribute('aria-expanded') === 'true';
+          button.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          button.textContent = expanded ? 'Mais informações' : 'Ocultar informações';
+          if (row) row.hidden = expanded;
+        }));
         qsa('.order-status', container).forEach(select => select.addEventListener('change', async () => {
           const nextStatus = select.value;
           const previousStatus = select.dataset.previousStatus;

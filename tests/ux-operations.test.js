@@ -30,6 +30,10 @@ source = source.replace(
         orderFulfillmentSummary,
         readFulfillmentEditor,
         getConfig() { return config; },
+        orderTimeText,
+        shortOrderId,
+        orderFlavorSummary,
+        orderSlicesText,
         safeCheckoutUrl,
         normalizeClientOrderItems,
         progressivePriceDetails,
@@ -564,12 +568,13 @@ test('central apresenta modalidade, endereço e pedidos antigos sem colunas nova
   const delivery = { id: 'PF-ENT', customerName: 'Ana', status: 'Aguardando pagamento', date: '2026-10-25', total: 27.97, subtotal: 19.97, deliveryFee: 8, fulfillment: { mode: 'delivery', address: { cep: '38400000', street: 'Rua Fictícia', number: '10', neighborhood: 'Centro Teste', city: 'Cidade Exemplo', state: 'MG' }, instructions: '' } };
   const legacy = { id: 'PF-OLD', customerName: 'Bruno', status: 'Concluído', date: '2025-01-05', total: 89 };
   assert.equal(api.orderFulfillmentSummary(delivery).label, 'Entrega no endereço');
-  assert.match(api.orderFulfillmentSummary(delivery).amounts, /taxa R\$\s?8,00/);
   assert.match(api.orderFulfillmentSummary(legacy).details, /Não informado/);
   api.setOrders([delivery, legacy]);
   api.renderLocalOrders();
   const markup = runtime.get('ordersContainer').innerHTML;
-  assert.match(markup, /order-fulfillment">Entrega no endereço/);
+  assert.match(markup, /order-fulfillment">Entrega</);
+  assert.match(markup, /order-fulfillment">Não informado</);
+  assert.match(markup, /Taxa de entrega<\/span>R\$\s?8,00/);
   assert.match(markup, /Rua Fictícia, 10/);
   assert.equal((markup.match(/<th>/g) || []).length, 5, 'tabela mantém cinco colunas');
 });
@@ -625,6 +630,111 @@ test('salvar catálogo envia somente sabores', () => {
   assert.deepEqual(Object.keys(payload), ['flavorItems']);
   assert.equal(payload.flavorItems[0].name, 'Chocolate');
   assert.throws(() => api.configDomainPayload('catalog'), /inválido/);
+});
+
+// ---- Etapa 9.2: central de pedidos simplificada ----
+
+const legacySizeOrder = {
+  id: 'PF-20260831-113122-AB3E86', createdAt: '2026-08-31T14:31:22Z', customerName: 'Cliente Histórico Fictício',
+  whatsapp: '(34) 99999-1111', date: '2026-09-06', deliveryDate: '2026-09-06',
+  time: 'Sat Dec 30 1899 00:00:00 GMT-0306 (Horário Padrão de Brasília)',
+  total: 49.97, price: 49.97, payment: 'PIX', notes: 'Observação fictícia', status: 'Confirmado',
+  items: [{ flavor: 'Bolo de Choconinho (Massa branca, recheio de brigadeiro e creme de ninho)', sizeId: '3f', size: '3 Fatias', quantity: 1, unitPrice: 49.97, subtotal: 49.97, pricingModel: 'legacy-size' }],
+  checkout: { state: 'not_created', available: false }
+};
+
+const multiFlavorOrder = {
+  id: 'PF-I-ABCDEFGHIJKLMNOPQRSTUVWXYZ', createdAt: '2026-10-20T12:00:00Z', customerName: 'Pessoa Fictícia',
+  whatsapp: '(34) 98888-2222', date: '2026-10-25', time: '00:00', total: 82.91, subtotal: 74.91, deliveryFee: 8,
+  payment: 'InfinitePay — PIX ou cartão', notes: 'x'.repeat(400), status: 'Aguardando pagamento',
+  fulfillment: { mode: 'delivery', instructions: '', address: { cep: '38400000', street: 'Rua Fictícia', number: '10', neighborhood: 'Centro', city: 'Cidade Exemplo', state: 'MG' } },
+  items: [
+    { flavor: 'Choconinho', quantity: 2, subtotal: 34.97, pricingModel: 'progressive-v1' },
+    { flavor: 'Chocolate', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' },
+    { flavor: 'Cenoura', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' }
+  ],
+  checkout: { state: 'failed', available: false, canManualRetry: true, attempts: 2, chargeId: 'invoice-fict', diagnostic: { category: 'invalid_request', httpStatus: 400 } }
+};
+
+test('horário só aparece quando é real; serial de 1899 e 00:00 fixo são ignorados', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.equal(api.orderTimeText('Sat Dec 30 1899 00:00:00 GMT-0306 (Horário Padrão de Brasília)'), '');
+  assert.equal(api.orderTimeText('Sat Dec 30 1899 14:30:00 GMT-0306 (Horário Padrão de Brasília)'), '14:30');
+  assert.equal(api.orderTimeText('00:00'), '');
+  assert.equal(api.orderTimeText('9:05'), '09:05');
+  assert.equal(api.orderTimeText('14:30:00'), '14:30');
+  for (const malformed of ['', null, undefined, 'abc', '25:10', '12:75', '1899-12-30T03:06:28.000Z', 'Horário não informado']) {
+    assert.equal(api.orderTimeText(malformed), '', String(malformed));
+  }
+});
+
+test('tabela mostra cinco informações essenciais sem data de 1899 nem dados técnicos', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setOrders([legacySizeOrder, multiFlavorOrder]);
+  api.setOrderView({ loading: false, error: '', search: '', status: '', deliveryDate: '', sort: 'delivery-asc' });
+  api.renderLocalOrders();
+  const markup = runtime.get('ordersContainer').innerHTML;
+  assert.deepEqual((markup.match(/<th>[^<]+<\/th>/g) || []).map(cell => cell.replace(/<\/?th>/g, '')), ['Pedido / cliente', 'Encomenda', 'Recebimento', 'Total', 'Status']);
+  assert.doesNotMatch(markup, /1899|GMT/);
+  const mainRows = markup.split('<tr class="order-row').slice(1).map(part => part.split('order-details-row')[0]);
+  assert.equal(mainRows.length, 2);
+  for (const row of mainRows) {
+    assert.doesNotMatch(row, /Valor esperado|Conferir na InfinitePay|Gerar checkout|Abrir checkout|invoice-fict|Observação fictícia/);
+    assert.match(row, /class="control order-status"/);
+  }
+  assert.match(mainRows[0], /#AB3E86/);
+  assert.match(mainRows[0], /title="PF-20260831-113122-AB3E86"/);
+  assert.match(mainRows[0], /<strong>Choconinho<\/strong><small>3 fatias<\/small>/);
+  assert.match(mainRows[0], /<strong>06\/09\/2026<\/strong><small class="order-fulfillment">Não informado/);
+  assert.match(mainRows[1], /Choconinho \+ 2 sabores/);
+  assert.match(mainRows[1], /4 fatias/);
+  assert.match(mainRows[1], /<strong>25\/10\/2026<\/strong><small class="order-fulfillment">Entrega/);
+  assert.match(mainRows[1], /R\$\s?82,91/);
+});
+
+test('mais informações concentra pedido, itens, valores, recebimento e checkout', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setOrders([multiFlavorOrder]);
+  api.renderLocalOrders();
+  const markup = runtime.get('ordersContainer').innerHTML;
+  const detailsRow = markup.slice(markup.indexOf('class="order-details-row"'), markup.indexOf('</tr>', markup.indexOf('class="order-details-row"')));
+  assert.match(markup, /aria-expanded="false" aria-controls="order-details-0"/);
+  assert.match(markup, /id="order-details-0" class="order-details-row" hidden/);
+  for (const expected of [/PF-I-ABCDEFGHIJKLMNOPQRSTUVWXYZ/, /\(34\) 98888-2222/, /Choconinho/, /Cenoura/, /Subtotal<\/span>R\$\s?74,91/, /Taxa de entrega<\/span>R\$\s?8,00/, /Total<\/span><strong>R\$\s?82,91/, /Entrega no endereço/, /Rua Fictícia, 10/, /x{400}/, /InfinitePay — PIX ou cartão/, /Dados do checkout/, /invoice-fict/, /HTTP 400/, /2 tentativa/, /checkout-retry/]) {
+    assert.match(detailsRow, expected);
+  }
+  const card = markup.slice(markup.indexOf('<article class="order-mobile-card"'));
+  assert.match(card, /Encomenda<\/dt><dd>Choconinho \+ 2 sabores · 4 fatias/);
+  assert.match(card, /Recebimento<\/dt><dd>25\/10\/2026 · <span class="order-fulfillment">Entrega/);
+  assert.match(card, /<details class="order-details"><summary>Mais informações<\/summary>/);
+  assert.match(card, /Dados do checkout/);
+  assert.match(card, /class="control order-status"/);
+});
+
+test('ações de checkout continuam disponíveis somente nos detalhes', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setOrders([{ ...multiFlavorOrder, checkout: { state: 'returned_unverified', available: true, url: 'https://checkout.infinitepay.com.br/fict', chargeId: 'invoice-fict', expiresAt: '2026-10-22T23:59:59-03:00' } }]);
+  api.renderLocalOrders();
+  const markup = runtime.get('ordersContainer').innerHTML;
+  const [mainRow, detailsRow] = markup.split('class="order-details-row"');
+  assert.doesNotMatch(mainRow, /checkout-check|Abrir checkout/);
+  assert.match(detailsRow, /class="ghost-btn checkout-check" type="button" data-order-id="PF-I-ABCDEFGHIJKLMNOPQRSTUVWXYZ"/);
+  assert.match(detailsRow, /href="https:\/\/checkout\.infinitepay\.com\.br\/fict"[^>]*>Abrir checkout/);
+  assert.match(detailsRow, /Retorno recebido/);
+  assert.match(detailsRow, /Expira: 22\/10\/2026/);
+});
+
+test('resumo de sabores e fatias cobre pedidos atuais e por tamanho', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.equal(api.shortOrderId('PF-20260831-113122-AB3E86'), 'AB3E86');
+  assert.equal(api.shortOrderId('PF-101'), 'PF-101');
+  assert.equal(api.orderFlavorSummary({ items: [{ flavor: 'Choconinho', quantity: 1, pricingModel: 'progressive-v1' }, { flavor: 'Choconinho', quantity: 2, pricingModel: 'progressive-v1' }] }), 'Choconinho');
+  assert.equal(api.orderFlavorSummary({ items: [{ flavor: 'A', quantity: 1, pricingModel: 'progressive-v1' }, { flavor: 'B', quantity: 1, pricingModel: 'progressive-v1' }] }), 'A + 1 sabor');
+  assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'p', size: 'Pequeno', quantity: 2 }] }), '2 bolos');
+  assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'f', size: '1 Fatia', quantity: 2 }] }), '2 fatias');
 });
 
 (async () => {

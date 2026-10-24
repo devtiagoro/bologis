@@ -212,6 +212,13 @@ const server = http.createServer((request, response) => {
 
     const fakeOrders = [
       {
+        id: 'PF-20260831-113122-AB3E86', createdAt: '2026-08-31T14:31:22Z', customerName: 'Cliente Histórico Fictício',
+        whatsapp: '(34) 97777-3333', date: '2026-09-06', time: 'Sat Dec 30 1899 00:00:00 GMT-0306 (Horário Padrão de Brasília)',
+        total: 49.97, price: 49.97, payment: 'PIX', notes: '', status: 'Confirmado',
+        items: [{ flavor: 'Bolo de Choconinho (Massa branca, recheio de brigadeiro e creme de ninho)', sizeId: '3f', size: '3 Fatias', quantity: 1, unitPrice: 49.97, subtotal: 49.97, pricingModel: 'legacy-size' }],
+        checkout: { state: 'not_created', available: false }
+      },
+      {
         id: 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001',
         createdAt: '2026-10-20T12:00:00Z', customerName: 'Cliente com nome excepcionalmente extenso para validação visual',
         whatsapp: '(34) 99999-1111', date: '2026-10-25', time: '10:00', total: 124.91, totalQuantity: 7,
@@ -270,10 +277,14 @@ const server = http.createServer((request, response) => {
            const available = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 22;
            return { text, title: select.title, fits: canvas.measureText(text).width <= available, width: Math.round(select.getBoundingClientRect().width) };
          });
+         const mainRowHeights = [...surface.querySelectorAll('tr.order-row')].map(row => Math.round(row.getBoundingClientRect().height));
          const closedDetails = [...surface.querySelectorAll('details:not([open])')];
+         const hiddenRows = [...surface.querySelectorAll('tr.order-details-row[hidden]')];
          closedDetails.forEach(details => { details.open = true; });
+         hiddenRows.forEach(row => { row.hidden = false; });
          const detailsOverflow = page.scrollWidth > page.clientWidth + 1 || !inPanel(surface);
          closedDetails.forEach(details => { details.open = false; });
+         hiddenRows.forEach(row => { row.hidden = true; });
          return {
            viewport: { width: innerWidth, height: innerHeight },
            pageOverflow: page.scrollWidth > page.clientWidth + 1,
@@ -281,6 +292,8 @@ const server = http.createServer((request, response) => {
            controlsWithin: controls.filter(control => control.getClientRects().length).every(inPanel),
            ordersMode: !tableVisible && getComputedStyle(cards).display !== 'none' ? 'cards' : 'table',
            detailsOverflow,
+           mainRowHeights,
+           shows1899: /1899|GMT-/.test(surface.innerText),
            statusSelects
          };
        };`
@@ -311,6 +324,8 @@ const server = http.createServer((request, response) => {
         assert.equal(layout.controlsWithin, true, `Um controle saiu do painel em ${label}.`);
         assert.equal(layout.ordersMode, viewport.mode, `Modo de pedidos incorreto em ${label}.`);
         assert.equal(layout.detailsOverflow, false, `Detalhes expandidos provocaram overflow em ${label}.`);
+        assert.equal(layout.shows1899, false, `Horário serial de 1899 exibido em ${label}.`);
+        assert.ok(layout.mainRowHeights.every(height => height <= 130), `Linha de pedido alta demais em ${label}: ${layout.mainRowHeights}.`);
         for (const status of layout.statusSelects) {
           assert.equal(status.title, status.text.replace(/ \(legado\)$/, ''), `Seletor sem identificação acessível do status em ${label}.`);
           if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
