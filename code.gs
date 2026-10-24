@@ -3550,6 +3550,40 @@ function ensureSheet_(
 
 
 
+const PF_SETUP_NUMBER_FORMATS = [
+  { sheet: 'sizes', range: 'D2:D', format: 'R$ #,##0.00' },
+  { sheet: 'orders', range: 'B2:B', format: 'dd/MM/yyyy HH:mm:ss' },
+  { sheet: 'orders', range: 'E2:E', format: 'dd/MM/yyyy' },
+  { sheet: 'orders', range: 'K2:K', format: 'R$ #,##0.00' },
+  // Uma coluna por chamada: uma coluna tipada não impede a formatação das vizinhas.
+  { sheet: 'orderItems', range: 'G2:G', format: 'R$ #,##0.00' },
+  { sheet: 'orderItems', range: 'H2:H', format: 'R$ #,##0.00' },
+  { sheet: 'orderItems', range: 'I2:I', format: 'R$ #,##0.00' },
+  { sheet: 'orderItems', range: 'J2:J', format: 'R$ #,##0.00' },
+  { sheet: 'orderItems', range: 'K2:K', format: 'R$ #,##0.00' },
+  { sheet: 'checkouts', range: 'F2:F', format: 'dd/MM/yyyy HH:mm:ss' },
+  { sheet: 'checkouts', range: 'G2:G', format: 'dd/MM/yyyy HH:mm:ss' }
+];
+
+// Colunas de uma tabela do Sheets com tipo definido (data, moeda...) já controlam o próprio formato
+// e recusam setNumberFormat. Só esse erro é tolerado; qualquer outro interrompe o setupProject().
+function isTypedColumnFormatError_(error) {
+  return /coluna com tipo|coluna tipada|typed column/i.test(String(error && error.message || ''));
+}
+
+function applyNumberFormat_(sheet, a1Range, format) {
+  try {
+    sheet.getRange(a1Range).setNumberFormat(format);
+    // As alterações são enviadas em lote: o flush faz a recusa surgir aqui, ligada a este intervalo.
+    SpreadsheetApp.flush();
+    return true;
+  } catch (error) {
+    if (!isTypedColumnFormatError_(error)) throw error;
+    console.warn('Formato mantido pela coluna tipada: ' + sheet.getName() + '!' + a1Range);
+    return false;
+  }
+}
+
 function formatSheets_(ss) {
 
   Object
@@ -3583,62 +3617,11 @@ function formatSheets_(ss) {
     );
 
 
-  ss
-    .getSheetByName(
-      PF.sheets.sizes
-    )
-    .getRange('D2:D')
-    .setNumberFormat(
-      'R$ #,##0.00'
-    );
-
-
-  ss
-    .getSheetByName(
-      PF.sheets.orders
-    )
-    .getRange('B2:B')
-    .setNumberFormat(
-      'dd/MM/yyyy HH:mm:ss'
-    );
-
-
-  ss
-    .getSheetByName(
-      PF.sheets.orders
-    )
-    .getRange('E2:E')
-    .setNumberFormat(
-      'dd/MM/yyyy'
-    );
-
-
-  ss
-    .getSheetByName(
-      PF.sheets.orders
-    )
-    .getRange('K2:K')
-    .setNumberFormat(
-      'R$ #,##0.00'
-    );
-
-  ss
-    .getSheetByName(
-      PF.sheets.orderItems
-    )
-    .getRange('G2:K')
-    .setNumberFormat(
-      'R$ #,##0.00'
-    );
-
-  ss
-    .getSheetByName(
-      PF.sheets.checkouts
-    )
-    .getRange('F2:G')
-    .setNumberFormat(
-      'dd/MM/yyyy HH:mm:ss'
-    );
+  // Envia antes as etapas anteriores: erros delas nunca são confundidos com os de formato.
+  SpreadsheetApp.flush();
+  PF_SETUP_NUMBER_FORMATS.forEach(item => {
+    applyNumberFormat_(ss.getSheetByName(PF.sheets[item.sheet]), item.range, item.format);
+  });
 
 }
 
