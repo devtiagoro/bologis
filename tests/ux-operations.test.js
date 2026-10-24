@@ -21,6 +21,9 @@ source = source.replace(
         renderPaymentDetails,
         renderAdminCheckout,
         retryPublicCheckout,
+        renderCheckoutReturn,
+        refreshPaymentStatus,
+        checkCheckoutPayment,
         setLastSubmittedOrder(value) { lastSubmittedOrder = value; },
         updateSummary,
         renderFulfillmentOptions,
@@ -92,7 +95,7 @@ function makeElement(id = '') {
   };
 }
 
-function createRuntime(fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) })) {
+function createRuntime(fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) }), runtimeOptions = {}) {
   const elements = new Map();
   const document = {
     getElementById(id) {
@@ -106,7 +109,8 @@ function createRuntime(fetchImpl = async () => ({ ok: true, json: async () => ({
   };
   const localStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
   const window = {
-    location: { search: '', href: 'http://127.0.0.1:4173/' },
+    location: { search: runtimeOptions.search || '', href: 'http://127.0.0.1:4173/' + (runtimeOptions.search || '') },
+    history: { replaceState(_state, _title, url) { window.replacedUrl = url; } },
     crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' },
     confirm: () => true,
     setTimeout: callback => { callback(); return 1; },
@@ -742,6 +746,113 @@ test('resumo de sabores e fatias cobre pedidos atuais e por tamanho', () => {
   assert.equal(api.orderFlavorSummary({ items: [{ flavor: 'A', quantity: 1, pricingModel: 'progressive-v1' }, { flavor: 'B', quantity: 1, pricingModel: 'progressive-v1' }] }), 'A + 1 sabor');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'p', size: 'Pequeno', quantity: 2 }] }), '2 bolos');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'f', size: '1 Fatia', quantity: 2 }] }), '2 fatias');
+});
+
+// Etapa 10: retorno do pagamento com estados "verificando" e "confirmado"
+const confirmedPayment = {
+  orderId: 'PF-I-RETORNO', paymentState: 'confirmed', reviewRequired: false,
+  order: {
+    id: 'PF-I-RETORNO', status: 'Confirmado', totalQuantity: 3, total: 62.94, subtotal: 54.94, deliveryFee: 8, deliveryDate: '2026-10-25',
+    items: [{ flavor: 'Chocolate', quantity: 2, subtotal: 34.97, pricingModel: 'progressive-v1' }, { flavor: 'Ninho', quantity: 1, subtotal: 19.97, pricingModel: 'progressive-v1' }],
+    fulfillment: { mode: 'delivery' }
+  }
+};
+
+function paymentReturnRuntime(answers, search = '?payment_return=1&order_nsu=PF-I-RETORNO&checkout_token=token-assinado&slug=inv&transaction_nsu=tx&capture_method=pix') {
+  const calls = [];
+  const queue = answers.slice();
+  const runtime = createRuntime(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body);
+    if (body.action === 'registerCheckoutReturn') return { ok: true, json: async () => ({ ok: true, checkout: { state: 'returned_unverified' } }) };
+    const answer = queue.length > 1 ? queue.shift() : queue[0];
+    if (answer instanceof Error) throw answer;
+    return { ok: true, json: async () => ({ ok: true, payment: answer }) };
+  }, { search });
+  return { runtime, api: runtime.window.__uxTest, calls, verifyCalls: () => calls.filter(call => call.action === 'verifyCheckoutPayment') };
+}
+
+const isShown = (runtime, id) => !runtime.get(id).classList.contains('hidden');
+
+test('retorno confirmado pelo servidor exibe tela de obrigado com resumo', async () => {
+  const { runtime, api, calls } = paymentReturnRuntime([{ orderId: 'PF-I-RETORNO', paymentState: 'verifying' }, confirmedPayment]);
+  await api.renderCheckoutReturn();
+  assert.equal(calls[0].action, 'registerCheckoutReturn');
+  assert.equal(calls[0].transaction_nsu, 'tx');
+  assert.equal(isShown(runtime, 'paymentConfirmedState'), true);
+  assert.equal(isShown(runtime, 'paymentVerifyingState'), false);
+  assert.equal(runtime.get('confirmedOrderNumber').textContent, 'Nº do pedido: PF-I-RETORNO');
+  assert.equal(runtime.get('confirmedQuantity').textContent, '3 fatias');
+  assert.match(runtime.get('confirmedItems').innerHTML, /Chocolate · 2 fatias[\s\S]*R\$\s?34,97/);
+  assert.match(runtime.get('confirmedTotal').textContent, /R\$\s?62,94/);
+  assert.match(runtime.get('confirmedDeliveryFee').textContent, /R\$\s?8,00/);
+  assert.equal(runtime.get('confirmedDelivery').textContent, '25/10/2026');
+  assert.equal(runtime.get('confirmedFulfillment').textContent, 'Entrega no endereço');
+  assert.equal(runtime.get('confirmedStatus').textContent, 'Confirmado');
+});
+
+test('retorno pendente mostra verificando sem afirmar pagamento e permite nova consulta', async () => {
+  const { runtime, api, verifyCalls } = paymentReturnRuntime([{ orderId: 'PF-I-RETORNO', paymentState: 'verifying' }]);
+  await api.renderCheckoutReturn();
+  assert.equal(verifyCalls().length, 4, 'Consulta automática limitada a quatro tentativas.');
+  assert.equal(isShown(runtime, 'paymentVerifyingState'), true);
+  assert.equal(isShown(runtime, 'paymentConfirmedState'), false);
+  assert.match(runtime.get('returnPaymentMessage').textContent, /Ainda não recebemos a confirmação/);
+  assert.doesNotMatch(runtime.get('returnPaymentMessage').textContent, /foi confirmad|está confirmad|pagamento aprovado/i);
+  assert.equal(runtime.get('recheckPaymentBtn').disabled, false);
+  assert.equal(verifyCalls()[0].checkoutToken, 'token-assinado');
+  assert.equal(runtime.window.replacedUrl, '?public=1', 'Token removido da barra de endereço.');
+  runtime.get('recheckPaymentBtn').dispatch('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(verifyCalls().length, 5);
+  assert.equal(verifyCalls()[4].checkoutToken, 'token-assinado', 'Nova consulta usa o token mantido em memória.');
+});
+
+test('parametros da URL nunca forcam o estado confirmado', async () => {
+  const search = '?payment_return=1&order_nsu=PF-I-RETORNO&checkout_token=token-assinado&paid=true&status=Confirmado&paymentState=confirmed&confirmed=1';
+  const { runtime, api } = paymentReturnRuntime([{ orderId: 'PF-I-RETORNO', paymentState: 'verifying' }], search);
+  await api.renderCheckoutReturn();
+  assert.equal(isShown(runtime, 'paymentConfirmedState'), false);
+  assert.equal(runtime.get('confirmedOrderNumber').textContent, '');
+  const withoutOrder = paymentReturnRuntime([{ orderId: 'PF-I-RETORNO', paymentState: 'confirmed', order: null }]);
+  await withoutOrder.api.renderCheckoutReturn();
+  assert.equal(isShown(withoutOrder.runtime, 'paymentConfirmedState'), false, 'Confirmação exige o resumo validado pelo servidor.');
+});
+
+test('pagamento em conferencia interrompe consultas e orienta sem novo pagamento', async () => {
+  const { runtime, api, verifyCalls } = paymentReturnRuntime([{ orderId: 'PF-I-RETORNO', paymentState: 'verifying', reviewRequired: true }]);
+  await api.renderCheckoutReturn();
+  assert.equal(verifyCalls().length, 1);
+  assert.match(runtime.get('returnPaymentMessage').textContent, /conferência da nossa equipe[\s\S]*Não é necessário pagar de novo/);
+});
+
+test('falha de rede e retorno sem token mantem pedido em verificacao', async () => {
+  const failing = paymentReturnRuntime([new Error('offline')]);
+  await failing.api.renderCheckoutReturn();
+  assert.match(failing.runtime.get('returnPaymentMessage').textContent, /Não foi possível consultar a confirmação agora/);
+  assert.equal(failing.runtime.get('recheckPaymentBtn').disabled, false);
+  const missing = paymentReturnRuntime([confirmedPayment], '?payment_return=1&order_nsu=PF-I-RETORNO');
+  await missing.api.renderCheckoutReturn();
+  assert.equal(missing.calls.length, 0);
+  assert.equal(missing.runtime.get('recheckPaymentBtn').disabled, true);
+  assert.equal(isShown(missing.runtime, 'paymentConfirmedState'), false);
+});
+
+test('central identifica pagamento confirmado e motivo de conferencia', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.match(api.renderAdminCheckout({ id: 'PF-1', status: 'Confirmado', checkout: { state: 'paid_confirmed', chargeId: 'inv', expectedAmountCents: 5494 } }), /Pagamento confirmado[\s\S]*Pagamento validado pela InfinitePay/);
+  const review = api.renderAdminCheckout({ id: 'PF-2', status: 'Cancelado', checkout: { state: 'paid_unverified', reviewReason: 'order_cancelled', chargeId: 'inv' } });
+  assert.match(review, /Conferência: pedido cancelado com pagamento aprovado/);
+  assert.match(review, /checkout-check/);
+});
+
+test('consulta administrativa atualiza o status confirmado automaticamente', async () => {
+  const runtime = createRuntime(async () => ({ ok: true, json: async () => ({ ok: true, checkout: { state: 'paid_confirmed', autoConfirmed: true, orderStatus: 'Confirmado', providerPaid: true } }) }));
+  const api = runtime.window.__uxTest;
+  api.setOrders([{ ...orders[0], checkout: { state: 'returned_unverified' } }]);
+  await api.checkCheckoutPayment('PF-103');
+  assert.equal(api.state().orders[0].status, 'Confirmado');
+  assert.equal(api.state().orders[0].checkout.state, 'paid_confirmed');
 });
 
 // Contador de fatias com botões de menos e mais

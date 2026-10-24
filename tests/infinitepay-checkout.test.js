@@ -71,6 +71,7 @@ function createHarness(options = {}) {
   };
   const response = options.response || { status: 201, body: { url: 'https://checkout.infinitepay.com.br/fictitious-link', id: 'charge-fictitious' } };
   const responses = options.responses ? options.responses.slice() : null;
+  let paymentCheck = options.paymentCheck || null;
   const context = {
     Date, JSON, Math, String, Number, Object, Array, Error, RegExp, URL, encodeURIComponent, isFinite, isNaN,
     console: { log() {}, warn() {}, error() {} },
@@ -85,6 +86,11 @@ function createHarness(options = {}) {
     UrlFetchApp: {
       fetch(url, request) {
         fetches.push({ url, request, payload: JSON.parse(request.payload) });
+        if (paymentCheck && url === 'https://api.checkout.infinitepay.io/payment_check') {
+          const checked = paymentCheck(JSON.parse(request.payload));
+          if (checked.networkFailure) throw new Error(checked.networkMessage || 'NETWORK_FAILURE');
+          return { getResponseCode: () => checked.status, getContentText: () => checked.text !== undefined ? checked.text : JSON.stringify(checked.body), getAllHeaders: () => ({}) };
+        }
         const current = responses ? (responses.length > 1 ? responses.shift() : responses[0]) : response;
         if (options.networkFailure || current.networkFailure) throw new Error(options.networkMessage || current.networkMessage || 'NETWORK_FAILURE');
         return {
@@ -141,7 +147,10 @@ function createHarness(options = {}) {
     return JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) }, parameter: {} }).text);
   }
 
-  return { context, config, properties, fetches, orderRows, itemRows, checkoutRows, fakeApiKey, post };
+  return {
+    context, config, properties, fetches, orderRows, itemRows, checkoutRows, fakeApiKey, post, cache,
+    setPaymentCheck(fn) { paymentCheck = fn; }
+  };
 }
 
 const tests = [];
@@ -572,6 +581,491 @@ test('configuracao publica de recebimento nao expoe dados de pedidos', () => {
   const publicConfig = JSON.stringify(h.context.getPublicConfig_());
   assert.match(publicConfig, /"deliveryFeeCents":800/);
   assert.doesNotMatch(publicConfig, /Rua Fictícia|38400000/);
+});
+
+// Etapa 10: confirmação automática somente após payment_check validado
+const PAYMENT_CHECK_URL = 'https://api.checkout.infinitepay.io/payment_check';
+const WEBHOOK_BASE = 'https://script.google.com/macros/s/AKfycbFicticioDeployment_01/exec';
+const approved = (extra = {}) => () => ({ status: 200, body: { success: true, paid: true, amount: 5494, paid_amount: 5494, installments: 1, capture_method: 'pix', ...extra } });
+const notPaid = (extra = {}) => () => ({ status: 200, body: { success: true, paid: false, amount: 5494, paid_amount: 0, installments: 0, ...extra } });
+const checkoutRefs = (h, index = 0) => JSON.parse(h.checkoutRows[index][9]);
+const paymentChecks = h => h.fetches.filter(item => item.url === PAYMENT_CHECK_URL);
+
+function returnedOrder(options = {}) {
+  const h = createHarness(options);
+  if (options.webhook) h.properties.set('INFINITEPAY_WEBHOOK_URL', WEBHOOK_BASE);
+  const order = h.post(options.post || {}).order;
+  const token = h.context.checkoutReturnToken_(order.id, h.checkoutRows[0][1]);
+  if (options.returned !== false) {
+    h.context.registerCheckoutReturn_({ order_nsu: order.id, checkoutToken: token, slug: 'invoice-fict', transaction_nsu: 'transaction-fict', capture_method: options.method || 'pix' });
+  }
+  return { h, order, token };
+}
+
+function webhookCall(h, query, body) {
+  return JSON.parse(h.context.doPost({ parameter: query, postData: { contents: JSON.stringify(body) } }).text);
+}
+
+const webhookUrlSent = payload => (payload.webhook && payload.webhook.url) || payload.webhook_url;
+
+function webhookQuery(h) {
+  const url = new URL(webhookUrlSent(h.fetches[0].payload));
+  return Object.fromEntries(url.searchParams.entries());
+}
+
+function triggerMock(handlers = []) {
+  const triggers = handlers.map(name => ({ getHandlerFunction: () => name }));
+  const created = [];
+  return {
+    triggers, created,
+    getProjectTriggers: () => triggers.slice(),
+    deleteTrigger: trigger => triggers.splice(triggers.indexOf(trigger), 1),
+    newTrigger: name => ({ timeBased: () => ({ everyMinutes: minutes => ({ create: () => { created.push({ name, minutes }); triggers.push({ getHandlerFunction: () => name }); } }) }) })
+  };
+}
+
+test('PIX aprovado confirma o pedido automaticamente com historico', () => {
+  const { h, order } = returnedOrder();
+  h.setPaymentCheck(approved());
+  const result = h.context.verifyCheckoutPayment_(order.id, { source: 'customer' });
+  assert.equal(result.outcome, 'confirmed');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(h.checkoutRows[0][7], 'paid_confirmed');
+  const refs = checkoutRefs(h);
+  assert.equal(refs.history.length, 1);
+  assert.equal(refs.history[0].from, 'Aguardando pagamento');
+  assert.equal(refs.history[0].to, 'Confirmado');
+  assert.equal(refs.history[0].by, 'payment_check');
+  const [check] = paymentChecks(h);
+  assert.deepEqual(JSON.parse(JSON.stringify(check.payload)), { handle: 'primeira-fornada-teste', order_nsu: order.id, transaction_nsu: 'transaction-fict', slug: 'invoice-fict' });
+  assert.equal(check.request.headers['X-Api-Key'], h.fakeApiKey);
+});
+
+test('cartao aprovado com juros confirma pelo amount e nao pelo paid_amount', () => {
+  const { h, order } = returnedOrder({ method: 'credit_card' });
+  h.setPaymentCheck(approved({ capture_method: 'credit_card', paid_amount: 5790, installments: 3 }));
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'confirmed');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(checkoutRefs(h).providerPaidAmount, 5790);
+});
+
+test('pagamento pendente ou recusado mantem aguardando e agenda nova consulta', () => {
+  for (const response of [notPaid(), notPaid({ success: false }), approved({ success: false })]) {
+    const { h, order } = returnedOrder();
+    h.setPaymentCheck(response);
+    assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'pending');
+    assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+    assert.equal(h.checkoutRows[0][7], 'returned_unverified');
+    assert.ok(new Date(checkoutRefs(h).nextCheckAt) > new Date('2026-10-20T15:00:00Z'));
+  }
+});
+
+test('valor divergente fica pendente para conferencia administrativa', () => {
+  const { h, order } = returnedOrder();
+  h.setPaymentCheck(approved({ amount: 5000, paid_amount: 5000 }));
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'amount_mismatch');
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+  assert.equal(h.checkoutRows[0][7], 'payment_amount_mismatch');
+  assert.equal(checkoutRefs(h).reviewReason, 'amount_mismatch');
+  assert.equal(h.context.getOrders_()[0].checkout.reviewReason, 'amount_mismatch');
+});
+
+test('transacao ou pedido diferente na resposta nao confirma', () => {
+  for (const extra of [{ transaction_nsu: 'outra-transacao' }, { order_nsu: 'PF-OUTRO' }, { slug: 'outra-fatura' }, { capture_method: 'boleto' }]) {
+    const { h, order } = returnedOrder();
+    h.setPaymentCheck(approved(extra));
+    assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'review_required');
+    assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+    assert.equal(h.checkoutRows[0][7], 'paid_unverified');
+  }
+});
+
+test('cobranca persistida diferente do pedido atual nao confirma', () => {
+  const { h, order } = returnedOrder();
+  h.orderRows[0][10] = 1;
+  h.orderRows[0][29] = 100;
+  h.setPaymentCheck(approved());
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'review_required');
+  assert.equal(checkoutRefs(h).reviewReason, 'order_changed');
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+});
+
+test('retorno falso e rejeitado sem consultar a InfinitePay', () => {
+  const { h, order } = returnedOrder({ returned: false });
+  h.setPaymentCheck(approved());
+  assert.throws(() => h.context.registerCheckoutReturn_({ order_nsu: order.id, checkoutToken: 'token-falso', slug: 'x', transaction_nsu: 'y' }), error => error.code === 'CHECKOUT_RETURN_INVALID');
+  const response = h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: 'token-falso' });
+  assert.equal(response.ok, false);
+  assert.equal(response.code, 'CHECKOUT_RETURN_INVALID');
+  assert.equal(paymentChecks(h).length, 0);
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+});
+
+test('retorno sem pagamento continua em verificacao sem tela de obrigado', () => {
+  const { h, order, token } = returnedOrder();
+  h.setPaymentCheck(notPaid());
+  const response = h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token });
+  assert.equal(response.ok, true);
+  assert.equal(response.payment.paymentState, 'verifying');
+  assert.equal(response.payment.order, null);
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+});
+
+test('retorno sem referencias nao consulta e aguarda webhook ou conciliacao', () => {
+  const { h, order, token } = returnedOrder({ returned: false });
+  h.setPaymentCheck(approved());
+  h.context.registerCheckoutReturn_({ order_nsu: order.id, checkoutToken: token });
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'reference_pending');
+  assert.equal(paymentChecks(h).length, 0);
+});
+
+test('verificacao publica confirmada devolve resumo sem dados pessoais', () => {
+  const { h, order, token } = returnedOrder();
+  h.setPaymentCheck(approved());
+  const { payment } = h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token });
+  assert.equal(payment.paymentState, 'confirmed');
+  assert.equal(payment.order.id, order.id);
+  assert.equal(payment.order.status, 'Confirmado');
+  assert.equal(payment.order.total, 54.94);
+  assert.equal(payment.order.items.length, 2);
+  assert.doesNotMatch(JSON.stringify(payment), /Cliente Fictício|99999-0000|inchk_|transaction-fict|invoice-fict/);
+});
+
+test('consultas publicas repetidas respeitam intervalo minimo', () => {
+  const { h, order, token } = returnedOrder();
+  h.setPaymentCheck(notPaid());
+  h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token });
+  h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token });
+  assert.equal(paymentChecks(h).length, 1);
+});
+
+test('cliente que fecha a aba e confirmado pelo webhook validado no payment_check', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  const query = webhookQuery(h);
+  assert.equal(query.infinitepay_webhook, '1');
+  assert.equal(query.order, order.id);
+  h.setPaymentCheck(approved());
+  const response = webhookCall(h, query, { invoice_slug: 'invoice-hook', amount: 5494, paid_amount: 5494, installments: 1, capture_method: 'pix', transaction_nsu: 'transaction-hook', order_nsu: order.id, receipt_url: 'https://app.infinitepay.io/receipt/fict', items: [] });
+  assert.equal(response.ok, true);
+  assert.equal(response.outcome, 'confirmed');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(paymentChecks(h)[0].payload.transaction_nsu, 'transaction-hook');
+  assert.equal(checkoutRefs(h).webhookAt, '2026-10-20T15:00:00.000Z');
+});
+
+test('webhook forjado nunca confirma pagamento', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  const query = webhookQuery(h);
+  const forged = { invoice_slug: 'falsa', transaction_nsu: 'falsa', order_nsu: order.id, paid: true, amount: 5494 };
+  h.setPaymentCheck(notPaid());
+  assert.equal(webhookCall(h, { ...query, token: 'token-falso' }, forged).ok, false);
+  assert.equal(webhookCall(h, { ...query, order: 'PF-OUTRO' }, forged).ok, false);
+  assert.equal(webhookCall(h, query, { ...forged, order_nsu: 'PF-OUTRO' }).ok, false);
+  const returnToken = h.context.checkoutReturnToken_(order.id, h.checkoutRows[0][1]);
+  assert.equal(webhookCall(h, { ...query, token: returnToken }, forged).ok, false, 'Token de retorno não vale como token de webhook.');
+  assert.equal(paymentChecks(h).length, 0);
+  // Token válido, mas a InfinitePay não confirma: o corpo da notificação não decide nada.
+  assert.equal(webhookCall(h, query, forged).outcome, 'pending');
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+});
+
+test('confirmacao duplicada e idempotente', () => {
+  const { h, order, token } = returnedOrder({ webhook: true });
+  h.setPaymentCheck(approved());
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'confirmed');
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'already_confirmed');
+  webhookCall(h, webhookQuery(h), { invoice_slug: 'invoice-fict', transaction_nsu: 'transaction-fict', order_nsu: order.id });
+  h.context.registerCheckoutReturn_({ order_nsu: order.id, checkoutToken: token, slug: 'invoice-fict', transaction_nsu: 'transaction-fict' });
+  assert.equal(paymentChecks(h).length, 1);
+  assert.equal(checkoutRefs(h).history.length, 1);
+  assert.equal(h.checkoutRows[0][7], 'paid_confirmed');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+});
+
+test('pedido cancelado com pagamento aprovado nao e confirmado', () => {
+  const { h, order } = returnedOrder();
+  h.orderRows[0][13] = 'Cancelado';
+  h.setPaymentCheck(approved());
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'review_required');
+  assert.equal(h.orderRows[0][13], 'Cancelado');
+  assert.equal(checkoutRefs(h).reviewReason, 'order_cancelled');
+});
+
+test('pedido em producao ou concluido nunca e revertido', () => {
+  for (const status of ['Em produção', 'Concluído', 'Confirmado']) {
+    const { h, order } = returnedOrder();
+    h.orderRows[0][13] = status;
+    h.setPaymentCheck(approved());
+    assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'already_advanced');
+    assert.equal(h.orderRows[0][13], status);
+    assert.equal(checkoutRefs(h).history, undefined);
+  }
+});
+
+test('falha temporaria da InfinitePay preserva pedido e aplica espera crescente', () => {
+  const { h, order } = returnedOrder();
+  h.setPaymentCheck(() => ({ status: 503, body: {} }));
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'provider_unavailable');
+  const first = checkoutRefs(h);
+  h.setPaymentCheck(() => ({ networkFailure: true }));
+  assert.throws(() => h.context.checkCheckoutPayment_(order.id), error => error.code === 'INFINITEPAY_CHECK_FAILED');
+  const second = checkoutRefs(h);
+  assert.equal(second.checkFailures, 2);
+  assert.equal(second.lastCheckError.category, 'network');
+  assert.ok(new Date(second.nextCheckAt) > new Date(first.nextCheckAt));
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+  h.setPaymentCheck(approved());
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'confirmed');
+  assert.equal(checkoutRefs(h).checkFailures, 0);
+});
+
+test('conciliacao confere somente pendentes com referencias e respeita a espera', () => {
+  const { h, order } = returnedOrder();
+  h.post({ idempotencyKey: 'checkout-fictitious-attempt-02', customerName: 'Sem Retorno' });
+  h.orderRows.push(['PF-LEGACY', new Date('2026-10-10T12:00:00Z'), 'Cliente antigo', '34999990000', new Date('2026-10-12T12:00:00Z'), '10:00', 'Chocolate', 'p', 'Pequeno', '', 89, 'PIX', '', 'Aguardando pagamento', 'site']);
+  h.setPaymentCheck(notPaid());
+  const first = h.context.reconcilePendingPayments();
+  assert.equal(first.checked, 1);
+  assert.equal(first.pending, 1);
+  assert.equal(paymentChecks(h).length, 1);
+  assert.equal(paymentChecks(h)[0].payload.order_nsu, order.id);
+  assert.equal(h.context.reconcilePendingPayments().checked, 0, 'Consulta recente não é repetida.');
+  assert.equal(paymentChecks(h).length, 1);
+  h.context.currentBusinessDate_ = () => new Date('2026-10-20T15:11:00Z');
+  h.setPaymentCheck(approved());
+  assert.equal(h.context.reconcilePendingPayments().confirmed, 1);
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(h.orderRows[1][13], 'Aguardando pagamento');
+  assert.equal(h.orderRows[2][13], 'Aguardando pagamento', 'Pedido antigo não é alterado.');
+});
+
+test('conciliacao nao executa em paralelo nem sem configuracao', () => {
+  const { h } = returnedOrder();
+  h.setPaymentCheck(approved());
+  h.cache.set('payment-reconcile:running', '1');
+  assert.equal(h.context.reconcilePendingPayments().skipped, 'already_running');
+  h.cache.delete('payment-reconcile:running');
+  h.properties.delete('INFINITEPAY_HANDLE');
+  assert.equal(h.context.reconcilePendingPayments().skipped, 'not_configured');
+  assert.equal(paymentChecks(h).length, 0);
+  assert.equal(h.cache.has('payment-reconcile:running'), false);
+});
+
+test('gatilho de conciliacao nunca e duplicado', () => {
+  const h = createHarness();
+  const empty = triggerMock(['outraRotina']);
+  h.context.ScriptApp = empty;
+  assert.equal(h.context.installPaymentReconciliationTrigger().installed, true);
+  assert.equal(h.context.installPaymentReconciliationTrigger().installed, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(empty.created)), [{ name: 'reconcilePendingPayments', minutes: 10 }]);
+  const duplicated = triggerMock(['reconcilePendingPayments', 'reconcilePendingPayments', 'outraRotina']);
+  h.context.ScriptApp = duplicated;
+  const result = h.context.installPaymentReconciliationTrigger();
+  assert.equal(result.removedDuplicates, 1);
+  assert.equal(duplicated.created.length, 0);
+  assert.equal(duplicated.triggers.filter(trigger => trigger.getHandlerFunction() === 'reconcilePendingPayments').length, 1);
+  assert.equal(h.context.removePaymentReconciliationTrigger().removed, 1);
+});
+
+test('webhook so e enviado para endpoint Apps Script valido e sem segredos', () => {
+  const { h } = returnedOrder({ webhook: true, returned: false });
+  const url = webhookUrlSent(h.fetches[0].payload);
+  assert.match(url, /^https:\/\/script\.google\.com\/macros\/s\/AKfycbFicticioDeployment_01\/exec\?infinitepay_webhook=1&order=/);
+  assert.doesNotMatch(url, /inchk_|fictitious-return-secret/);
+  const other = createHarness();
+  other.properties.set('INFINITEPAY_WEBHOOK_URL', 'https://example.com/webhook');
+  other.post();
+  assert.equal(other.fetches[0].payload.webhook_url, undefined);
+  assert.equal(other.fetches[0].payload.webhook, undefined);
+});
+
+test('credenciais nunca aparecem em respostas, planilha ou registros da confirmacao', () => {
+  const logs = [];
+  const { h, order, token } = returnedOrder({ webhook: true });
+  h.context.console.warn = message => logs.push(String(message));
+  h.context.console.log = message => logs.push(String(message));
+  h.setPaymentCheck(() => ({ status: 500, text: 'erro ' + h.fakeApiKey }));
+  const responses = [
+    h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token }),
+    h.context.reconcilePendingPayments(),
+    webhookCall(h, webhookQuery(h), { invoice_slug: 'invoice-fict', transaction_nsu: 'transaction-fict', order_nsu: order.id })
+  ];
+  h.setPaymentCheck(approved());
+  responses.push(h.context.checkCheckoutPayment_(order.id));
+  const exposed = JSON.stringify([responses, h.checkoutRows, h.orderRows, logs]);
+  assert.equal(exposed.includes(h.fakeApiKey), false);
+  assert.equal(exposed.includes('fictitious-return-secret'), false);
+});
+
+test('alteracao manual de status usa o mesmo lock da confirmacao automatica', () => {
+  const { h, order } = returnedOrder();
+  let held = 0;
+  let maxHeld = 0;
+  h.context.LockService = { getScriptLock: () => ({ waitLock() { held += 1; maxHeld = Math.max(maxHeld, held); }, releaseLock() { held -= 1; } }) };
+  h.context.updateOrderStatus_(order.id, 'Cancelado');
+  assert.equal(maxHeld, 1);
+  assert.equal(held, 0);
+  assert.equal(h.orderRows[0][13], 'Cancelado');
+  h.setPaymentCheck(approved());
+  h.context.verifyCheckoutPayment_(order.id);
+  assert.equal(held, 0);
+  assert.equal(h.orderRows[0][13], 'Cancelado');
+});
+
+test('central recebe confirmacao automatica pela consulta administrativa', () => {
+  const { h, order } = returnedOrder();
+  h.setPaymentCheck(approved());
+  const result = h.context.checkCheckoutPayment_(order.id);
+  assert.equal(result.autoConfirmed, true);
+  assert.equal(result.orderStatus, 'Confirmado');
+  assert.equal(result.state, 'paid_confirmed');
+  assert.equal(result.subjectToManualReview, false);
+});
+
+// Validação final da Etapa 10: contrato do webhook
+const createdLink = { status: 201, body: { url: 'https://checkout.infinitepay.com.br/fictitious-link', id: 'charge-fictitious' } };
+
+function appsScriptPostEvent(query, body) {
+  // Forma do objeto entregue pelo Apps Script ao doPost para um POST JSON com query string.
+  const contents = JSON.stringify(body);
+  return {
+    queryString: new URLSearchParams(query).toString(), parameter: { ...query },
+    parameters: Object.fromEntries(Object.entries(query).map(([key, value]) => [key, [value]])),
+    contextPath: '', contentLength: contents.length,
+    postData: { type: 'application/json', length: contents.length, contents, name: 'postData' }
+  };
+}
+
+test('contrato padrao envia webhook com url e somente o evento paid', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  const sent = h.fetches[0].payload;
+  assert.equal(sent.webhook_url, undefined);
+  assert.deepEqual(Object.keys(sent.webhook).sort(), ['events', 'url']);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.webhook.events)), ['paid']);
+  assert.match(sent.webhook.url, new RegExp('^' + WEBHOOK_BASE.replace(/[.?]/g, '\\$&') + '\\?infinitepay_webhook=1&order=' + order.id + '&token=[A-Za-z0-9_-]{43}$'));
+  assert.equal(checkoutRefs(h).webhook, 'sent');
+});
+
+test('formato flat opcional envia somente webhook_url', () => {
+  const h = createHarness();
+  h.properties.set('INFINITEPAY_WEBHOOK_URL', WEBHOOK_BASE);
+  h.properties.set('INFINITEPAY_WEBHOOK_FORMAT', 'flat');
+  h.post();
+  assert.match(h.fetches[0].payload.webhook_url, /infinitepay_webhook=1/);
+  assert.equal(h.fetches[0].payload.webhook, undefined);
+});
+
+test('webhook recusado com 400 ou 422 cria o checkout sem notificacao', () => {
+  for (const status of [400, 422]) {
+    const h = createHarness({ responses: [{ status, body: { message: 'campo desconhecido' } }, createdLink] });
+    h.properties.set('INFINITEPAY_WEBHOOK_URL', WEBHOOK_BASE);
+    const result = h.post();
+    assert.equal(h.fetches.length, 2);
+    assert.ok(h.fetches[0].payload.webhook);
+    assert.equal(h.fetches[1].payload.webhook, undefined);
+    assert.equal(h.fetches[1].payload.webhook_url, undefined);
+    assert.equal(result.order.checkout.available, true);
+    assert.equal(h.checkoutRows[0][7], 'active');
+    assert.equal(checkoutRefs(h).webhook, 'rejected');
+  }
+});
+
+test('falha ambigua ou persistente nao gera cobranca duplicada', () => {
+  const ambiguous = createHarness({ responses: [{ status: 500, body: {} }, createdLink] });
+  ambiguous.properties.set('INFINITEPAY_WEBHOOK_URL', WEBHOOK_BASE);
+  assert.equal(ambiguous.post().order.checkout.state, 'unknown');
+  assert.equal(ambiguous.fetches.length, 1, 'HTTP 500 pode ter criado a cobrança: não repete.');
+  const persistent = createHarness({ responses: [{ status: 400, body: {} }] });
+  persistent.properties.set('INFINITEPAY_WEBHOOK_URL', WEBHOOK_BASE);
+  assert.equal(persistent.post().order.checkout.state, 'failed');
+  assert.equal(persistent.fetches.length, 2);
+  const withoutWebhook = createHarness({ responses: [{ status: 400, body: {} }] });
+  withoutWebhook.post();
+  assert.equal(withoutWebhook.fetches.length, 1);
+});
+
+test('doPost processa o POST JSON do webhook como o Apps Script o entrega', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  h.setPaymentCheck(approved());
+  const event = appsScriptPostEvent(webhookQuery(h), { invoice_slug: 'invoice-hook', amount: 5494, paid_amount: 5494, installments: 1, capture_method: 'pix', transaction_nsu: 'transaction-hook', order_nsu: order.id, receipt_url: 'https://app.infinitepay.io/receipt/fict', items: [] });
+  const response = JSON.parse(h.context.doPost(event).text);
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true, outcome: 'confirmed' });
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+});
+
+test('webhook aceita slug, invoice_slug e campos aninhados em data', () => {
+  const variants = [
+    order => ({ slug: 'invoice-v', transaction_nsu: 'transaction-v', order_nsu: order.id }),
+    order => ({ invoice_slug: 'invoice-v', transaction_nsu: 'transaction-v', order_nsu: order.id, event: 'paid' }),
+    order => ({ event: 'paid', data: { invoice_slug: 'invoice-v', transaction_nsu: 'transaction-v', order_nsu: order.id, amount: 5494 } }),
+    () => ({ invoice_slug: 'invoice-v', transaction_nsu: 'transaction-v' })
+  ];
+  for (const variant of variants) {
+    const { h, order } = returnedOrder({ webhook: true, returned: false });
+    h.setPaymentCheck(approved());
+    assert.equal(webhookCall(h, webhookQuery(h), variant(order)).outcome, 'confirmed');
+    const [check] = paymentChecks(h);
+    assert.equal(check.payload.slug, 'invoice-v');
+    assert.equal(check.payload.transaction_nsu, 'transaction-v');
+    assert.equal(check.payload.order_nsu, order.id);
+  }
+});
+
+test('eventos diferentes de paid sao ignorados e nao bloqueiam o pagamento real', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  h.setPaymentCheck(approved());
+  for (const event of ['created', 'payment_failed', 'canceled', 'refunded', 'settled']) {
+    const response = webhookCall(h, webhookQuery(h), { event, invoice_slug: 'invoice-falha', transaction_nsu: 'transaction-falha', order_nsu: order.id });
+    assert.equal(response.outcome, 'ignored_event');
+  }
+  assert.equal(paymentChecks(h).length, 0);
+  assert.equal(checkoutRefs(h).transactionNsu, undefined);
+  assert.equal(webhookCall(h, webhookQuery(h), { event: 'paid', invoice_slug: 'invoice-ok', transaction_nsu: 'transaction-ok', order_nsu: order.id }).outcome, 'confirmed');
+  assert.equal(webhookCall(h, webhookQuery(h), { event: 'refunded', invoice_slug: 'invoice-ok', transaction_nsu: 'transaction-ok', order_nsu: order.id }).outcome, 'ignored_event');
+  assert.equal(h.orderRows[0][13], 'Confirmado', 'Aviso posterior nunca reverte o status.');
+});
+
+test('webhook nunca grava status sem payment_check com valor e identificadores conferidos', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  const body = { event: 'paid', paid: true, amount: 5494, paid_amount: 5494, invoice_slug: 'invoice-hook', transaction_nsu: 'transaction-hook', order_nsu: order.id };
+  for (const response of [() => ({ status: 503, body: {} }), notPaid(), approved({ amount: 4000 }), approved({ transaction_nsu: 'outra' })]) {
+    h.setPaymentCheck(response);
+    webhookCall(h, webhookQuery(h), body);
+    assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+  }
+});
+
+test('token do webhook nao aparece em respostas publicas, planilha ou logs', () => {
+  const logs = [];
+  const { h, order, token } = returnedOrder({ webhook: true, returned: false });
+  ['log', 'warn', 'error'].forEach(level => { h.context.console[level] = message => logs.push(String(message)); });
+  const webhookToken = webhookQuery(h).token;
+  h.setPaymentCheck(notPaid());
+  const exposed = [
+    h.post(),
+    webhookCall(h, webhookQuery(h), { invoice_slug: 'invoice-hook', transaction_nsu: 'transaction-hook', order_nsu: order.id }),
+    webhookCall(h, { ...webhookQuery(h), order: 'PF-OUTRO' }, {}),
+    webhookCall(h, webhookQuery(h), { order_nsu: 'PF-OUTRO' }),
+    h.post({ action: 'verifyCheckoutPayment', order_nsu: order.id, checkoutToken: token }),
+    h.post({ action: 'registerCheckoutReturn', order_nsu: order.id, checkoutToken: token }),
+    h.context.getOrders_(),
+    h.context.reconcilePendingPayments(),
+    h.checkoutRows, h.orderRows, logs
+  ];
+  assert.equal(JSON.stringify(exposed).includes(webhookToken), false);
+});
+
+test('implantacao atual do Apps Script fornece URL HTTPS aceita para o webhook', () => {
+  const h = createHarness();
+  const frontend = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
+  const deployment = frontend.match(/const APPS_SCRIPT_URL = '([^']+)'/)[1];
+  assert.equal(h.context.validateWebhookUrl_(deployment), deployment);
+  for (const invalid of [
+    deployment.replace('https:', 'http:'), deployment.replace('/exec', '/dev'), deployment + '?x=1',
+    'https://script.googleusercontent.com/macros/echo?user_content_key=x', 'https://example.com/macros/s/abc/exec', ''
+  ]) {
+    assert.equal(h.context.validateWebhookUrl_(invalid), '', invalid);
+  }
 });
 
 (async () => {

@@ -1453,13 +1453,34 @@
       </section>
 
       <section id="paymentReturnView" class="card payment-return" aria-live="polite">
-        <div class="eyebrow">Retorno do checkout</div>
-        <h1>Pagamento enviado para conferência</h1>
-        <p>O retorno da InfinitePay foi recebido, mas não confirma automaticamente o pagamento.</p>
-        <div id="returnOrderNumber" class="success-number"></div>
-        <div id="returnPaymentMessage" class="success-note">A Primeira Fornada fará a conferência e manterá o status do pedido até a confirmação manual.</div>
-        <div class="success-actions">
-          <a class="ghost-btn" href="?public=1">Voltar para encomendas</a>
+        <div id="paymentVerifyingState">
+          <div class="eyebrow">Retorno do checkout</div>
+          <h1>Verificando seu pagamento</h1>
+          <p>Estamos conferindo a confirmação diretamente com a InfinitePay. Isso pode levar alguns instantes.</p>
+          <div id="returnOrderNumber" class="success-number"></div>
+          <div id="returnPaymentMessage" class="success-note" role="status">Consultando a InfinitePay...</div>
+          <div class="success-actions">
+            <button id="recheckPaymentBtn" class="primary-btn" type="button">Consultar novamente</button>
+            <a class="ghost-btn" href="?public=1">Voltar para encomendas</a>
+          </div>
+        </div>
+        <div id="paymentConfirmedState" class="hidden">
+          <div class="eyebrow">Pagamento confirmado</div>
+          <h1>Obrigado! Sua encomenda está confirmada 🍰</h1>
+          <p>A InfinitePay confirmou o pagamento e o seu pedido já foi confirmado. Guarde o número abaixo para acompanhar a encomenda.</p>
+          <div id="confirmedOrderNumber" class="success-number"></div>
+          <div class="success-summary">
+            <div class="summary-row"><span>Quantidade</span><strong id="confirmedQuantity">—</strong></div>
+            <div class="summary-row"><span>Itens</span><div id="confirmedItems" class="compact-item-list"></div></div>
+            <div id="confirmedDeliveryFeeRow" class="summary-row hidden"><span>Taxa de entrega</span><strong id="confirmedDeliveryFee">—</strong></div>
+            <div class="summary-row"><span>Total pago</span><strong id="confirmedTotal">—</strong></div>
+            <div class="summary-row"><span>Data</span><strong id="confirmedDelivery">—</strong></div>
+            <div id="confirmedFulfillmentRow" class="summary-row hidden"><span>Recebimento</span><strong id="confirmedFulfillment">—</strong></div>
+            <div class="summary-row"><span>Status</span><strong id="confirmedStatus" class="success-status">Confirmado</strong></div>
+          </div>
+          <div class="success-actions">
+            <a class="ghost-btn" href="?public=1">Fazer outro pedido</a>
+          </div>
         </div>
       </section>
 
@@ -2732,30 +2753,104 @@
         return data;
       }
 
+      // Retorno do checkout: a URL só identifica o pedido. O estado "confirmado" vem exclusivamente
+      // da resposta do servidor, que consulta a InfinitePay; nenhum parâmetro da URL o determina.
+      let paymentReturnContext = null;
+      const PAYMENT_AUTO_CHECK_DELAYS = [0, 4000, 8000, 15000];
+      const PAYMENT_PENDING_MESSAGE = 'Ainda não recebemos a confirmação da InfinitePay. Se você concluiu o pagamento, aguarde alguns instantes e consulte novamente. Não é necessário pagar de novo.';
+      const PAYMENT_REVIEW_MESSAGE = 'Recebemos o seu retorno, mas este pagamento precisa de uma conferência da nossa equipe. Não é necessário pagar de novo; entraremos em contato pelo WhatsApp.';
+
       async function renderCheckoutReturn() {
         $('orderLayout').classList.add('hidden');
         $('orderSuccessView').classList.remove('show');
         $('paymentReturnView').classList.add('show');
         const orderId = String(params.get('order_nsu') || '').slice(0, 80);
-        $('returnOrderNumber').textContent = orderId ? `Nº do pedido: ${orderId}` : 'Pedido não identificado';
-        const payload = {
-          action: 'registerCheckoutReturn',
-          order_nsu: orderId,
-          checkoutToken: String(params.get('checkout_token') || ''),
-          slug: String(params.get('slug') || ''),
-          transaction_nsu: String(params.get('transaction_nsu') || ''),
-          capture_method: String(params.get('capture_method') || ''),
-          receipt_url: String(params.get('receipt_url') || '')
-        };
-        try {
-          await apiPost(payload);
-          $('returnPaymentMessage').textContent = 'Recebemos as referências do checkout. O pagamento será conferido manualmente antes de o pedido ser confirmado.';
-        } catch (_) {
-          $('returnPaymentMessage').textContent = 'Não foi possível validar automaticamente este retorno. Seu pedido permanece registrado e a equipe fará a conferência manual.';
-        }
+        const checkoutToken = String(params.get('checkout_token') || '').slice(0, 256);
+        paymentReturnContext = { orderId, checkoutToken };
+        // O token permanece apenas em memória para novas consultas.
         if (window.history?.replaceState) {
           window.history.replaceState({}, document.title, '?public=1');
         }
+        showPaymentVerifying('Consultando a InfinitePay...');
+        $('recheckPaymentBtn').disabled = true;
+        $('returnOrderNumber').textContent = orderId ? `Nº do pedido: ${orderId}` : 'Pedido não identificado';
+        if (!orderId || !checkoutToken) {
+          $('recheckPaymentBtn').disabled = true;
+          $('returnPaymentMessage').textContent = 'Não foi possível identificar este retorno. Seu pedido permanece registrado; fale com a equipe se já tiver pago.';
+          return;
+        }
+        try {
+          await apiPost({
+            action: 'registerCheckoutReturn',
+            order_nsu: orderId,
+            checkoutToken,
+            slug: String(params.get('slug') || ''),
+            transaction_nsu: String(params.get('transaction_nsu') || ''),
+            capture_method: String(params.get('capture_method') || ''),
+            receipt_url: String(params.get('receipt_url') || '')
+          });
+        } catch (_) {
+          // As referências também podem chegar pela notificação da InfinitePay; a consulta segue.
+        }
+        await refreshPaymentStatus(PAYMENT_AUTO_CHECK_DELAYS);
+      }
+
+      function showPaymentVerifying(message) {
+        $('paymentVerifyingState').classList.remove('hidden');
+        $('paymentConfirmedState').classList.add('hidden');
+        $('returnPaymentMessage').textContent = message;
+      }
+
+      function waitFor(ms) {
+        return new Promise(resolve => window.setTimeout(resolve, ms));
+      }
+
+      async function refreshPaymentStatus(delays = [0]) {
+        if (!paymentReturnContext?.orderId || !paymentReturnContext?.checkoutToken) return false;
+        const button = $('recheckPaymentBtn');
+        button.disabled = true;
+        showPaymentVerifying('Consultando a InfinitePay...');
+        let payment = null;
+        for (const delay of delays) {
+          if (delay) await waitFor(delay);
+          try {
+            const data = await apiPost({ action: 'verifyCheckoutPayment', order_nsu: paymentReturnContext.orderId, checkoutToken: paymentReturnContext.checkoutToken });
+            payment = data.payment || null;
+          } catch (_) {
+            payment = null;
+          }
+          if (payment?.paymentState === 'confirmed' && payment.order) {
+            renderPaymentConfirmed(payment.order);
+            return true;
+          }
+          if (payment?.reviewRequired) break;
+        }
+        showPaymentVerifying(payment?.reviewRequired ? PAYMENT_REVIEW_MESSAGE : payment
+          ? PAYMENT_PENDING_MESSAGE
+          : 'Não foi possível consultar a confirmação agora. Seu pedido continua registrado; tente consultar novamente em instantes.');
+        button.disabled = false;
+        return false;
+      }
+
+      function renderPaymentConfirmed(order) {
+        const items = (Array.isArray(order.items) ? order.items : []).map(itemDetails);
+        const totalQuantity = Number(order.totalQuantity || 0) || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+        const progressiveOrder = items.every(item => item.pricingModel === 'progressive-v1' || !item.sizeId);
+        const mode = order.fulfillment?.mode === 'delivery' || order.fulfillment?.mode === 'pickup' ? order.fulfillment.mode : '';
+        const fee = Number(order.deliveryFee || 0);
+        $('paymentVerifyingState').classList.add('hidden');
+        $('paymentConfirmedState').classList.remove('hidden');
+        $('confirmedOrderNumber').textContent = `Nº do pedido: ${order.id || paymentReturnContext?.orderId || ''}`;
+        $('confirmedQuantity').textContent = `${totalQuantity} ${progressiveOrder ? (totalQuantity === 1 ? 'fatia' : 'fatias') : (totalQuantity === 1 ? 'bolo' : 'bolos')}`;
+        $('confirmedItems').innerHTML = items.map(item => `<div class="compact-item"><span>${escapeHtml(item.flavor)} · ${item.quantity} ${progressiveOrder ? (item.quantity === 1 ? 'fatia' : 'fatias') : `× ${escapeHtml(item.size)}`}</span><strong>${brl(item.subtotal)}</strong></div>`).join('');
+        $('confirmedDeliveryFeeRow').classList.toggle('hidden', mode !== 'delivery');
+        $('confirmedDeliveryFee').textContent = fee > 0 ? brl(fee) : 'Sem taxa';
+        $('confirmedTotal').textContent = brl(order.total);
+        $('confirmedDelivery').textContent = formatDate(order.deliveryDate);
+        $('confirmedFulfillmentRow').classList.toggle('hidden', !mode);
+        $('confirmedFulfillment').textContent = fulfillmentLabel(mode);
+        $('confirmedStatus').textContent = order.status || 'Confirmado';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
       function updateOrderStatus(orderId, status) {
@@ -3390,11 +3485,20 @@
 
       function checkoutStateLabel(state) {
         return ({
-          active: 'Checkout ativo', returned_unverified: 'Retorno recebido', paid_unverified: 'Pagamento informado',
+          active: 'Checkout ativo', returned_unverified: 'Retorno recebido', paid_unverified: 'Pagamento informado', paid_confirmed: 'Pagamento confirmado',
           payment_amount_mismatch: 'Valor divergente',
           expired: 'Checkout expirado', failed: 'Falha na geração', unknown: 'Conferência necessária',
           creating: 'Gerando checkout', not_created: 'Sem checkout', not_configured: 'Não configurado'
         })[state] || 'Sem checkout';
+      }
+
+      function paymentReviewReasonText(reason) {
+        return ({
+          amount_mismatch: 'valor pago diferente do pedido', transaction_mismatch: 'transação não corresponde ao pedido',
+          capture_method_unknown: 'meio de pagamento não reconhecido', order_changed: 'pedido alterado após a cobrança',
+          order_not_found: 'pedido não encontrado', order_cancelled: 'pedido cancelado com pagamento aprovado',
+          order_status_not_eligible: 'status do pedido não permite confirmação automática'
+        })[reason] || 'verificar na InfinitePay';
       }
 
       function renderAdminCheckout(order) {
@@ -3411,7 +3515,8 @@
         const diagnostic = checkout.diagnostic
           ? `<span class="checkout-diagnostic">Falha: ${escapeHtml(checkoutDiagnosticText(checkout.diagnostic))}${checkout.attempts ? ` · ${escapeHtml(String(checkout.attempts))} tentativa(s)` : ''}</span>`
           : '';
-        const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${diagnostic}${checkAction}${retryAction}<small>A confirmação do pedido permanece manual.</small></div>`;
+        const review = checkout.reviewReason ? `<span class="checkout-diagnostic">Conferência: ${escapeHtml(paymentReviewReasonText(checkout.reviewReason))}</span>` : '';
+        const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${diagnostic}${review}${checkAction}${retryAction}<small>${checkout.state === 'paid_confirmed' ? 'Pagamento validado pela InfinitePay.' : 'O pedido só é confirmado automaticamente após validação do pagamento na InfinitePay.'}</small></div>`;
         return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
       }
 
@@ -3483,9 +3588,14 @@
       async function checkCheckoutPayment(orderId) {
         const result = await apiPost({ action: 'checkCheckoutPayment', orderId }, { admin: true });
         const order = appState.orders.find(item => String(item.id) === String(orderId));
-        if (order) order.checkout = result.checkout || order.checkout;
+        if (order) {
+          order.checkout = result.checkout || order.checkout;
+          if (result.checkout?.autoConfirmed && result.checkout.orderStatus) order.status = result.checkout.orderStatus;
+        }
+        renderOrderFilterOptions();
         renderLocalOrders();
-        showToast(result.checkout?.providerPaid ? 'Pagamento informado pela InfinitePay; confirme manualmente.' : 'Consulta concluída; pagamento ainda não informado.');
+        showToast(result.checkout?.autoConfirmed ? 'Pagamento validado pela InfinitePay; pedido confirmado.'
+          : result.checkout?.providerPaid ? 'Pagamento informado, mas requer conferência administrativa.' : 'Consulta concluída; pagamento ainda não informado.');
       }
 
       function renderLocalOrders() {
@@ -3653,6 +3763,7 @@
       });
       $('refreshOrdersBtn').addEventListener('click', () => withSavingState($('refreshOrdersBtn'), loadAdminOrders, 'Atualizando...'));
       $('newOrderBtn').addEventListener('click', startAnotherOrder);
+      $('recheckPaymentBtn').addEventListener('click', () => refreshPaymentStatus());
       ['fulfillmentDelivery', 'fulfillmentPickup'].forEach(id => $(id).addEventListener('change', () => {
         clearFieldErrors();
         updateFulfillmentView();

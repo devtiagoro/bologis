@@ -37,6 +37,18 @@ const publicConfig = {
   }
 };
 
+const visualConfirmedPayment = {
+  orderId: 'PF-I-RETORNO-VISUAL-COM-IDENTIFICADOR-LONGO-001', paymentState: 'confirmed', reviewRequired: false,
+  order: {
+    id: 'PF-I-RETORNO-VISUAL-COM-IDENTIFICADOR-LONGO-001', status: 'Confirmado', totalQuantity: 6, total: 92.91, subtotal: 84.91, deliveryFee: 8, deliveryDate: '2026-10-25',
+    items: [
+      { flavor: 'Chocolate com brigadeiro belga', quantity: 3, subtotal: 49.97, pricingModel: 'progressive-v1' },
+      { flavor: 'Ninho com morango e decoração especial', quantity: 3, subtotal: 34.94, pricingModel: 'progressive-v1' }
+    ],
+    fulfillment: { mode: 'delivery' }
+  }
+};
+
 const DEFAULT_STATUSES = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bologis-visual-'));
 let html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -131,6 +143,33 @@ async function launchDevTools() {
 }
 
 // Formulário público com um sabor e entrega selecionada; depois confirma que a retirada esconde o endereço.
+// Retorno do checkout: aguarda o estado final devolvido pela API simulada e mede a tela.
+const PAYMENT_RETURN_PROBE = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const shown = id => getComputedStyle(document.getElementById(id)).display !== 'none' && document.getElementById(id).getClientRects().length > 0;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (shown('paymentConfirmedState') || (shown('paymentVerifyingState') && !document.getElementById('recheckPaymentBtn').disabled)) break;
+    await wait(100);
+  }
+  await document.fonts.ready;
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const card = document.getElementById('paymentReturnView').getBoundingClientRect();
+  const state = shown('paymentConfirmedState') ? 'confirmed' : 'verifying';
+  const surface = document.getElementById(state === 'confirmed' ? 'paymentConfirmedState' : 'paymentVerifyingState');
+  const visible = [...surface.querySelectorAll('a, button, .summary-row')].filter(element => element.getClientRects().length);
+  return {
+    state,
+    pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    within: visible.every(element => { const rect = element.getBoundingClientRect(); return rect.left >= card.left - 1 && rect.right <= card.right + 1; }),
+    tapTargets: [...surface.querySelectorAll('a, button')].filter(element => element.getClientRects().length).every(element => element.getBoundingClientRect().height >= 44),
+    title: surface.querySelector('h1').textContent,
+    message: document.getElementById('returnPaymentMessage').textContent,
+    orderNumber: document.getElementById(state === 'confirmed' ? 'confirmedOrderNumber' : 'returnOrderNumber').textContent,
+    total: document.getElementById('confirmedTotal').textContent,
+    urlClean: location.search === '?public=1'
+  };
+})()`;
+
 const PUBLIC_FORM_PROBE = `(async () => {
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -212,8 +251,22 @@ const STABLE_PROBE = `(async () => {
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   if (url.pathname === '/api') {
-    response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    response.end(JSON.stringify({ ok: true, config: publicConfig }));
+    let raw = '';
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch (_) {}
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      if (body.action === 'registerCheckoutReturn') return response.end(JSON.stringify({ ok: true, checkout: { state: 'returned_unverified' } }));
+      if (body.action === 'verifyCheckoutPayment') {
+        // Somente a resposta do servidor libera a tela de obrigado; a URL de teste também tenta forçá-la.
+        const payment = body.checkoutToken === 'visual-confirmed'
+          ? visualConfirmedPayment
+          : { orderId: body.order_nsu, paymentState: 'verifying', reviewRequired: true };
+        return response.end(JSON.stringify({ ok: true, payment }));
+      }
+      response.end(JSON.stringify({ ok: true, config: publicConfig }));
+    });
     return;
   }
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -383,6 +436,27 @@ const server = http.createServer((request, response) => {
           if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
         }
 
+        for (const [token, expected] of [['visual-verifying', 'verifying'], ['visual-confirmed', 'confirmed']]) {
+          const forced = expected === 'verifying' ? '&paid=true&paymentState=confirmed&status=Confirmado' : '';
+          const returnPage = await devTools.openPage(`${origin}/?payment_return=1&order_nsu=PF-I-RETORNO-VISUAL-COM-IDENTIFICADOR-LONGO-001&checkout_token=${token}&slug=inv&transaction_nsu=tx${forced}`, viewport);
+          const paymentReturn = await returnPage.evaluate(PAYMENT_RETURN_PROBE);
+          await returnPage.screenshot(path.join(tempDir, `payment-${expected}-${label}.png`));
+          await returnPage.close();
+          assert.equal(paymentReturn.state, expected, `Estado do retorno incorreto em ${label}.`);
+          assert.equal(paymentReturn.pageOverflow, false, `Retorno do pagamento com overflow em ${label}.`);
+          assert.equal(paymentReturn.within, true, `Conteúdo do retorno saiu do card em ${label}.`);
+          assert.equal(paymentReturn.tapTargets, true, `Ações do retorno menores que 44px em ${label}.`);
+          assert.equal(paymentReturn.urlClean, true, `Token do checkout permaneceu na URL em ${label}.`);
+          assert.match(paymentReturn.orderNumber, /PF-I-RETORNO-VISUAL/, `Número do pedido ausente no retorno em ${label}.`);
+          if (expected === 'confirmed') {
+            assert.match(paymentReturn.title, /Obrigado/, `Tela de obrigado ausente em ${label}.`);
+            assert.match(paymentReturn.total, /92,91/, `Resumo confirmado incorreto em ${label}.`);
+          } else {
+            assert.match(paymentReturn.title, /Verificando seu pagamento/, `Estado de verificação ausente em ${label}.`);
+            assert.doesNotMatch(paymentReturn.message, /foi confirmad|está confirmad/, `Verificação afirmou pagamento em ${label}.`);
+          }
+        }
+
         const publicPage = await devTools.openPage(`${origin}/?public=1`, viewport);
         const form = await publicPage.evaluate(PUBLIC_FORM_PROBE);
         await publicPage.screenshot(path.join(tempDir, `public-delivery-${label}.png`));
@@ -428,6 +502,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
     console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
+    console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
     console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {

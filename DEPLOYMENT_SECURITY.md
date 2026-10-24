@@ -84,3 +84,33 @@ Manter um deployment antigo vulnerável acessível anula a proteção da nova ve
 - Links de pagamento reais validados.
 - Deployments vulneráveis antigos desativados.
 - Procedimentos de rotação e recuperação testados.
+
+## 9. Confirmação automática de pagamentos (Etapa 10)
+
+Nada desta seção deve ser executado sem autorização explícita. Validar primeiro no ambiente isolado de homologação.
+
+### Como funciona
+
+- O retorno do cliente (`redirect_url`) e a notificação da InfinitePay (`webhook_url`) apenas entregam `transaction_nsu` e `slug`. Nenhum dos dois confirma pagamento.
+- A confirmação vem somente da consulta autenticada ao `payment_check`. O pedido passa a "Confirmado" quando a InfinitePay informa `paid: true`, o `amount` é igual ao valor esperado em centavos, as referências devolvidas coincidem com o pedido, a cobrança persistida corresponde ao pedido atual e o pedido ainda está em "Aguardando pagamento".
+- A notificação não tem assinatura documentada. A URL de cada checkout leva um token HMAC exclusivo do pedido, diferente do token de retorno. Mesmo com um token válido, o corpo da notificação nunca decide o pagamento.
+- O Apps Script sempre responde HTTP 200, então o reenvio automático da InfinitePay em caso de erro 400 não se aplica. A conciliação agendada cobre notificações perdidas.
+- Divergências (valor, transação, pedido alterado, pedido cancelado ou status legado) ficam em `paid_unverified` ou `payment_amount_mismatch`, com o motivo exibido na central para conferência manual.
+
+### Ativação
+
+1. Publicar a nova versão do Apps Script no deployment de homologação.
+2. Definir `INFINITEPAY_WEBHOOK_URL` com a URL `/exec` desse deployment (formato `https://script.google.com/macros/s/<id>/exec`). Sem essa propriedade nenhum `webhook_url` é enviado e só o retorno do cliente e a conciliação fornecem referências.
+3. Somente checkouts criados depois desse passo recebem o webhook; checkouts antigos continuam dependendo do retorno do cliente.
+   - Formato padrão: `webhook: { url, events: ["paid"] }`, conforme a ajuda oficial atualizada em 20/10/2026. Para o campo antigo `webhook_url` da página de desenvolvedores, definir `INFINITEPAY_WEBHOOK_FORMAT=flat`.
+   - A documentação não comprova qual formato a API aceita. Em homologação, criar um checkout de baixo valor e confirmar, nos registros de execução do Apps Script, que a notificação chegou ao `doPost` ("Webhook InfinitePay" sem erro e pedido confirmado). Se não chegar, repetir com `flat`.
+   - Se a InfinitePay recusar o campo com HTTP 400/422, o checkout é criado novamente sem webhook (referência `webhook: "rejected"` na aba `CheckoutCobrancas`) e a confirmação segue pelo retorno do cliente e pela conciliação.
+   - O Web App precisa estar publicado como "Executar como: eu" e "Quem pode acessar: qualquer pessoa". O Apps Script responde ao POST com redirecionamento 302 para `script.googleusercontent.com`; o `doPost` já foi executado nesse momento, e um eventual reenvio da InfinitePay é tratado de forma idempotente.
+4. Validar em homologação um pagamento PIX e um de cartão de baixo valor, um checkout abandonado e o fechamento da aba antes do retorno.
+5. No editor do Apps Script, executar manualmente `installPaymentReconciliationTrigger()` uma única vez. A função não cria um segundo gatilho e remove duplicados. A conciliação roda a cada 10 minutos, confere no máximo 15 pedidos por execução e cerca de 4 minutos, com espera crescente entre consultas.
+6. Repetir os passos 1, 2 e 5 em produção somente depois da aprovação da homologação. O `INFINITEPAY_WEBHOOK_URL` de produção precisa apontar para o deployment de produção.
+7. Para suspender a conciliação, executar `removePaymentReconciliationTrigger()`. Para suspender as notificações, remover `INFINITEPAY_WEBHOOK_URL`.
+
+### Limitação
+
+O `payment_check` exige `transaction_nsu` e `slug`, e a InfinitePay não oferece consulta por `order_nsu` apenas. Um pedido pago cujo cliente não retornou e cuja notificação nunca chegou não pode ser confirmado automaticamente; ele continua em "Aguardando pagamento" para conferência manual na InfinitePay.

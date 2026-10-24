@@ -103,12 +103,35 @@ const PF_CHECKOUT = {
   handleProperty: 'INFINITEPAY_HANDLE',
   redirectUrlProperty: 'INFINITEPAY_REDIRECT_URL',
   returnSecretProperty: 'INFINITEPAY_RETURN_SECRET',
+  // URL /exec do Web App; quando definida, cada novo checkout recebe um webhook_url assinado por pedido.
+  webhookUrlProperty: 'INFINITEPAY_WEBHOOK_URL',
+  // A ajuda oficial (atualizada em 20/10/2026) documenta "webhook: { url, events }"; a página de desenvolvedores
+  // ainda mostra "webhook_url". O formato aceito é confirmado na homologação; "flat" usa o campo antigo.
+  webhookFormatProperty: 'INFINITEPAY_WEBHOOK_FORMAT',
+  // Somente pagamentos aprovados: eventos de falha trariam transações que não pertencem ao pagamento final.
+  webhookEvents: ['paid'],
   // A documentação oficial publica exemplos com os dois domínios de checkout.
   allowedCheckoutHosts: ['checkout.infinitepay.com.br', 'checkout.infinitepay.io'],
   states: {
     creating: 'creating', active: 'active', returned: 'returned_unverified',
-    paid: 'paid_unverified', mismatch: 'payment_amount_mismatch', expired: 'expired', failed: 'failed', unknown: 'unknown'
+    paid: 'paid_unverified', mismatch: 'payment_amount_mismatch', expired: 'expired', failed: 'failed', unknown: 'unknown',
+    confirmed: 'paid_confirmed'
   },
+  paidCaptureMethods: ['pix', 'credit_card'],
+  advancedOrderStatuses: ['Confirmado', 'Em produção', 'Concluído'],
+  // Etapa 10: confirmação automática e conciliação agendada.
+  reconcileHandler: 'reconcilePendingPayments',
+  reconcileEveryMinutes: 10,
+  reconcileMaxChecksPerRun: 15,
+  reconcileMaxRuntimeMs: 4 * 60 * 1000,
+  reconcileRunningKey: 'payment-reconcile:running',
+  reconcileGraceMs: 48 * 60 * 60 * 1000,
+  recheckBaseMs: 10 * 60 * 1000,
+  recheckPendingCapMs: 6 * 60 * 60 * 1000,
+  recheckFailureCapMs: 60 * 60 * 1000,
+  publicCheckPrefix: 'payment-check:',
+  publicCheckCooldownSeconds: 10,
+  maxHistory: 20,
   maxErrorLength: 300,
   maxProviderMessageLength: 200,
   maxAutomaticAttempts: 3,
@@ -525,6 +548,12 @@ function doPost(e) {
 
     const body = parseBody_(e);
 
+    // Notificação da InfinitePay: o corpo não traz "action"; a rota vem da URL assinada do checkout.
+    if (e && e.parameter && e.parameter.infinitepay_webhook === '1') {
+      validateObjectSize_(body, PF_ORDER.maxOrderBytes);
+      return json_(handleInfinitePayWebhook_(e.parameter, body));
+    }
+
     const action = String(
       body.action || ''
     );
@@ -548,6 +577,11 @@ function doPost(e) {
     if (action === 'registerCheckoutReturn') {
       validateObjectSize_(body, PF_ORDER.maxOrderBytes);
       return json_({ ok: true, checkout: registerCheckoutReturn_(body) });
+    }
+
+    if (action === 'verifyCheckoutPayment') {
+      validateObjectSize_(body, PF_ORDER.maxOrderBytes);
+      return json_({ ok: true, payment: verifyPublicCheckoutPayment_(body) });
     }
 
     if (action === 'createAdminSession') {
@@ -1606,7 +1640,9 @@ function getInfinitePayConfig_() {
     configured: /^inchk_[A-Za-z0-9_-]{8,}$/.test(apiKey) && Boolean(redirectUrl),
     apiKey,
     handle: String(properties.getProperty(PF_CHECKOUT.handleProperty) || '').trim().replace(/^\$/, ''),
-    redirectUrl
+    redirectUrl,
+    webhookUrl: validateWebhookUrl_(properties.getProperty(PF_CHECKOUT.webhookUrlProperty) || ''),
+    webhookFormat: String(properties.getProperty(PF_CHECKOUT.webhookFormatProperty) || '').trim() === 'flat' ? 'flat' : 'object'
   };
 }
 
@@ -1734,6 +1770,8 @@ function checkoutAdminView_(record) {
   const references = record && record.references || {};
   const lastError = references.lastError || null;
   view.canManualRetry = !record || checkoutRetryAllowed_(record, true);
+  view.reviewReason = String(references.reviewReason || '');
+  view.confirmedAt = String(references.confirmedAt || '');
   view.attempts = Number(references.attempts || (record ? 1 : 0));
   view.diagnostic = lastError
     ? {
@@ -1886,6 +1924,9 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
     }
   };
   if (!payload.customer.phone_number) delete payload.customer.phone_number;
+  const webhookUrl = checkoutWebhookUrl_(integration.webhookUrl, order.id, valueVersion);
+  if (webhookUrl && integration.webhookFormat === 'flat') payload.webhook_url = webhookUrl;
+  else if (webhookUrl) payload.webhook = { url: webhookUrl, events: PF_CHECKOUT.webhookEvents.slice() };
   const deliveryAddress = order.fulfillment && order.fulfillment.mode === 'delivery' ? order.fulfillment.address : null;
   if (deliveryAddress) {
     // Campos de endereço documentados pela InfinitePay; retirada nunca envia endereço.
@@ -1898,16 +1939,16 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
   const personalData = [payload.customer.name].concat(payload.address ? Object.keys(payload.address).map(key => payload.address[key]) : []);
   // A referência de desenvolvedores exige a InfiniteTag (handle) no corpo da criação do link.
   if (integration.handle) payload.handle = integration.handle;
-  let response;
-  try {
-    response = UrlFetchApp.fetch(PF_CHECKOUT.apiUrl, {
-      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-      headers: { 'X-Api-Key': integration.apiKey }, payload: JSON.stringify(payload)
-    });
-  } catch (networkError) {
-    // Sem resposta não é possível saber se a cobrança foi criada: estado ambíguo.
-    const timedOut = /timeout|timed out|tempo limite|excedeu/i.test(String(networkError && networkError.message || ''));
-    throw checkoutFailure_(timedOut ? 'timeout' : 'network', false, 0, '', '');
+  let webhook = webhookUrl ? 'sent' : 'disabled';
+  let response = postInfinitePayLink_(payload, integration);
+  // 400/422 comprova que nenhum link foi criado. Se o campo de webhook for recusado, o checkout é
+  // criado sem notificação: o retorno do cliente e a conciliação continuam fornecendo as referências.
+  if (webhookUrl && [400, 422].includes(Number(response.getResponseCode()))) {
+    delete payload.webhook;
+    delete payload.webhook_url;
+    webhook = 'rejected';
+    console.warn('InfinitePay recusou a criação com webhook (HTTP ' + Number(response.getResponseCode()) + '); nova tentativa sem webhook.');
+    response = postInfinitePayLink_(payload, integration);
   }
   const status = Number(response.getResponseCode());
   let text = '';
@@ -1928,7 +1969,20 @@ function createInfinitePayCheckout_(order, expiresAt, valueVersion, integration)
   if (!url) {
     throw checkoutFailure_(rawUrl ? 'invalid_url' : 'missing_url', false, status, rawUrl ? sanitizeProviderText_(String(rawUrl).split('?')[0]) : '', correlationId);
   }
-  return { url, chargeId: String(data.id || data.slug || data.invoice_slug || ''), payload };
+  return { url, chargeId: String(data.id || data.slug || data.invoice_slug || ''), payload, webhook };
+}
+
+function postInfinitePayLink_(payload, integration) {
+  try {
+    return UrlFetchApp.fetch(PF_CHECKOUT.apiUrl, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'X-Api-Key': integration.apiKey }, payload: JSON.stringify(payload)
+    });
+  } catch (networkError) {
+    // Sem resposta não é possível saber se a cobrança foi criada: estado ambíguo.
+    const timedOut = /timeout|timed out|tempo limite|excedeu/i.test(String(networkError && networkError.message || ''));
+    throw checkoutFailure_(timedOut ? 'timeout' : 'network', false, 0, '', '');
+  }
 }
 
 function ensureCheckoutForOrder_(order, expiresAt, options) {
@@ -1983,7 +2037,7 @@ function ensureCheckoutForOrder_(order, expiresAt, options) {
 
   try {
     const created = createInfinitePayCheckout_(order, expiresAt, valueVersion, integration);
-    const successReferences = Object.assign({}, references, { orderNsu: order.id });
+    const successReferences = Object.assign({}, references, { orderNsu: order.id, webhook: created.webhook });
     delete successReferences.lastError;
     const commitLock = LockService.getScriptLock();
     commitLock.waitLock(10000);
@@ -2056,79 +2110,420 @@ function safeInfinitePayReferenceUrl_(value) {
     || host === 'infinitepay.com.br' || host.endsWith('.infinitepay.com.br') ? text : '';
 }
 
-function registerCheckoutReturn_(body) {
-  const orderId = orderText_(body, ['orderId', 'order_nsu'], 'pedido', 80, true);
-  const token = orderText_(body, ['checkoutToken'], 'token de retorno', 256, true);
-  const ss = getSpreadsheet_();
-  const orderRecord = findOrderRecordById_(ss.getSheetByName(PF.sheets.orders), orderId);
-  if (!orderRecord) throw apiError_('ORDER_NOT_FOUND', 'O pedido informado não foi encontrado.');
-  const checkoutSheet = ss.getSheetByName(PF.sheets.checkouts);
-  const checkout = findCheckoutRecord_(checkoutSheet, orderId, '');
+// Etapa 10: o retorno do cliente e o webhook só entregam referências. Nenhum dos dois comprova pagamento;
+// a confirmação depende exclusivamente da consulta autenticada ao payment_check (verifyCheckoutPayment_).
+function authorizeCheckoutToken_(orderId, token) {
+  const checkout = findCheckoutRecord_(getSpreadsheet_().getSheetByName(PF.sheets.checkouts), orderId, '');
   if (!checkout || !constantTimeEqual_(token, checkoutReturnToken_(orderId, checkout.record.valueVersion))) {
     throw apiError_('CHECKOUT_RETURN_INVALID', 'Não foi possível validar o retorno do checkout.');
   }
-  const references = {
-    orderNsu: orderId,
+  return checkout;
+}
+
+function recordCheckoutReferences_(orderId, incoming, source) {
+  const sheet = getSpreadsheet_().getSheetByName(PF.sheets.checkouts);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const found = findCheckoutRecord_(sheet, orderId, '');
+    if (!found) throw apiError_('CHECKOUT_NOT_FOUND', 'Este pedido ainda não possui checkout registrado.');
+    const now = currentBusinessDate_();
+    const previous = found.record.references || {};
+    if ((previous.slug && incoming.slug && previous.slug !== incoming.slug)
+      || (previous.transactionNsu && incoming.transactionNsu && previous.transactionNsu !== incoming.transactionNsu)) {
+      // Mantém as referências originais e registra a tentativa divergente para a conferência administrativa.
+      updateCheckoutRecord_(sheet, found.rowNumber, {
+        references: Object.assign({}, previous, { lastConflict: { source, at: now.toISOString() } }), updatedAt: now
+      });
+      throw apiError_('CHECKOUT_RETURN_CONFLICT', 'O retorno não corresponde às referências já registradas para este pedido.');
+    }
+    const references = Object.assign({}, previous, {
+      orderNsu: orderId,
+      slug: previous.slug || incoming.slug || '',
+      transactionNsu: previous.transactionNsu || incoming.transactionNsu || '',
+      captureMethod: incoming.captureMethod || previous.captureMethod || '',
+      receiptUrl: incoming.receiptUrl || previous.receiptUrl || ''
+    });
+    references[source === 'webhook' ? 'webhookAt' : 'returnedAt'] = now.toISOString();
+    // Referências repetidas nunca rebaixam uma cobrança já conferida.
+    const settled = [PF_CHECKOUT.states.confirmed, PF_CHECKOUT.states.paid, PF_CHECKOUT.states.mismatch].includes(found.record.state);
+    const state = settled ? found.record.state : PF_CHECKOUT.states.returned;
+    updateCheckoutRecord_(sheet, found.rowNumber, {
+      chargeId: references.slug || found.record.chargeId, references, state, updatedAt: now
+    });
+    return state;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function registerCheckoutReturn_(body) {
+  const orderId = orderText_(body, ['orderId', 'order_nsu'], 'pedido', 80, true);
+  const token = orderText_(body, ['checkoutToken'], 'token de retorno', 256, true);
+  const orderRecord = findOrderRecordById_(getSpreadsheet_().getSheetByName(PF.sheets.orders), orderId);
+  if (!orderRecord) throw apiError_('ORDER_NOT_FOUND', 'O pedido informado não foi encontrado.');
+  authorizeCheckoutToken_(orderId, token);
+  const state = recordCheckoutReferences_(orderId, {
     slug: orderText_(body, ['slug'], 'código da cobrança', 160, false),
     transactionNsu: orderText_(body, ['transactionNsu', 'transaction_nsu'], 'transação', 160, false),
     captureMethod: orderText_(body, ['captureMethod', 'capture_method'], 'meio de pagamento', 40, false),
-    receiptUrl: safeInfinitePayReferenceUrl_(body.receiptUrl || body.receipt_url),
-    returnedAt: currentBusinessDate_().toISOString()
+    receiptUrl: safeInfinitePayReferenceUrl_(body.receiptUrl || body.receipt_url)
+  }, 'return');
+  return { orderId, state, subjectToManualReview: true };
+}
+
+function checkoutWebhookToken_(orderId, valueVersion) {
+  return checkoutReturnToken_(orderId, String(valueVersion) + '|webhook');
+}
+
+function checkoutWebhookUrl_(baseUrl, orderId, valueVersion) {
+  if (!baseUrl) return '';
+  const separator = baseUrl.indexOf('?') === -1 ? '?' : '&';
+  return baseUrl + separator + 'infinitepay_webhook=1&order=' + encodeURIComponent(orderId)
+    + '&token=' + encodeURIComponent(checkoutWebhookToken_(orderId, valueVersion));
+}
+
+// Somente o endpoint /exec de um Web App do Apps Script recebe notificações.
+function validateWebhookUrl_(value) {
+  const text = String(value || '').trim();
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(text) ? text : '';
+}
+
+// A notificação não é assinada pela InfinitePay: o token da URL filtra chamadas anônimas e o
+// pagamento só é aceito depois do payment_check. O Apps Script sempre responde HTTP 200.
+// Corpo da notificação: campos no nível superior (página de desenvolvedores) ou em "data" (formato por eventos).
+function webhookNotificationFields_(body) {
+  const root = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const data = root.data && typeof root.data === 'object' && !Array.isArray(root.data) ? root.data : {};
+  const pick = key => root[key] !== undefined && root[key] !== null ? root[key] : data[key];
+  const text = value => typeof value === 'string' ? value : (typeof value === 'number' ? String(value) : '');
+  return {
+    event: text(pick('event') || pick('type')).toLowerCase(),
+    order_nsu: text(pick('order_nsu')),
+    invoice_slug: text(pick('invoice_slug')),
+    slug: text(pick('slug')),
+    transaction_nsu: text(pick('transaction_nsu')),
+    capture_method: text(pick('capture_method')),
+    receipt_url: text(pick('receipt_url'))
   };
-  const previousReferences = checkout.record.references || {};
-  if ((previousReferences.slug && references.slug && previousReferences.slug !== references.slug)
-    || (previousReferences.transactionNsu && references.transactionNsu
-      && previousReferences.transactionNsu !== references.transactionNsu)) {
-    throw apiError_('CHECKOUT_RETURN_CONFLICT', 'O retorno não corresponde às referências já registradas para este pedido.');
+}
+
+function handleInfinitePayWebhook_(params, body) {
+  try {
+    const orderId = orderText_(params || {}, ['order'], 'pedido', 80, true);
+    const token = orderText_(params || {}, ['token'], 'token', 256, true);
+    const payload = webhookNotificationFields_(body);
+    // O token já vincula a URL a este pedido; quando presente, order_nsu precisa coincidir.
+    if (payload.order_nsu && payload.order_nsu !== orderId) throw apiError_('WEBHOOK_ORDER_MISMATCH', 'Notificação de outro pedido.');
+    const checkout = findCheckoutRecord_(getSpreadsheet_().getSheetByName(PF.sheets.checkouts), orderId, '');
+    if (!checkout || !constantTimeEqual_(token, checkoutWebhookToken_(orderId, checkout.record.valueVersion))) {
+      throw apiError_('WEBHOOK_INVALID', 'Notificação não reconhecida.');
+    }
+    // Eventos diferentes de "paid" não fornecem referências do pagamento aprovado.
+    if (payload.event && payload.event !== 'paid') return { ok: true, outcome: 'ignored_event' };
+    recordCheckoutReferences_(orderId, {
+      slug: orderText_({ slug: payload.invoice_slug || payload.slug }, ['slug'], 'código da cobrança', 160, false),
+      transactionNsu: orderText_(payload, ['transaction_nsu'], 'transação', 160, false),
+      captureMethod: orderText_(payload, ['capture_method'], 'meio de pagamento', 40, false),
+      receiptUrl: safeInfinitePayReferenceUrl_(payload.receipt_url)
+    }, 'webhook');
+    const result = verifyCheckoutPayment_(orderId, { source: 'webhook' });
+    return { ok: true, outcome: result.outcome };
+  } catch (error) {
+    console.warn('Webhook InfinitePay recusado: ' + sanitizeProviderText_(error && (error.code || 'erro')));
+    return { ok: false, code: 'WEBHOOK_REJECTED' };
   }
-  references.slug = previousReferences.slug || references.slug;
-  references.transactionNsu = previousReferences.transactionNsu || references.transactionNsu;
-  const chargeId = references.slug || checkout.record.chargeId;
-  updateCheckoutRecord_(checkoutSheet, checkout.rowNumber, {
-    chargeId, references, state: PF_CHECKOUT.states.returned, updatedAt: currentBusinessDate_()
-  });
-  return { orderId, state: PF_CHECKOUT.states.returned, subjectToManualReview: true };
+}
+
+function queryInfinitePayPayment_(integration, orderId, query) {
+  let response;
+  try {
+    response = UrlFetchApp.fetch(PF_CHECKOUT.paymentCheckUrl, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'X-Api-Key': integration.apiKey },
+      payload: JSON.stringify({ handle: integration.handle, order_nsu: orderId, transaction_nsu: query.transactionNsu, slug: query.slug })
+    });
+  } catch (networkError) {
+    const timedOut = /timeout|timed out|tempo limite|excedeu/i.test(String(networkError && networkError.message || ''));
+    return { ok: false, category: timedOut ? 'timeout' : 'network', httpStatus: 0 };
+  }
+  const status = Number(response.getResponseCode());
+  let data = null;
+  try { data = JSON.parse(response.getContentText() || ''); } catch (_) {}
+  if (status < 200 || status >= 300) return { ok: false, category: checkoutHttpCategory_(status).category, httpStatus: status };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { ok: false, category: 'invalid_json', httpStatus: status };
+  return { ok: true, data, httpStatus: status };
+}
+
+// Campos opcionais devolvidos pela InfinitePay precisam coincidir com a consulta feita para este pedido.
+function evaluatePaymentCheck_(data, orderId, query, record) {
+  const amount = Number(data.amount);
+  const echoes = [['order_nsu', orderId], ['transaction_nsu', query.transactionNsu], ['slug', query.slug], ['invoice_slug', query.slug]];
+  const method = String(data.capture_method || '');
+  return {
+    paid: data.success !== false && data.paid === true,
+    // amount é o valor da cobrança; paid_amount inclui juros de parcelamento do cartão.
+    amountMatches: Number.isInteger(amount) && record.expectedAmountCents > 0 && amount === record.expectedAmountCents,
+    transactionMatches: echoes.every(([key, expected]) => data[key] === undefined || data[key] === null || data[key] === ''
+      || String(data[key]) === String(expected)),
+    methodValid: !method || PF_CHECKOUT.paidCaptureMethods.includes(method),
+    amount: Number.isFinite(amount) ? amount : 0,
+    paidAmount: Number(data.paid_amount || 0),
+    installments: Number(data.installments || 0),
+    captureMethod: method
+  };
+}
+
+function nextCheckDelayMs_(attempt, capMs) {
+  return Math.min(capMs, PF_CHECKOUT.recheckBaseMs * Math.pow(2, Math.max(0, Number(attempt || 1) - 1)));
+}
+
+function appendPaymentHistory_(references, entry) {
+  references.history = (Array.isArray(references.history) ? references.history : [])
+    .concat([entry]).slice(-PF_CHECKOUT.maxHistory);
+}
+
+/**
+ * Confere o pagamento na InfinitePay e confirma o pedido somente quando:
+ * pagamento aprovado, transação e valor do pedido coincidem, a cobrança persistida não mudou
+ * e o pedido continua "Aguardando pagamento". Idempotente e protegido por LockService.
+ */
+function verifyCheckoutPayment_(orderId, options) {
+  const source = options && options.source || 'admin';
+  const integration = getInfinitePayConfig_();
+  if (!integration.configured || !integration.handle) {
+    throw apiError_('INFINITEPAY_CHECK_NOT_CONFIGURED', 'Configure a API Key, a InfiniteTag e a URL de retorno nas propriedades do script.');
+  }
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(PF.sheets.checkouts);
+  const found = findCheckoutRecord_(sheet, orderId, '');
+  if (!found) throw apiError_('CHECKOUT_NOT_FOUND', 'Este pedido ainda não possui checkout registrado.');
+  const refs = found.record.references || {};
+  if (found.record.state === PF_CHECKOUT.states.confirmed) return { outcome: 'already_confirmed', record: found.record };
+  if (!refs.slug || !refs.transactionNsu) return { outcome: 'reference_pending', record: found.record };
+  const query = { slug: refs.slug, transactionNsu: refs.transactionNsu };
+  // A consulta externa acontece fora do lock; a decisão é tomada sobre dados relidos dentro dele.
+  const check = queryInfinitePayPayment_(integration, orderId, query);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const current = findCheckoutRecord_(sheet, orderId, '');
+    if (current.record.state === PF_CHECKOUT.states.confirmed) return { outcome: 'already_confirmed', record: current.record };
+    const references = Object.assign({}, current.record.references || {});
+    if (references.slug !== query.slug || references.transactionNsu !== query.transactionNsu) {
+      return { outcome: 'reference_changed', record: current.record };
+    }
+    const now = currentBusinessDate_();
+    references.lastCheckedAt = now.toISOString();
+    references.lastCheckSource = source;
+    if (!check.ok) {
+      references.checkFailures = Number(references.checkFailures || 0) + 1;
+      references.lastCheckError = { category: check.category, httpStatus: check.httpStatus, at: now.toISOString() };
+      references.nextCheckAt = new Date(now.getTime() + nextCheckDelayMs_(references.checkFailures, PF_CHECKOUT.recheckFailureCapMs)).toISOString();
+      updateCheckoutRecord_(sheet, current.rowNumber, { references, updatedAt: now });
+      console.warn('Consulta InfinitePay indisponível: ' + check.category + (check.httpStatus ? ' HTTP ' + check.httpStatus : ''));
+      return { outcome: 'provider_unavailable', record: Object.assign({}, current.record, { references }) };
+    }
+    delete references.lastCheckError;
+    references.checkFailures = 0;
+    const evaluation = evaluatePaymentCheck_(check.data, orderId, query, current.record);
+    references.providerPaid = evaluation.paid;
+    references.providerAmount = evaluation.amount;
+    references.providerPaidAmount = evaluation.paidAmount;
+    references.installments = evaluation.installments;
+    references.amountMatches = evaluation.amountMatches;
+    if (evaluation.captureMethod) references.providerCaptureMethod = evaluation.captureMethod;
+
+    let state = current.record.state === PF_CHECKOUT.states.active ? PF_CHECKOUT.states.returned : current.record.state;
+    let outcome = 'pending';
+    let orderStatus = '';
+    delete references.reviewReason;
+    if (!evaluation.paid) {
+      state = PF_CHECKOUT.states.returned;
+      references.pendingChecks = Number(references.pendingChecks || 0) + 1;
+      references.nextCheckAt = new Date(now.getTime() + nextCheckDelayMs_(references.pendingChecks, PF_CHECKOUT.recheckPendingCapMs)).toISOString();
+    } else if (!evaluation.amountMatches) {
+      state = PF_CHECKOUT.states.mismatch;
+      outcome = 'amount_mismatch';
+      references.reviewReason = 'amount_mismatch';
+    } else {
+      const orderSheet = ss.getSheetByName(PF.sheets.orders);
+      const orderRecord = findOrderRecordById_(orderSheet, orderId);
+      const order = orderRecord && orderResponseFromRow_(orderRecord.row, ss.getSpreadsheetTimeZone(), false,
+        getOrderItemsById_(ss.getSheetByName(PF.sheets.orderItems), orderId));
+      orderStatus = order ? order.status : '';
+      const chargeMatchesOrder = Boolean(order)
+        && Math.round(Number(order.total || 0) * 100) === current.record.expectedAmountCents
+        && checkoutValueVersion_(order) === current.record.valueVersion;
+      state = PF_CHECKOUT.states.paid;
+      outcome = 'review_required';
+      if (!evaluation.transactionMatches) references.reviewReason = 'transaction_mismatch';
+      else if (!evaluation.methodValid) references.reviewReason = 'capture_method_unknown';
+      else if (!chargeMatchesOrder) references.reviewReason = order ? 'order_changed' : 'order_not_found';
+      else if (orderStatus === PF_ORDER.initialStatus) {
+        orderSheet.getRange(orderRecord.rowNumber, 14).setValue('Confirmado');
+        appendPaymentHistory_(references, { from: orderStatus, to: 'Confirmado', at: now.toISOString(), source, by: 'payment_check' });
+        orderStatus = 'Confirmado';
+        state = PF_CHECKOUT.states.confirmed;
+        outcome = 'confirmed';
+        references.confirmedAt = now.toISOString();
+      } else if (PF_CHECKOUT.advancedOrderStatuses.includes(orderStatus)) {
+        // Pedido já confirmado ou avançado manualmente: registra o pagamento sem tocar no status.
+        state = PF_CHECKOUT.states.confirmed;
+        outcome = 'already_advanced';
+        references.confirmedAt = now.toISOString();
+      } else {
+        references.reviewReason = orderStatus === 'Cancelado' ? 'order_cancelled' : 'order_status_not_eligible';
+      }
+    }
+    if (outcome !== 'pending') delete references.nextCheckAt;
+    updateCheckoutRecord_(sheet, current.rowNumber, { state, references, updatedAt: now });
+    return { outcome, orderStatus, record: Object.assign({}, current.record, { state, references }) };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function checkCheckoutPayment_(orderId) {
   const id = clean_(orderId);
   if (!id) throw apiError_('ORDER_ID_REQUIRED', 'Informe o pedido para conferir o pagamento.');
-  const integration = getInfinitePayConfig_();
-  if (!integration.configured || !integration.handle) {
-    throw apiError_('INFINITEPAY_CHECK_NOT_CONFIGURED', 'Configure a API Key, a InfiniteTag e a URL de retorno nas propriedades do script.');
-  }
-  const sheet = getSpreadsheet_().getSheetByName(PF.sheets.checkouts);
-  const found = findCheckoutRecord_(sheet, id, '');
-  if (!found) throw apiError_('CHECKOUT_NOT_FOUND', 'Este pedido ainda não possui checkout registrado.');
-  const refs = found.record.references || {};
-  if (!refs.slug || !refs.transactionNsu) {
+  const result = verifyCheckoutPayment_(id, { source: 'admin' });
+  if (result.outcome === 'reference_pending') {
     throw apiError_('CHECKOUT_REFERENCE_PENDING', 'A transação ainda não retornou referências suficientes para consulta.');
   }
-  const response = UrlFetchApp.fetch(PF_CHECKOUT.paymentCheckUrl, {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'X-Api-Key': integration.apiKey },
-    payload: JSON.stringify({ handle: integration.handle, order_nsu: id, transaction_nsu: refs.transactionNsu, slug: refs.slug })
+  if (result.outcome === 'provider_unavailable') {
+    throw apiError_('INFINITEPAY_CHECK_FAILED', 'Não foi possível consultar a situação na InfinitePay.');
+  }
+  const refs = result.record.references || {};
+  return Object.assign(checkoutAdminView_(result.record), {
+    providerPaid: refs.providerPaid === true, paidAmountCents: Number(refs.providerPaidAmount || 0),
+    amountMatches: refs.amountMatches === true, outcome: result.outcome,
+    autoConfirmed: result.outcome === 'confirmed', orderStatus: result.orderStatus || '',
+    subjectToManualReview: result.outcome !== 'confirmed' && result.outcome !== 'already_advanced' && result.outcome !== 'already_confirmed',
+    checkedAt: refs.lastCheckedAt || ''
   });
-  const status = Number(response.getResponseCode());
-  let data = {};
-  try { data = JSON.parse(response.getContentText() || '{}'); } catch (_) {}
-  if (status < 200 || status >= 300) throw apiError_('INFINITEPAY_CHECK_FAILED', 'Não foi possível consultar a situação na InfinitePay.');
-  refs.lastCheckedAt = currentBusinessDate_().toISOString();
-  refs.providerPaid = data.paid === true;
-  refs.providerAmount = Number(data.amount || 0);
-  refs.providerPaidAmount = Number(data.paid_amount || 0);
-  refs.installments = Number(data.installments || 0);
-  const amountMatches = refs.providerAmount === found.record.expectedAmountCents;
-  refs.amountMatches = amountMatches;
-  const state = data.paid === true
-    ? (amountMatches ? PF_CHECKOUT.states.paid : PF_CHECKOUT.states.mismatch)
-    : PF_CHECKOUT.states.returned;
-  updateCheckoutRecord_(sheet, found.rowNumber, { state, references: refs, updatedAt: currentBusinessDate_() });
+}
+
+// Resumo sem dados pessoais para a tela de obrigado.
+function publicOrderSummary_(order) {
   return {
-    ...checkoutPublicView_({ ...found.record, state, references: refs }),
-    providerPaid: data.paid === true, paidAmountCents: refs.providerPaidAmount, amountMatches,
-    subjectToManualReview: true, checkedAt: refs.lastCheckedAt
+    id: order.id, status: order.status, totalQuantity: order.totalQuantity,
+    items: (order.items || []).map(item => ({
+      flavor: item.flavor, quantity: Number(item.quantity || 0), subtotal: Number(item.subtotal || 0),
+      sizeId: item.sizeId || '', size: item.size || '', pricingModel: item.pricingModel || ''
+    })),
+    subtotal: order.subtotal, deliveryFee: order.deliveryFee, total: order.total,
+    deliveryDate: order.deliveryDate, fulfillment: { mode: order.fulfillment && order.fulfillment.mode || '' }
   };
+}
+
+function publicPaymentStatus_(orderId) {
+  const ss = getSpreadsheet_();
+  const checkout = findCheckoutRecord_(ss.getSheetByName(PF.sheets.checkouts), orderId, '');
+  const orderRecord = findOrderRecordById_(ss.getSheetByName(PF.sheets.orders), orderId);
+  const order = orderRecord && orderResponseFromRow_(orderRecord.row, ss.getSpreadsheetTimeZone(), false,
+    getOrderItemsById_(ss.getSheetByName(PF.sheets.orderItems), orderId));
+  const record = checkout && checkout.record;
+  // Só o estado gravado pelo servidor após o payment_check libera a tela de obrigado.
+  const confirmed = Boolean(order && record) && record.state === PF_CHECKOUT.states.confirmed
+    && PF_CHECKOUT.advancedOrderStatuses.includes(order.status);
+  const refs = record && record.references || {};
+  return {
+    orderId,
+    paymentState: confirmed ? 'confirmed' : 'verifying',
+    reviewRequired: !confirmed && Boolean(refs.reviewReason),
+    checkedAt: refs.lastCheckedAt || '',
+    order: confirmed ? publicOrderSummary_(order) : null
+  };
+}
+
+function verifyPublicCheckoutPayment_(body) {
+  const orderId = orderText_(body, ['orderId', 'order_nsu'], 'pedido', 80, true);
+  const token = orderText_(body, ['checkoutToken'], 'token de retorno', 256, true);
+  authorizeCheckoutToken_(orderId, token);
+  // Intervalo mínimo entre consultas à InfinitePay disparadas pelo navegador.
+  const cache = CacheService.getScriptCache();
+  const key = PF_CHECKOUT.publicCheckPrefix + hashCredential_(orderId).slice(0, 24);
+  if (!cache.get(key)) {
+    cache.put(key, '1', PF_CHECKOUT.publicCheckCooldownSeconds);
+    try {
+      verifyCheckoutPayment_(orderId, { source: 'customer' });
+    } catch (error) {
+      console.warn('Verificação pública não concluída: ' + sanitizeProviderText_(error && (error.code || 'erro')));
+    }
+  }
+  return publicPaymentStatus_(orderId);
+}
+
+function pendingPaymentCandidates_(now) {
+  const ss = getSpreadsheet_();
+  const checkouts = getCheckoutsMap_(ss.getSheetByName(PF.sheets.checkouts));
+  const statusByOrder = {};
+  dataRows_(ss.getSheetByName(PF.sheets.orders)).forEach(row => { statusByOrder[String(row[0] || '')] = String(row[13] || ''); });
+  return Object.keys(checkouts).map(orderId => checkouts[orderId]).filter(record => {
+    const refs = record.references || {};
+    if (record.state !== PF_CHECKOUT.states.returned || !refs.slug || !refs.transactionNsu) return false;
+    if (statusByOrder[record.orderId] !== PF_ORDER.initialStatus) return false;
+    const nextCheck = new Date(refs.nextCheckAt || 0);
+    if (!isNaN(nextCheck.getTime()) && nextCheck.getTime() > now.getTime()) return false;
+    const expires = new Date(record.expiresAt || '');
+    return isNaN(expires.getTime()) || expires.getTime() + PF_CHECKOUT.reconcileGraceMs > now.getTime();
+  }).sort((left, right) => String(left.references.lastCheckedAt || '').localeCompare(String(right.references.lastCheckedAt || '')))
+    .map(record => record.orderId);
+}
+
+/** Gatilho de tempo (instalado por installPaymentReconciliationTrigger): confere pagamentos pendentes. */
+function reconcilePendingPayments() {
+  const summary = { checked: 0, confirmed: 0, pending: 0, review: 0, failures: 0, skipped: '' };
+  const cache = CacheService.getScriptCache();
+  if (cache.get(PF_CHECKOUT.reconcileRunningKey)) return Object.assign(summary, { skipped: 'already_running' });
+  cache.put(PF_CHECKOUT.reconcileRunningKey, '1', 6 * 60);
+  const startedAt = Date.now();
+  try {
+    const integration = getInfinitePayConfig_();
+    if (!integration.configured || !integration.handle) return Object.assign(summary, { skipped: 'not_configured' });
+    const candidates = pendingPaymentCandidates_(currentBusinessDate_()).slice(0, PF_CHECKOUT.reconcileMaxChecksPerRun);
+    for (let index = 0; index < candidates.length; index += 1) {
+      if (Date.now() - startedAt > PF_CHECKOUT.reconcileMaxRuntimeMs) break;
+      try {
+        const result = verifyCheckoutPayment_(candidates[index], { source: 'reconciliation' });
+        summary.checked += 1;
+        if (result.outcome === 'confirmed') summary.confirmed += 1;
+        else if (result.outcome === 'pending') summary.pending += 1;
+        else if (result.outcome === 'provider_unavailable') summary.failures += 1;
+        else summary.review += 1;
+      } catch (error) {
+        summary.failures += 1;
+        console.warn('Conciliação não concluída: ' + sanitizeProviderText_(error && (error.code || 'erro')));
+      }
+    }
+    return summary;
+  } finally {
+    cache.remove(PF_CHECKOUT.reconcileRunningKey);
+    console.log('Conciliação InfinitePay: ' + JSON.stringify(summary));
+  }
+}
+
+/** Execute manualmente somente após a homologação. Nunca cria um segundo gatilho. */
+function installPaymentReconciliationTrigger() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const existing = ScriptApp.getProjectTriggers().filter(trigger => trigger.getHandlerFunction() === PF_CHECKOUT.reconcileHandler);
+    existing.slice(1).forEach(trigger => ScriptApp.deleteTrigger(trigger));
+    if (existing.length) return { installed: false, triggers: 1, removedDuplicates: existing.length - 1 };
+    ScriptApp.newTrigger(PF_CHECKOUT.reconcileHandler).timeBased().everyMinutes(PF_CHECKOUT.reconcileEveryMinutes).create();
+    return { installed: true, triggers: 1, removedDuplicates: 0 };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function removePaymentReconciliationTrigger() {
+  const existing = ScriptApp.getProjectTriggers().filter(trigger => trigger.getHandlerFunction() === PF_CHECKOUT.reconcileHandler);
+  existing.forEach(trigger => ScriptApp.deleteTrigger(trigger));
+  return { removed: existing.length };
 }
 
 
@@ -2815,7 +3210,18 @@ function getCheckoutsMap_(sheet) {
 
 
 
-function updateOrderStatus_(
+// O lock impede que uma alteração manual e a confirmação automática se sobreponham.
+function updateOrderStatus_(orderId, status) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    return writeOrderStatus_(orderId, status);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function writeOrderStatus_(
   orderId,
   status
 ) {
