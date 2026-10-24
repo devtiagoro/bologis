@@ -129,6 +129,7 @@ async function launchDevTools() {
           const { data } = await pageSend('Page.captureScreenshot', { format: 'png' });
           fs.writeFileSync(file, Buffer.from(data, 'base64'));
         },
+        send: pageSend,
         close: () => send('Target.closeTarget', { targetId })
       };
     },
@@ -252,9 +253,6 @@ const STABLE_PROBE = `(async () => {
 const KANBAN_PROBE = `(async () => {
   const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const calls = [];
-  const originalFetch = window.fetch.bind(window);
-  window.fetch = (url, options) => { calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
   document.getElementById('ordersKanbanViewBtn').click();
   await document.fonts.ready;
   await frame();
@@ -279,7 +277,7 @@ const KANBAN_PROBE = `(async () => {
     overflowX: getComputedStyle(board).overflowX,
     columns: columns.map(column => [column.querySelector('h3').textContent, column.querySelectorAll('.kanban-card').length]),
     minColumnWidth: Math.round(Math.min(...columns.map(column => column.getBoundingClientRect().width))),
-    moveTargets: [...board.querySelectorAll('.kanban-move-select')].every(select => select.getBoundingClientRect().height >= 44),
+    noMoveSelect: !board.querySelector('select'),
     cardsWithin: withinCards(),
     technicalHidden: cards.every(card => !/invoice-fictitious|Valor esperado|Observação fictícia/.test(surfaceText(card))),
     shows1899: /1899|GMT-/.test(board.innerText),
@@ -293,43 +291,10 @@ const KANBAN_PROBE = `(async () => {
   details.forEach(item => { item.open = false; });
   await frame();
 
-  const card = id => document.querySelector('[data-kanban-card="' + id + '"]');
-  const drag = (id, status) => {
-    const column = document.querySelector('.kanban-column[data-kanban-column="' + status + '"]');
-    const data = new DataTransfer();
-    card(id).dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
-    const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: data });
-    column.dispatchEvent(over);
-    const state = { accepted: over.defaultPrevented, highlighted: column.classList.contains('is-drop-target') };
-    column.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
-    card(id)?.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
-    return state;
-  };
-  const paidId = 'PF-20260831-113122-AB3E86';
-  const waitingId = 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001';
-  const columnOf = id => card(id)?.closest('.kanban-column')?.dataset.kanbanColumn;
-  const settle = async id => { for (let attempt = 0; attempt < 50 && card(id)?.classList.contains('is-saving'); attempt++) await wait(50); };
-  const dnd = { same: drag(paidId, 'Confirmado'), callsBeforeMove: calls.length };
-  dnd.move = drag(paidId, 'Em produção');
-  dnd.whileSaving = { column: columnOf(paidId), saving: card(paidId).classList.contains('is-saving'), draggable: card(paidId).getAttribute('draggable') };
-  // Card em salvamento não aceita nova soltura: evita requisições duplicadas.
-  dnd.duplicate = drag(paidId, 'Concluído');
-  await settle(paidId);
-  dnd.after = columnOf(paidId);
-  // Pula etapas (Aguardando → Concluído) e volta (Em produção → Aguardando) sem diálogos.
-  window.confirm = () => { throw new Error('Diálogo inesperado'); };
-  dnd.skip = drag(waitingId, 'Concluído');
-  await settle(waitingId);
-  dnd.back = drag(paidId, 'Aguardando pagamento');
-  await settle(paidId);
-  dnd.final = [columnOf(paidId), columnOf(waitingId)];
-  dnd.calls = calls.filter(call => call.action === 'updateOrderStatus').map(call => [call.orderId, call.status, call.expectedStatus]);
-  dnd.leftover = document.querySelectorAll('.is-drop-target, .is-dragging').length;
-  window.fetch = originalFetch;
   // Restaura a preferência para a próxima resolução abrir na Lista.
   document.getElementById('ordersListViewBtn').click();
   layout.restoredList = Boolean(document.querySelector('#ordersContainer .orders-table-wrap'));
-  return { layout, dnd };
+  return { layout };
 })()`;
 
 // Modal do pedido: abertura por clique, foco, fechamento, guarda de arraste, contenção e troca de status.
@@ -389,22 +354,13 @@ const MODAL_PROBE = `(async () => {
   await frame();
   result.closeButton = { closed: !dialog.open, focusRestored: document.activeElement === openButton(paidId) };
 
-  const data = new DataTransfer();
-  card(paidId).dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
-  card(paidId).dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
-  card(paidId).querySelector('.kanban-card-items').click();
-  await frame();
-  result.dragGuard = !dialog.open;
-  await wait(400);
-  card(paidId).querySelector('.kanban-move-select').dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  result.selectGuard = !dialog.open;
-
   card(paidId).querySelector('.kanban-card-items').click();
   await frame();
   const select = document.getElementById('orderModalStatus');
   select.value = 'Concluído';
   select.dispatchEvent(new Event('change', { bubbles: true }));
-  result.saving = Boolean(document.getElementById('orderModalStatus')?.disabled) && /data-status="Confirmado"/.test(document.getElementById('orderModalHeading').innerHTML);
+  result.saving = Boolean(document.getElementById('orderModalStatus')?.disabled) && /data-status="Concluído"/.test(document.getElementById('orderModalHeading').innerHTML)
+    && card(paidId).closest('.kanban-column').dataset.kanbanColumn === 'Concluído';
   for (let attempt = 0; attempt < 50 && document.getElementById('orderModalStatus')?.disabled; attempt++) await wait(50);
   result.statusChange = {
     badge: document.querySelector('#orderModalHeading .status-badge').textContent,
@@ -421,6 +377,74 @@ const MODAL_PROBE = `(async () => {
   return result;
 })()`;
 
+// Arraste com entrada real (Input.dispatchMouseEvent / dispatchTouchEvent): mede card flutuante,
+// espaço reservado, destaque, soltura otimista e guardas (mesma coluna, fora do quadro, Escape).
+const DRAG_HELPERS = `(() => {
+  window.__calls = [];
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => { window.__calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
+  document.getElementById('ordersKanbanViewBtn').click();
+  const card = id => document.querySelector('[data-kanban-card="' + id + '"]');
+  const column = status => document.querySelector('.kanban-column[data-kanban-column="' + status + '"]');
+  const clip = (rect, box) => ({ left: Math.max(rect.left, box.left), right: Math.min(rect.right, box.right), top: Math.max(rect.top, 0), bottom: Math.min(rect.bottom, innerHeight) });
+  window.__drag = {
+    prepare(id, status) {
+      const board = document.querySelector('.kanban-board');
+      // O html usa scroll-behavior: smooth; a preparação precisa de rolagem instantânea.
+      card(id).scrollIntoView({ block: 'center', behavior: 'instant' });
+      board.scrollLeft = Math.max(0, column(status).offsetLeft - board.clientWidth / 2);
+      const box = board.getBoundingClientRect();
+      const source = clip(card(id).querySelector('.kanban-card-items').getBoundingClientRect(), box);
+      const zone = clip(column(status).querySelector('.kanban-dropzone').getBoundingClientRect(), box);
+      const cardBox = card(id).getBoundingClientRect();
+      const start = { x: Math.round(source.left + 12), y: Math.round((source.top + source.bottom) / 2) };
+      return { start, end: { x: Math.round((zone.left + zone.right) / 2), y: Math.round(zone.top + 30) }, offset: { x: cardBox.left + cardBox.width / 2 - start.x, y: cardBox.top + cardBox.height / 2 - start.y } };
+    },
+    point(id) {
+      card(id).scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const rect = card(id).querySelector('.kanban-card-items').getBoundingClientRect();
+      const box = document.querySelector('.kanban-board').getBoundingClientRect();
+      const visible = clip(rect, box);
+      return { x: Math.round(visible.left + 12), y: Math.round((visible.top + visible.bottom) / 2) };
+    },
+    state(id) {
+      const ghost = document.querySelector('.kanban-drag-ghost')?.getBoundingClientRect();
+      const placeholder = document.querySelector('.kanban-drop-placeholder');
+      return {
+        ghost: ghost ? { cx: ghost.left + ghost.width / 2, cy: ghost.top + ghost.height / 2 } : null,
+        placeholder: placeholder?.closest('.kanban-column')?.dataset.kanbanColumn || '',
+        highlighted: [...document.querySelectorAll('.kanban-column.is-drop-target')].map(item => item.dataset.kanbanColumn),
+        source: Boolean(card(id)?.classList.contains('is-drag-source')),
+        column: card(id)?.closest('.kanban-column')?.dataset.kanbanColumn || '',
+        saving: Boolean(card(id)?.classList.contains('is-saving')),
+        counts: Object.fromEntries([...document.querySelectorAll('.kanban-column')].map(item => [item.dataset.kanbanColumn || 'Outros status', Number(item.querySelector('.kanban-count').textContent)])),
+        modalOpen: document.getElementById('orderModal').open,
+        dragging: document.body.classList.contains('kanban-dragging'),
+        pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        calls: window.__calls.filter(call => call.action === 'updateOrderStatus').map(call => [call.orderId, call.status, call.expectedStatus])
+      };
+    },
+    async settle(id) { for (let attempt = 0; attempt < 60 && card(id)?.classList.contains('is-saving'); attempt++) await new Promise(resolve => setTimeout(resolve, 50)); },
+    frames: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  };
+})()`;
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function mouseDrag(page, from, to, { steps = 8, beforeRelease } = {}) {
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+  for (let step = 1; step <= steps; step++) {
+    const x = Math.round(from.x + (to.x - from.x) * step / steps);
+    const y = Math.round(from.y + (to.y - from.y) * step / steps);
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+  }
+  await page.evaluate('window.__drag.frames()');
+  const during = beforeRelease ? await beforeRelease() : null;
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
+  return during;
+}
+
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   if (url.pathname === '/api') {
@@ -431,7 +455,7 @@ const server = http.createServer((request, response) => {
       try { body = JSON.parse(raw || '{}'); } catch (_) {}
       response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       if (body.action === 'updateOrderStatus') {
-        return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.status, previousStatus: body.expectedStatus } })), 120);
+        return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.status, previousStatus: body.expectedStatus } })), 350);
       }
       if (body.action === 'registerCheckoutReturn') return response.end(JSON.stringify({ ok: true, checkout: { state: 'returned_unverified' } }));
       if (body.action === 'verifyCheckoutPayment') {
@@ -614,7 +638,7 @@ const server = http.createServer((request, response) => {
 
         const kanbanPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
         await kanbanPage.evaluate(STABLE_PROBE);
-        const { layout: board, dnd } = await kanbanPage.evaluate(KANBAN_PROBE);
+        const { layout: board } = await kanbanPage.evaluate(KANBAN_PROBE);
         await kanbanPage.evaluate(`document.getElementById('ordersKanbanViewBtn').click(); document.querySelector('.kanban-board').scrollIntoView({ block: 'start' }); new Promise(resolve => setTimeout(resolve, 2600))`);
         await kanbanPage.screenshot(path.join(tempDir, `admin-kanban-${label}.png`));
         await kanbanPage.evaluate(`document.getElementById('ordersListViewBtn').click()`);
@@ -625,7 +649,7 @@ const server = http.createServer((request, response) => {
         assert.equal(board.overflowX, 'auto', `Quadro sem rolagem horizontal contida em ${label}.`);
         assert.deepEqual(board.columns, [['Aguardando pagamento', 1], ['Confirmado', 1], ['Em produção', 0], ['Concluído', 0], ['Cancelado', 0], ['Outros status', 1]], `Distribuição das colunas incorreta em ${label}.`);
         assert.ok(board.minColumnWidth >= 240, `Coluna estreita demais em ${label}: ${board.minColumnWidth}px.`);
-        assert.equal(board.moveTargets, true, `Controle "Mover para" menor que 44px em ${label}.`);
+        assert.equal(board.noMoveSelect, true, `Seletor "Mover para…" ainda presente nos cards em ${label}.`);
         assert.equal(board.cardsWithin, true, `Conteúdo do card saiu do card em ${label}.`);
         assert.equal(board.technicalHidden, true, `Dados técnicos expostos na superfície do card em ${label}.`);
         assert.equal(board.shows1899, false, `Horário serial de 1899 exibido no Kanban em ${label}.`);
@@ -633,21 +657,115 @@ const server = http.createServer((request, response) => {
         assert.equal(board.detailsOverflow, false, `Detalhes abertos no Kanban provocaram overflow em ${label}.`);
         assert.equal(board.detailsWithin, true, `Detalhes abertos saíram do card em ${label}.`);
         assert.equal(board.restoredList, true, `Retorno para Lista falhou em ${label}.`);
-        assert.deepEqual(dnd.same, { accepted: false, highlighted: false }, `Mesma coluna aceitou soltura em ${label}.`);
-        assert.equal(dnd.callsBeforeMove, 0, `Soltura na mesma coluna gerou requisição em ${label}.`);
-        assert.deepEqual(dnd.move, { accepted: true, highlighted: true }, `Coluna de destino não foi destacada em ${label}.`);
-        assert.deepEqual(dnd.whileSaving, { column: 'Confirmado', saving: true, draggable: 'false' }, `Card mudou antes da resposta do servidor em ${label}.`);
-        assert.deepEqual(dnd.duplicate, { accepted: false, highlighted: false }, `Card em salvamento aceitou nova soltura em ${label}.`);
-        assert.equal(dnd.after, 'Em produção', `Card não foi para a coluna de destino em ${label}.`);
-        assert.deepEqual(dnd.skip, { accepted: true, highlighted: true }, `Salto de etapa recusado em ${label}.`);
-        assert.deepEqual(dnd.back, { accepted: true, highlighted: true }, `Retorno a etapa anterior recusado em ${label}.`);
-        assert.deepEqual(dnd.final, ['Aguardando pagamento', 'Concluído'], `Movimentação livre não refletida no quadro em ${label}.`);
-        assert.deepEqual(dnd.calls, [
-          ['PF-20260831-113122-AB3E86', 'Em produção', 'Confirmado'],
-          ['PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001', 'Concluído', 'Aguardando pagamento'],
-          ['PF-20260831-113122-AB3E86', 'Aguardando pagamento', 'Em produção']
-        ], `Requisições de movimentação incorretas em ${label}.`);
-        assert.equal(dnd.leftover, 0, `Destaques de arraste permaneceram em ${label}.`);
+        const dragPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
+        await dragPage.evaluate(STABLE_PROBE);
+        await dragPage.evaluate(DRAG_HELPERS);
+        await dragPage.evaluate('window.__drag.frames()');
+        const paidId = 'PF-20260831-113122-AB3E86';
+        const waitingId = 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001';
+        const state = id => dragPage.evaluate(`window.__drag.state(${JSON.stringify(id)})`);
+
+        // Mouse: Confirmado → Em produção, com o card flutuante seguindo o ponteiro.
+        const route = await dragPage.evaluate(`window.__drag.prepare('${paidId}', 'Em produção')`);
+        const during = await mouseDrag(dragPage, route.start, route.end, {
+          beforeRelease: async () => {
+            const snapshot = await state(paidId);
+            await dragPage.screenshot(path.join(tempDir, `admin-drag-${label}.png`));
+            return snapshot;
+          }
+        });
+        const afterDrop = await state(paidId);
+        assert.ok(during.ghost, `Card flutuante ausente durante o arraste em ${label}.`);
+        assert.ok(Math.abs(during.ghost.cx - (route.end.x + route.offset.x)) <= 3 && Math.abs(during.ghost.cy - (route.end.y + route.offset.y)) <= 3,
+          `Card flutuante desalinhado do ponteiro em ${label}: ${JSON.stringify(during.ghost)} vs ${JSON.stringify(route)}.`);
+        assert.equal(during.placeholder, 'Em produção', `Espaço de inserção ausente na coluna de destino em ${label}.`);
+        assert.deepEqual(during.highlighted, ['Em produção'], `Destaque da coluna de destino incorreto em ${label}.`);
+        assert.equal(during.source, true, `Card de origem não foi marcado durante o arraste em ${label}.`);
+        assert.equal(during.column, 'Confirmado', `Quadro reconstruído durante o arraste em ${label}.`);
+        assert.deepEqual(during.calls, [], `Requisição enviada antes de soltar em ${label}.`);
+        assert.equal(during.pageOverflow, false, `Arraste provocou overflow da página em ${label}.`);
+        assert.equal(afterDrop.column, 'Em produção', `Card não mudou de coluna imediatamente ao soltar em ${label}.`);
+        assert.equal(afterDrop.saving, true, `Indicador de salvamento ausente após soltar em ${label}.`);
+        assert.equal(afterDrop.counts.Confirmado, 0, `Contador de origem não foi atualizado em ${label}.`);
+        assert.equal(afterDrop.counts['Em produção'], 1, `Contador de destino não foi atualizado em ${label}.`);
+        assert.equal(afterDrop.ghost, null, `Card flutuante permaneceu após soltar em ${label}.`);
+        assert.equal(afterDrop.placeholder, '', `Espaço de inserção permaneceu após soltar em ${label}.`);
+        assert.equal(afterDrop.dragging, false, `Estado de arraste permaneceu em ${label}.`);
+        await dragPage.evaluate(`window.__drag.settle('${paidId}')`);
+        const consolidated = await state(paidId);
+        assert.equal(consolidated.column, 'Em produção', `Card não consolidou após o servidor em ${label}.`);
+        assert.equal(consolidated.saving, false, `Salvamento não foi concluído em ${label}.`);
+        assert.equal(consolidated.modalOpen, false, `Soltar o card abriu o modal em ${label}.`);
+        assert.deepEqual(consolidated.calls, [[paidId, 'Em produção', 'Confirmado']], `Requisição da movimentação incorreta em ${label}.`);
+
+        // Soltura na própria coluna, fora do quadro e cancelamento por Escape: nenhuma requisição.
+        await sleep(400);
+        const own = await dragPage.evaluate(`window.__drag.point('${waitingId}')`);
+        const ownDuring = await mouseDrag(dragPage, own, { x: own.x + 4, y: own.y + 40 }, { steps: 4, beforeRelease: () => state(waitingId) });
+        await sleep(400);
+        const outside = await dragPage.evaluate(`window.__drag.point('${waitingId}')`);
+        const outsideDuring = await mouseDrag(dragPage, outside, { x: 6, y: 6 }, { steps: 6, beforeRelease: () => state(waitingId) });
+        await sleep(400);
+        const escape = await dragPage.evaluate(`window.__drag.point('${waitingId}')`);
+        const escapeDuring = await mouseDrag(dragPage, escape, { x: escape.x + 60, y: escape.y + 20 }, {
+          steps: 4,
+          beforeRelease: async () => {
+            const snapshot = await state(waitingId);
+            await dragPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+            return { ...snapshot, afterEscape: (await state(waitingId)).ghost };
+          }
+        });
+        const guarded = await state(waitingId);
+        for (const [name, snapshot] of [['mesma coluna', ownDuring], ['fora do quadro', outsideDuring], ['Escape', escapeDuring]]) {
+          assert.ok(snapshot.ghost, `Arraste (${name}) não foi iniciado em ${label}.`);
+        }
+        assert.equal(ownDuring.placeholder, '', `Mesma coluna exibiu espaço de inserção em ${label}.`);
+        assert.deepEqual(outsideDuring.highlighted, [], `Fora do quadro destacou uma coluna em ${label}.`);
+        assert.equal(escapeDuring.afterEscape, null, `Escape não cancelou o arraste em ${label}.`);
+        assert.equal(guarded.column, 'Aguardando pagamento', `Soltura inválida moveu o card em ${label}.`);
+        assert.deepEqual(guarded.calls, [[paidId, 'Em produção', 'Confirmado']], `Soltura inválida gerou requisição em ${label}.`);
+        assert.equal(guarded.ghost, null, `Card flutuante permaneceu após cancelamento em ${label}.`);
+        assert.equal(guarded.modalOpen, false, `Arraste cancelado abriu o modal em ${label}.`);
+
+        // Clique simples continua abrindo o modal.
+        await sleep(400);
+        const clickPoint = await dragPage.evaluate(`window.__drag.point('${waitingId}')`);
+        await dragPage.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickPoint.x, y: clickPoint.y, button: 'left', buttons: 1, clickCount: 1 });
+        await dragPage.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickPoint.x, y: clickPoint.y, button: 'left', buttons: 0, clickCount: 1 });
+        await dragPage.evaluate('window.__drag.frames()');
+        assert.equal((await state(waitingId)).modalOpen, true, `Clique no card não abriu o modal em ${label}.`);
+        await dragPage.evaluate("document.getElementById('orderModalClose').click()");
+
+        // Toque: deslize rápido não inicia arraste; pressão longa arrasta Aguardando → Confirmado.
+        await dragPage.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+        const swipe = await dragPage.evaluate(`window.__drag.point('${waitingId}')`);
+        await dragPage.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: swipe.x, y: swipe.y }] });
+        for (let step = 1; step <= 4; step++) await dragPage.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: swipe.x, y: swipe.y - step * 25 }] });
+        await dragPage.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        const swiped = await state(waitingId);
+        assert.equal(swiped.ghost, null, `Deslize rápido iniciou arraste em ${label}.`);
+        assert.equal(swiped.column, 'Aguardando pagamento', `Deslize rápido moveu o card em ${label}.`);
+        await sleep(400);
+        const touchRoute = await dragPage.evaluate(`window.__drag.prepare('${waitingId}', 'Confirmado')`);
+        await dragPage.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchRoute.start.x, y: touchRoute.start.y }] });
+        await sleep(320);
+        for (let step = 1; step <= 8; step++) {
+          await dragPage.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: Math.round(touchRoute.start.x + (touchRoute.end.x - touchRoute.start.x) * step / 8), y: Math.round(touchRoute.start.y + (touchRoute.end.y - touchRoute.start.y) * step / 8) }] });
+        }
+        await dragPage.evaluate('window.__drag.frames()');
+        const touchDuring = await state(waitingId);
+        await dragPage.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        const touchAfter = await state(waitingId);
+        await dragPage.evaluate(`window.__drag.settle('${waitingId}')`);
+        const touchFinal = await state(waitingId);
+        await dragPage.evaluate("document.getElementById('ordersListViewBtn').click()");
+        await dragPage.close();
+        assert.ok(touchDuring.ghost, `Pressão longa não iniciou o arraste por toque em ${label}.`);
+        assert.equal(touchDuring.placeholder, 'Confirmado', `Espaço de inserção ausente no arraste por toque em ${label}.`);
+        assert.equal(touchAfter.column, 'Confirmado', `Toque não moveu o card imediatamente em ${label}.`);
+        assert.equal(touchFinal.saving, false, `Salvamento por toque não concluiu em ${label}.`);
+        assert.equal(touchFinal.modalOpen, false, `Arraste por toque abriu o modal em ${label}.`);
+        assert.deepEqual(touchFinal.calls, [[paidId, 'Em produção', 'Confirmado'], [waitingId, 'Confirmado', 'Aguardando pagamento']], `Requisições do quadro incorretas em ${label}.`);
 
         const modalPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
         await modalPage.evaluate(STABLE_PROBE);
@@ -680,8 +798,6 @@ const server = http.createServer((request, response) => {
         assert.deepEqual(modal.escape, { closed: true, focusRestored: true, unlocked: true }, `Escape não fechou ou não restaurou o foco em ${label}.`);
         assert.equal(modal.keyboardOpen, true, `Botão do card não abriu o modal em ${label}.`);
         assert.deepEqual(modal.closeButton, { closed: true, focusRestored: true }, `Botão X não fechou ou não restaurou o foco em ${label}.`);
-        assert.equal(modal.dragGuard, true, `Fim do arraste abriu o modal em ${label}.`);
-        assert.equal(modal.selectGuard, true, `"Mover para…" abriu o modal em ${label}.`);
         assert.equal(modal.saving, true, `Modal não mostrou salvamento antes da resposta em ${label}.`);
         assert.equal(modal.statusChange.badge, 'Concluído', `Status do modal não atualizou em ${label}.`);
         assert.equal(modal.statusChange.stillOpen, true, `Modal fechou após salvar em ${label}.`);
@@ -755,7 +871,9 @@ const server = http.createServer((request, response) => {
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
     console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
     console.log('PASS Kanban com seis colunas, cards contidos, rolagem horizontal restrita ao quadro e total reutilizado nas seis resoluções');
-    console.log('PASS drag-and-drop livre: pula e volta etapas sem diálogos, salvamento antes da consolidação, sem requisição duplicada ou na mesma coluna');
+    console.log('PASS arraste real (mouse e toque): card flutuante alinhado ao ponteiro, espaço de inserção, destaque e mudança imediata de coluna');
+    console.log('PASS movimentação otimista: contadores atualizados, salvamento discreto, consolidação após o servidor; mesma coluna, fora do quadro e Escape sem requisição');
+    console.log('PASS toque: deslize rápido preserva a rolagem; pressão longa arrasta; clique abre o modal e soltar não abre');
     console.log('PASS modal do pedido: clique, teclado, Escape, X, foco restaurado, fundo inerte, sem abrir após arraste e contido nas seis resoluções');
     console.log('PASS modal compacto (390, 768): Gestão logo abaixo do cabeçalho; desktop (1024+) mantém duas colunas; um único seletor de status');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
