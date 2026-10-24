@@ -983,6 +983,9 @@
     .admin-item-list, .admin-item-line, .admin-item-line > span { min-width: 0; }
     .admin-item-line > span { overflow-wrap: anywhere; }
     .admin-item-line > small { flex: 0 0 auto; white-space: nowrap; }
+    .orders-table tfoot td { border-top: 2px solid var(--line); border-bottom: 0; background: #fbf7f3; color: var(--text); font-weight: 850; }
+    .orders-total-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin: 12px 0 0; padding: 12px 16px; border: 1px solid var(--line); border-top-width: 2px; border-radius: 14px; background: #fbf7f3; color: var(--text); font-size: 14px; font-weight: 850; }
+    .orders-total-summary strong { white-space: nowrap; }
 
     .status-badge {
       display: inline-flex;
@@ -3161,6 +3164,15 @@
         return Number.isFinite(Number(order.total)) ? Number(order.total) : Number(order.price || 0);
       }
 
+      // Soma em centavos do valor final (já com taxa de entrega) dos pedidos exibidos, sem somar subtotais de itens.
+      function ordersTotalCents(orders) {
+        return orders.reduce((sum, order) => sum + moneyToCents(orderTotal(order)), 0);
+      }
+
+      function renderOrdersTotalSummary(totalCents) {
+        return `<p class="orders-total-summary" data-orders-total="${totalCents}"><span>Total dos pedidos exibidos:</span><strong>${escapeHtml(brl(totalCents / 100))}</strong></p>`;
+      }
+
       function orderUsesProgressivePricing(order) {
         return orderDisplayItems(order).some(item => item.pricingModel === 'progressive-v1');
       }
@@ -3435,11 +3447,13 @@
         }
         const orders = filterAndSortOrders();
         const hasFilters = Boolean(orderViewState.search || orderViewState.status || orderViewState.deliveryDate);
+        const totalCents = ordersTotalCents(orders);
         $('ordersResultCount').innerHTML = `<strong>${orders.length}</strong> ${orders.length === 1 ? 'pedido encontrado' : 'pedidos encontrados'}`;
         if (!orders.length) {
           container.innerHTML = hasFilters
             ? '<div class="empty-state"><strong>Nenhum pedido corresponde aos filtros.</strong><br>Ajuste a pesquisa, o status ou a data de entrega.</div>'
             : '<div class="empty-state"><strong>Ainda não há pedidos recebidos.</strong><br>Novas encomendas aparecerão aqui assim que forem registradas.</div>';
+          container.innerHTML += renderOrdersTotalSummary(totalCents);
           return;
         }
 
@@ -3473,6 +3487,13 @@
                   </tr>
                 `).join('')}
               </tbody>
+              <tfoot>
+                <tr class="orders-total-row" data-orders-total="${totalCents}">
+                  <td colspan="3">Total dos pedidos exibidos</td>
+                  <td><strong class="order-value">${escapeHtml(brl(totalCents / 100))}</strong></td>
+                  <td></td>
+                </tr>
+              </tfoot>
             </table>
           </div>
           <div class="orders-mobile-list">
@@ -3491,6 +3512,7 @@
                 <div class="order-mobile-actions">${orderStatusControl(order, true)}</div>
               </article>
             `).join('')}
+            ${renderOrdersTotalSummary(totalCents)}
           </div>
         `;
         qsa('.order-details-toggle', container).forEach(button => button.addEventListener('click', () => {

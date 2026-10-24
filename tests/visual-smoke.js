@@ -285,7 +285,28 @@ const server = http.createServer((request, response) => {
          const detailsOverflow = page.scrollWidth > page.clientWidth + 1 || !inPanel(surface);
          closedDetails.forEach(details => { details.open = false; });
          hiddenRows.forEach(row => { row.hidden = true; });
+         const totalCells = [...tableWrap.querySelectorAll('tfoot td')];
+         const totalHeader = tableWrap.querySelectorAll('thead th')[3];
+         const summary = cards.querySelector('.orders-total-summary');
+         const lastCard = [...cards.querySelectorAll('.order-mobile-card')].at(-1);
+         const visible = element => Boolean(element && element.getClientRects().length && getComputedStyle(element).display !== 'none');
+         const totals = tableVisible
+           ? {
+               text: totalCells[1]?.innerText.trim() || '',
+               label: totalCells[0]?.innerText.trim() || '',
+               statusEmpty: totalCells[2]?.innerText.trim() === '',
+               aligned: Boolean(totalHeader && totalCells[1]) && Math.abs(totalCells[1].getBoundingClientRect().left - totalHeader.getBoundingClientRect().left) <= 1,
+               bold: Number(getComputedStyle(totalCells[1]).fontWeight) >= 700,
+               otherHidden: !visible(summary)
+             }
+           : {
+               text: summary?.innerText.trim() || '',
+               within: Boolean(summary) && inPanel(summary),
+               belowList: Boolean(summary && lastCard) && summary.getBoundingClientRect().top >= lastCard.getBoundingClientRect().bottom,
+               otherHidden: !visible(tableWrap)
+             };
          return {
+           totals,
            viewport: { width: innerWidth, height: innerHeight },
            pageOverflow: page.scrollWidth > page.clientWidth + 1,
            surfaceWithin: inPanel(surface),
@@ -326,6 +347,18 @@ const server = http.createServer((request, response) => {
         assert.equal(layout.detailsOverflow, false, `Detalhes expandidos provocaram overflow em ${label}.`);
         assert.equal(layout.shows1899, false, `Horário serial de 1899 exibido em ${label}.`);
         assert.ok(layout.mainRowHeights.every(height => height <= 130), `Linha de pedido alta demais em ${label}: ${layout.mainRowHeights}.`);
+        assert.match(layout.totals.text, /209,85/, `Total dos pedidos exibidos incorreto em ${label}.`);
+        assert.equal(layout.totals.otherHidden, true, `Totalização duplicada entre tabela e cards em ${label}.`);
+        if (viewport.mode === 'table') {
+          assert.equal(layout.totals.label, 'Total dos pedidos exibidos', `Descrição do rodapé ausente em ${label}.`);
+          assert.equal(layout.totals.aligned, true, `Total fora da coluna "Total" em ${label}.`);
+          assert.equal(layout.totals.statusEmpty, true, `Coluna "Status" do rodapé não está vazia em ${label}.`);
+          assert.equal(layout.totals.bold, true, `Total do rodapé sem destaque em ${label}.`);
+        } else {
+          assert.match(layout.totals.text, /^Total dos pedidos exibidos:/, `Resumo de totalização ausente em ${label}.`);
+          assert.equal(layout.totals.within, true, `Resumo de totalização saiu do painel em ${label}.`);
+          assert.equal(layout.totals.belowList, true, `Resumo de totalização não está abaixo dos cards em ${label}.`);
+        }
         for (const status of layout.statusSelects) {
           assert.equal(status.title, status.text.replace(/ \(legado\)$/, ''), `Seletor sem identificação acessível do status em ${label}.`);
           if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
@@ -365,6 +398,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS central operacional sem overflow em viewports reais 390x844, 768x1024, 1024x768, 1280x800, 1440x1000 e 1920x1080');
     console.log('PASS cards responsivos e tabela desktop permanecem dentro do painel, inclusive com detalhes abertos');
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
+    console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {

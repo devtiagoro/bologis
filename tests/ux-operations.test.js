@@ -41,6 +41,7 @@ source = source.replace(
         orderDisplayItems,
         orderTotalQuantity,
         orderTotal,
+        ordersTotalCents,
         renderAdminOrderItems,
         configDomainPayload,
         updateOrderItemQuantity,
@@ -735,6 +736,130 @@ test('resumo de sabores e fatias cobre pedidos atuais e por tamanho', () => {
   assert.equal(api.orderFlavorSummary({ items: [{ flavor: 'A', quantity: 1, pricingModel: 'progressive-v1' }, { flavor: 'B', quantity: 1, pricingModel: 'progressive-v1' }] }), 'A + 1 sabor');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'p', size: 'Pequeno', quantity: 2 }] }), '2 bolos');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'f', size: '1 Fatia', quantity: 2 }] }), '2 fatias');
+});
+
+// Etapa 9.3: totalização dos pedidos exibidos
+const totalOrders = [
+  { ...multiFlavorOrder, id: 'PF-T-1', customerName: 'Ana Entrega', date: '2026-10-25', status: 'Aguardando pagamento' },
+  { ...legacySizeOrder, id: 'PF-T-2', customerName: 'Bruno Histórico', date: '2026-09-06', deliveryDate: '2026-09-06', status: 'Confirmado' },
+  { id: 'PF-T-3', customerName: 'Célia Antiga', date: '2026-10-25', createdAt: '2026-10-01T12:00:00Z', flavor: 'Cenoura', size: 'Grande', price: 179, status: 'Cancelado' },
+  { id: 'PF-T-4', customerName: 'Ana Retirada', date: '2026-10-25', createdAt: '2026-10-02T12:00:00Z', total: 0.1, items: [{ flavor: 'Chocolate', quantity: 1, subtotal: 0.1, pricingModel: 'progressive-v1' }], status: 'Confirmado' }
+];
+const noFilters = { loading: false, error: '', search: '', status: '', deliveryDate: '', sort: 'delivery-asc' };
+
+function renderedTotals(runtime) {
+  const markup = runtime.get('ordersContainer').innerHTML;
+  const foot = markup.match(/<tfoot>([\s\S]*?)<\/tfoot>/)?.[1] || '';
+  const summaries = [...markup.matchAll(/class="orders-total-summary" data-orders-total="(\d+)"><span>Total dos pedidos exibidos:<\/span><strong>([^<]+)<\/strong>/g)];
+  return {
+    markup, foot,
+    table: foot.match(/data-orders-total="(\d+)"/)?.[1],
+    tableText: foot.match(/class="order-value">([^<]+)</)?.[1],
+    cards: summaries.map(match => match[1]),
+    cardsText: summaries.map(match => match[2])
+  };
+}
+
+function renderWith(view, list = totalOrders) {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setOrders(list.map(order => ({ ...order })));
+  api.setOrderView({ ...noFilters, ...view });
+  api.renderLocalOrders();
+  return { runtime, api, totals: renderedTotals(runtime) };
+}
+
+test('total soma todos os pedidos carregados sem filtros, inclusive cancelados', () => {
+  const { totals } = renderWith({});
+  // 82,91 + 49,97 + 179,00 + 0,10
+  assert.equal(totals.table, '31198');
+  assert.match(totals.tableText, /R\$\s?311,98/);
+  assert.deepEqual(totals.cards, ['31198']);
+});
+
+test('total acompanha o filtro de status', () => {
+  assert.equal(renderWith({ status: 'Confirmado' }).totals.table, '5007');
+  assert.equal(renderWith({ status: 'Cancelado' }).totals.table, '17900');
+});
+
+test('total acompanha o filtro de data de recebimento', () => {
+  const { totals } = renderWith({ deliveryDate: '2026-10-25' });
+  assert.equal(totals.table, '26201');
+  assert.deepEqual(totals.cards, ['26201']);
+});
+
+test('total acompanha a pesquisa por cliente', () => {
+  assert.equal(renderWith({ search: 'célia' }).totals.table, '17900');
+  assert.equal(renderWith({ search: 'ana' }).totals.table, '8301');
+});
+
+test('total combina pesquisa, status e data e ignora a ordenação', () => {
+  assert.equal(renderWith({ search: 'ana', status: 'Confirmado', deliveryDate: '2026-10-25' }).totals.table, '10');
+  const sorts = ['delivery-asc', 'delivery-desc', 'created-asc', 'created-desc'].map(sort => renderWith({ sort }).totals.table);
+  assert.deepEqual([...new Set(sorts)], ['31198']);
+});
+
+test('total é recalculado após alteração de status e limpeza de filtros', async () => {
+  const runtime = createRuntime(async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ ok: true, order: { id: payload.orderId, status: payload.status } }) };
+  });
+  const api = runtime.window.__uxTest;
+  api.setOrders(totalOrders.map(order => ({ ...order })));
+  api.setOrderView({ ...noFilters, status: 'Confirmado' });
+  api.renderLocalOrders();
+  assert.equal(renderedTotals(runtime).table, '5007');
+  await api.changeOrderStatus('PF-T-3', 'Confirmado');
+  assert.equal(renderedTotals(runtime).table, '22907');
+  api.setOrderView({ search: '', status: '', deliveryDate: '' });
+  api.renderLocalOrders();
+  assert.equal(renderedTotals(runtime).table, '31198');
+});
+
+test('lista vazia ou sem resultados exibe total R$ 0,00', () => {
+  for (const { totals } of [renderWith({}, []), renderWith({ search: 'não existe' })]) {
+    assert.equal(totals.table, undefined);
+    assert.deepEqual(totals.cards, ['0']);
+    assert.match(totals.cardsText[0], /R\$\s?0,00/);
+  }
+});
+
+test('pedidos antigos usam price e pedidos com entrega usam o total com taxa', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.equal(api.ordersTotalCents([{ id: 'antigo', price: 179 }]), 17900);
+  assert.equal(api.ordersTotalCents([{ id: 'sem valor' }]), 0);
+  assert.equal(api.ordersTotalCents([multiFlavorOrder]), 8291);
+  assert.notEqual(api.ordersTotalCents([multiFlavorOrder]), 7491, 'O total não deve usar o subtotal sem taxa.');
+  assert.equal(api.ordersTotalCents([{ ...multiFlavorOrder, total: undefined, price: 82.91 }]), 8291);
+});
+
+test('soma monetária é feita em centavos inteiros', () => {
+  const api = createRuntime().window.__uxTest;
+  const cents = api.ordersTotalCents([{ total: 0.1 }, { total: 0.2 }, { total: 19.97 }, { total: 15 }]);
+  assert.equal(cents, 3527);
+  assert.ok(Number.isInteger(cents));
+  assert.equal(api.ordersTotalCents(Array.from({ length: 10 }, () => ({ total: 0.1 }))), 100);
+});
+
+test('rodapé desktop mantém cinco colunas com total na quarta e status vazio', () => {
+  const { totals } = renderWith({});
+  assert.match(totals.markup, /<\/tbody>\s*<tfoot>/);
+  const cells = [...totals.foot.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)];
+  assert.equal(cells.length, 3);
+  assert.equal(cells[0][1].trim(), 'colspan="3"');
+  assert.equal(cells[0][2], 'Total dos pedidos exibidos');
+  assert.match(cells[1][2], /<strong class="order-value">R\$\s?311,98<\/strong>/);
+  assert.equal(cells[2][2], '');
+  assert.equal(cells.reduce((sum, cell) => sum + Number(cell[1].match(/colspan="(\d+)"/)?.[1] || 1), 0), 5);
+  assert.equal((totals.markup.match(/<th>/g) || []).length, 5);
+});
+
+test('resumo mobile fica abaixo dos cards e usa o mesmo total filtrado', () => {
+  const { totals } = renderWith({ status: 'Confirmado' });
+  const list = totals.markup.slice(totals.markup.indexOf('<div class="orders-mobile-list">'));
+  assert.ok(list.lastIndexOf('<article class="order-mobile-card"') < list.indexOf('class="orders-total-summary"'));
+  assert.deepEqual(totals.cards, [totals.table]);
+  assert.match(totals.cardsText[0], /R\$\s?50,07/);
 });
 
 (async () => {
