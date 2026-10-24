@@ -11,7 +11,8 @@ const PF = {
   },
   headers: {
     Configuracoes: ['Chave', 'Valor'],
-    Sabores: ['ID', 'Nome', 'Ativo', 'Ordem'],
+    // Etapa 12: colunas aditivas do catálogo visual; as quatro primeiras mantêm a ordem histórica.
+    Sabores: ['ID', 'Nome', 'Ativo', 'Ordem', 'Subtítulo', 'Descrição', 'Badge', 'Imagem ID', 'Texto alternativo'],
     Tamanhos: ['ID', 'Nome', 'Descrição', 'Preço', 'Ativo', 'Ordem'],
     Pagamentos: ['ID', 'Nome', 'Tipo', 'Descrição', 'Link/Payload', 'Ativo', 'Ordem'],
     Disponibilidade: ['Dia', 'Código', 'Aberto', 'Ordem'],
@@ -102,6 +103,42 @@ const PF_PRICING = {
   defaultFirstSliceCents: 1997,
   defaultAdditionalSliceCents: 1500,
   model: 'progressive-v1'
+};
+
+const PF_FLAVOR = {
+  // Posições na aba Sabores (0 = coluna A).
+  columns: { id: 0, name: 1, active: 2, order: 3, subtitle: 4, description: 5, badge: 6, imageId: 7, imageAlt: 8 },
+  width: 9,
+  limits: { name: 120, subtitle: 120, description: 600, badge: 30, imageAlt: 160 },
+  maxOrder: 9999,
+  imageIdPattern: /^[A-Za-z0-9_-]{10,200}$/
+};
+
+const PF_FLAVOR_IMAGE = {
+  // Limite após a otimização feita no navegador; o servidor confere de novo os bytes decodificados.
+  maxBytes: 2 * 1024 * 1024,
+  minBytes: 64,
+  // Base64 cresce 4/3; a margem cobre os demais campos do sabor. Demais ações mantêm PF_ORDER.maxRequestBytes.
+  maxRequestBytes: Math.ceil(2 * 1024 * 1024 * 4 / 3) + 64 * 1024,
+  minDimension: 64,
+  maxDimension: 6000,
+  maxFileNameLength: 160,
+  // Somente formatos raster com assinatura verificável; SVG e qualquer outro tipo são recusados.
+  formats: {
+    'image/jpeg': { extensions: ['jpg', 'jpeg'], extension: 'jpg' },
+    'image/png': { extensions: ['png'], extension: 'png' },
+    'image/webp': { extensions: ['webp'], extension: 'webp' }
+  },
+  folderProperty: 'FLAVOR_IMAGE_FOLDER_ID',
+  folderName: 'BOLOGIS — Fotos do catálogo',
+  registrySheet: '_ImagensSabores',
+  registryHeaders: ['Arquivo ID', 'Sabor ID', 'Estado', 'MIME', 'Bytes', 'Largura', 'Altura', 'Público', 'Criado em', 'Atualizado em'],
+  states: { active: 'active', retired: 'retired', discarded: 'discarded', trashed: 'trashed' },
+  // Imagens substituídas só vão para a lixeira depois deste prazo e sem referência em Sabores ou nos backups.
+  retiredGraceDays: 7,
+  cachePrefix: 'flavor-image:',
+  cacheChunkChars: 90000,
+  cacheSeconds: 6 * 60 * 60
 };
 
 const PF_CHECKOUT = {
@@ -528,6 +565,15 @@ function doGet(e) {
     }
 
 
+    // Alternativa à exibição direta pelo Drive: entrega a foto de um sabor ativo pelo próprio Apps Script.
+    if (action === 'getFlavorImage') {
+      return json_({
+        ok: true,
+        image: getFlavorImage_(e.parameter.flavorId, false)
+      });
+    }
+
+
     if (action === 'getOrders' || action === 'getAdminConfig') {
       throw apiError_('AUTH_REQUIRED', 'Use uma requisicao POST autenticada para esta operacao.');
     }
@@ -552,9 +598,12 @@ function doPost(e) {
 
   try {
 
-    validatePostSize_(e, PF_ORDER.maxRequestBytes);
+    // Só o envio de foto do catálogo pode passar do limite geral; as demais ações continuam restritas.
+    validatePostSize_(e, PF_FLAVOR_IMAGE.maxRequestBytes);
 
     const body = parseBody_(e);
+
+    if (String(body.action || '') !== 'saveFlavor') validatePostSize_(e, PF_ORDER.maxRequestBytes);
 
     // Notificação da InfinitePay: o corpo não traz "action"; a rota vem da URL assinada do checkout.
     if (e && e.parameter && e.parameter.infinitepay_webhook === '1') {
@@ -634,6 +683,25 @@ function doPost(e) {
       requireAdmin_(body);
       const saved = saveConfigDomain_(body.domain, body.data || {}, body.revision);
       return json_({ ok: true, config: saved.config, revision: saved.revision, backupId: saved.backupId });
+    }
+
+    // Etapa 12: cadastro/edição de um sabor com envio, troca ou remoção da foto em uma única revisão.
+    if (action === 'saveFlavor') {
+      requireAdmin_(body);
+      const savedFlavor = saveFlavor_(body.flavor || {}, body.image || {}, body.revision);
+      return json_({
+        ok: true,
+        config: savedFlavor.config,
+        revision: savedFlavor.revision,
+        backupId: savedFlavor.backupId,
+        flavorId: savedFlavor.flavorId,
+        imagePublic: savedFlavor.imagePublic
+      });
+    }
+
+    if (action === 'getFlavorImage') {
+      requireAdmin_(body);
+      return json_({ ok: true, image: getFlavorImage_(body.flavorId, true) });
     }
 
     if (action === 'getConfigBackups') {
@@ -742,12 +810,7 @@ function getConfig_() {
   const flavorItems = dataRows_(ss.getSheetByName(PF.sheets.flavors))
     .filter(row => row[1])
     .sort((a, b) => Number(a[3] || 9999) - Number(b[3] || 9999))
-    .map(row => ({
-      id: readableSheetText_(row[0]),
-      name: readableSheetText_(row[1]),
-      active: isActive_(row[2]),
-      order: Number(row[3] || 0)
-    }));
+    .map(flavorItemFromRow_);
   const flavors = flavorItems.filter(item => item.active).map(item => item.name);
 
 
@@ -854,6 +917,16 @@ function getPublicConfig_() {
     heroSubtitle: config.heroSubtitle,
     description: config.description,
     flavors: config.flavors,
+    // Cards do formulário: somente sabores ativos e somente o ID do arquivo (a URL é montada pelo navegador).
+    flavorCatalog: (config.flavorItems || []).filter(item => item.active).map(item => ({
+      id: item.id,
+      name: item.name,
+      subtitle: item.subtitle,
+      description: item.description,
+      badge: item.badge,
+      imageId: item.imageId,
+      imageAlt: item.imageAlt
+    })),
     payments: config.payments.filter(item => item.active !== false).map(item => ({
       id: item.id,
       name: item.name,
@@ -1141,6 +1214,12 @@ function saveConfigDomain_(domain, data, expectedRevision) {
   if (!PF_CONFIG.domains.concat(['all']).includes(normalizedDomain)) {
     throw apiError_('INVALID_CONFIG_DOMAIN', 'O domínio de configuração informado não é válido.');
   }
+  return runConfigTransaction_(normalizedDomain, expectedRevision, ss => applyConfigDomain_(ss, normalizedDomain, data || {}));
+}
+
+// Lock, revisão otimista, snapshot e backup comuns a todo salvamento de configuração.
+// onRollback desfaz efeitos fora da planilha (ex.: arquivo recém-criado no Drive) quando a gravação falha.
+function runConfigTransaction_(backupDomain, expectedRevision, apply, onRollback) {
   if (expectedRevision === undefined || expectedRevision === null || expectedRevision === '') {
     throw apiError_('CONFIG_REVISION_REQUIRED', 'A revisão da configuração é obrigatória.');
   }
@@ -1157,16 +1236,19 @@ function saveConfigDomain_(domain, data, expectedRevision) {
 
     const ss = getSpreadsheet_();
     const snapshot = captureConfigSnapshot_(ss);
-    const backupId = persistConfigBackup_(ss, snapshot, currentRevision, normalizedDomain);
+    const backupId = persistConfigBackup_(ss, snapshot, currentRevision, backupDomain);
     try {
-      applyConfigDomain_(ss, normalizedDomain, data || {});
+      const applied = apply(ss);
       SpreadsheetApp.flush();
       const nextRevision = nextConfigRevision_(currentRevision);
       setConfigRevision_(nextRevision);
       markConfigBackupState_(ss, backupId, 'committed');
       const persisted = getConfig_();
-      return { config: persisted, revision: nextRevision, backupId };
+      return { config: persisted, revision: nextRevision, backupId, applied };
     } catch (saveError) {
+      if (onRollback) {
+        try { onRollback(ss); } catch (_) { /* a compensação externa nunca mascara o erro original */ }
+      }
       try {
         restoreConfigSnapshot_(ss, snapshot);
         SpreadsheetApp.flush();
@@ -1416,13 +1498,455 @@ function writeFlavorConfig_(ss, data) {
     const id = clean_(item.id) || String(old && old[0] || '') || slug_(item.name) || 'sabor-' + (index + 1);
     if (used[id]) throw apiError_('DUPLICATE_CONFIG_ID', 'Existem sabores com o mesmo identificador.');
     used[id] = true;
-    return [sheetSafeText_(id), sheetSafeText_(clean_(item.name)), item.active !== false, Number(item.order || index + 1)];
+    // Campos ausentes (central anterior à Etapa 12) mantêm o valor gravado; a foto nunca vem do cliente.
+    return flavorRowFromInput_(item, old, id, Number(item.order || index + 1), old ? readableSheetText_(old[PF_FLAVOR.columns.imageId]) : '');
   });
   existing.forEach(row => {
     const id = readableSheetText_(row[0]);
-    if (id && !used[id]) rows.push([sheetSafeText_(id), sheetSafeText_(readableSheetText_(row[1])), false, Number(row[3] || rows.length + 1)]);
+    if (id && !used[id]) {
+      const preserved = normalizedFlavorRow_(row);
+      preserved[PF_FLAVOR.columns.active] = false;
+      preserved[PF_FLAVOR.columns.order] = Number(row[3] || rows.length + 1);
+      rows.push(preserved);
+    }
   });
+  ensureFlavorColumns_(sheet);
   replaceRows_(sheet, rows);
+}
+
+// ---- Etapa 12: catálogo visual ----
+
+function flavorItemFromRow_(row) {
+  const c = PF_FLAVOR.columns;
+  const imageId = readableSheetText_(row[c.imageId]).trim();
+  return {
+    id: readableSheetText_(row[c.id]),
+    name: readableSheetText_(row[c.name]),
+    active: isActive_(row[c.active]),
+    order: Number(row[c.order] || 0),
+    subtitle: readableSheetText_(row[c.subtitle]),
+    description: readableSheetText_(row[c.description]),
+    badge: readableSheetText_(row[c.badge]),
+    imageId: PF_FLAVOR.imageIdPattern.test(imageId) ? imageId : '',
+    imageAlt: readableSheetText_(row[c.imageAlt])
+  };
+}
+
+// Linha completa (9 colunas) preservando o conteúdo atual; linhas antigas de 4 colunas recebem células vazias.
+function normalizedFlavorRow_(row) {
+  const values = [];
+  for (let index = 0; index < PF_FLAVOR.width; index += 1) {
+    const value = row && row[index] !== undefined ? row[index] : '';
+    values.push(index === PF_FLAVOR.columns.active || index === PF_FLAVOR.columns.order ? value : sheetSafeText_(readableSheetText_(value)));
+  }
+  values[PF_FLAVOR.columns.active] = isActive_(values[PF_FLAVOR.columns.active]);
+  return values;
+}
+
+function flavorText_(item, key, old, label) {
+  const column = PF_FLAVOR.columns[key];
+  if (!item || item[key] === undefined || item[key] === null) return old ? readableSheetText_(old[column]) : '';
+  if (typeof item[key] !== 'string') throw apiError_('INVALID_FLAVOR_FIELD', 'O campo ' + label + ' do sabor não é válido.');
+  const text = clean_(item[key]).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  const unchanged = old && text === readableSheetText_(old[column]);
+  if (!unchanged && text.length > PF_FLAVOR.limits[key]) {
+    throw apiError_('INVALID_FLAVOR_FIELD', 'O campo ' + label + ' aceita até ' + PF_FLAVOR.limits[key] + ' caracteres.');
+  }
+  return text;
+}
+
+function flavorRowFromInput_(item, old, id, order, imageId) {
+  const name = flavorText_(item, 'name', old, 'nome');
+  if (!name) throw apiError_('FLAVOR_NAME_REQUIRED', 'Informe o nome do sabor.');
+  const row = new Array(PF_FLAVOR.width);
+  row[PF_FLAVOR.columns.id] = sheetSafeText_(id);
+  row[PF_FLAVOR.columns.name] = sheetSafeText_(name);
+  row[PF_FLAVOR.columns.active] = item.active !== false;
+  row[PF_FLAVOR.columns.order] = order;
+  row[PF_FLAVOR.columns.subtitle] = sheetSafeText_(flavorText_(item, 'subtitle', old, 'subtítulo'));
+  row[PF_FLAVOR.columns.description] = sheetSafeText_(flavorText_(item, 'description', old, 'descrição'));
+  row[PF_FLAVOR.columns.badge] = sheetSafeText_(flavorText_(item, 'badge', old, 'badge'));
+  row[PF_FLAVOR.columns.imageId] = sheetSafeText_(imageId || '');
+  row[PF_FLAVOR.columns.imageAlt] = sheetSafeText_(flavorText_(item, 'imageAlt', old, 'texto alternativo'));
+  return row;
+}
+
+// Cabeçalhos aditivos: só escreve as colunas novas, sem reordenar nem apagar as existentes.
+function ensureFlavorColumns_(sheet) {
+  const headers = PF.headers.Sabores;
+  const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0].map(value => String(value || ''));
+  if (headers.every((header, index) => current[index] === header)) return;
+  if (headers.slice(0, 4).some((header, index) => current[index] && current[index] !== header)) {
+    throw apiError_('FLAVOR_SHEET_LAYOUT', 'A aba Sabores não possui a estrutura esperada. Execute setupProject() na planilha antes de salvar.');
+  }
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+}
+
+function flavorOrderValue_(value, fallback) {
+  const order = Number(value);
+  if (!Number.isInteger(order) || order < 1 || order > PF_FLAVOR.maxOrder) return fallback;
+  return order;
+}
+
+function uniqueFlavorId_(name, existingRows) {
+  const taken = {};
+  existingRows.forEach(row => { taken[readableSheetText_(row[0])] = true; });
+  const base = slug_(name).slice(0, 60) || 'sabor';
+  if (!taken[base]) return base;
+  for (let suffix = 2; suffix < 1000; suffix += 1) {
+    if (!taken[base + '-' + suffix]) return base + '-' + suffix;
+  }
+  return base + '-' + Utilities.getUuid().slice(0, 8);
+}
+
+/**
+ * Cadastra ou edita um sabor. image.action: 'keep' (padrão), 'replace' (com fileName, mimeType e data em base64)
+ * ou 'remove'. O ID do arquivo é sempre definido pelo servidor; o cliente nunca informa IDs ou URLs de imagens.
+ */
+function saveFlavor_(flavorInput, imageInput, expectedRevision) {
+  if (!flavorInput || typeof flavorInput !== 'object' || Array.isArray(flavorInput)) {
+    throw apiError_('INVALID_FLAVOR', 'Os dados do sabor não são válidos.');
+  }
+  const image = imageInput && typeof imageInput === 'object' && !Array.isArray(imageInput) ? imageInput : {};
+  const imageAction = String(image.action || 'keep');
+  if (!['keep', 'replace', 'remove'].includes(imageAction)) {
+    throw apiError_('INVALID_IMAGE_ACTION', 'A operação de imagem informada não é válida.');
+  }
+  // Validação completa da foto antes do lock: um arquivo inválido não chega a criar backup nem revisão.
+  const upload = imageAction === 'replace' ? decodeFlavorImageUpload_(image) : null;
+  const requestedId = clean_(flavorInput.id);
+  const created = { fileId: '', previousImageId: '', isPublic: null };
+
+  const result = runConfigTransaction_('flavor', expectedRevision, ss => {
+    const sheet = ss.getSheetByName(PF.sheets.flavors);
+    ensureFlavorColumns_(sheet);
+    const rows = dataRows_(sheet).filter(row => clean_(row[0]) || clean_(row[1])).map(normalizedFlavorRow_);
+    const index = requestedId ? rows.findIndex(row => readableSheetText_(row[0]) === requestedId) : -1;
+    if (requestedId && index < 0) throw apiError_('FLAVOR_NOT_FOUND', 'O sabor não foi encontrado. Recarregue a central antes de salvar.');
+    const old = index >= 0 ? rows[index] : null;
+    const id = old ? readableSheetText_(old[0]) : uniqueFlavorId_(flavorInput.name, rows);
+
+    const name = flavorText_(flavorInput, 'name', old, 'nome');
+    const duplicate = rows.some((row, rowIndex) => rowIndex !== index && readableSheetText_(row[1]).trim().toLowerCase() === name.toLowerCase());
+    if (duplicate) throw apiError_('DUPLICATE_FLAVOR_NAME', 'Já existe um sabor com este nome.');
+
+    created.previousImageId = old ? readableSheetText_(old[PF_FLAVOR.columns.imageId]).trim() : '';
+    let imageId = imageAction === 'remove' ? '' : created.previousImageId;
+    const fallbackOrder = old ? Number(old[PF_FLAVOR.columns.order] || index + 1) : rows.length + 1;
+    // Campos validados antes de tocar no Drive: um texto inválido não gera arquivo.
+    const row = flavorRowFromInput_(flavorInput, old, id, flavorOrderValue_(flavorInput.order, fallbackOrder), imageId);
+    if (upload) {
+      const stored = storeFlavorImage_(ss, id, upload);
+      created.fileId = stored.fileId;
+      created.isPublic = stored.isPublic;
+      imageId = stored.fileId;
+      row[PF_FLAVOR.columns.imageId] = sheetSafeText_(imageId);
+    }
+    if (old) rows[index] = row;
+    else rows.push(row);
+    replaceRows_(sheet, rows);
+    return { flavorId: id, imageId };
+  }, ss => {
+    // Nenhuma linha passou a apontar para o arquivo novo: ele vai para a lixeira imediatamente.
+    if (created.fileId) discardFlavorImage_(ss, created.fileId);
+  });
+
+  const imageChanged = imageAction !== 'keep' && created.previousImageId && created.previousImageId !== result.applied.imageId;
+  if (imageChanged) {
+    // A foto anterior não é apagada: backups ainda podem referenciá-la. A limpeza é feita por cleanupRetiredFlavorImages().
+    try { markFlavorImageState_(getSpreadsheet_(), created.previousImageId, PF_FLAVOR_IMAGE.states.retired); } catch (_) {}
+  }
+  return {
+    config: result.config,
+    revision: result.revision,
+    backupId: result.backupId,
+    flavorId: result.applied.flavorId,
+    imagePublic: created.isPublic
+  };
+}
+
+function base64Bytes_(text) {
+  const value = String(text || '');
+  if (!value || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    throw apiError_('INVALID_IMAGE_DATA', 'O conteúdo da imagem não é válido.');
+  }
+  try {
+    return Utilities.base64Decode(value);
+  } catch (_) {
+    throw apiError_('INVALID_IMAGE_DATA', 'O conteúdo da imagem não é válido.');
+  }
+}
+
+function decodeFlavorImageUpload_(image) {
+  const declaredMime = String(image.mimeType || '').trim().toLowerCase();
+  const fileName = String(image.fileName || '').trim();
+  const format = PF_FLAVOR_IMAGE.formats[declaredMime];
+  if (!format) throw apiError_('INVALID_IMAGE_TYPE', 'Envie uma imagem JPEG, PNG ou WebP.');
+  const extensionMatch = fileName.match(/\.([a-z0-9]{1,8})$/i);
+  const extension = extensionMatch ? extensionMatch[1].toLowerCase() : '';
+  if (!fileName || fileName.length > PF_FLAVOR_IMAGE.maxFileNameLength || !format.extensions.includes(extension)) {
+    throw apiError_('INVALID_IMAGE_TYPE', 'A extensão do arquivo não corresponde a uma imagem JPEG, PNG ou WebP.');
+  }
+  const data = String(image.data || '');
+  if (data.length > Math.ceil(PF_FLAVOR_IMAGE.maxBytes * 4 / 3) + 4) {
+    throw apiError_('IMAGE_TOO_LARGE', 'A imagem excede o limite de 2 MB.');
+  }
+  const bytes = base64Bytes_(data);
+  if (bytes.length > PF_FLAVOR_IMAGE.maxBytes) throw apiError_('IMAGE_TOO_LARGE', 'A imagem excede o limite de 2 MB.');
+  const inspected = inspectImageBytes_(bytes);
+  // O tipo informado pelo navegador precisa coincidir com a assinatura real do arquivo.
+  if (inspected.mimeType !== declaredMime) {
+    throw apiError_('IMAGE_TYPE_MISMATCH', 'O conteúdo do arquivo não corresponde ao tipo de imagem informado.');
+  }
+  return { bytes, mimeType: inspected.mimeType, extension: format.extension, width: inspected.width, height: inspected.height };
+}
+
+function unsignedByte_(bytes, index) {
+  return index < bytes.length ? bytes[index] & 0xFF : -1;
+}
+
+function bytesMatch_(bytes, offset, expected) {
+  return expected.every((value, index) => unsignedByte_(bytes, offset + index) === value);
+}
+
+function asciiAt_(bytes, offset, length) {
+  let text = '';
+  for (let index = 0; index < length; index += 1) text += String.fromCharCode(Math.max(0, unsignedByte_(bytes, offset + index)));
+  return text;
+}
+
+function uint16BE_(bytes, offset) { return (unsignedByte_(bytes, offset) << 8) | unsignedByte_(bytes, offset + 1); }
+function uint16LE_(bytes, offset) { return unsignedByte_(bytes, offset) | (unsignedByte_(bytes, offset + 1) << 8); }
+function uint24LE_(bytes, offset) { return uint16LE_(bytes, offset) | (unsignedByte_(bytes, offset + 2) << 16); }
+function uint32BE_(bytes, offset) { return uint16BE_(bytes, offset) * 65536 + uint16BE_(bytes, offset + 2); }
+function uint32LE_(bytes, offset) { return uint16LE_(bytes, offset) + uint16LE_(bytes, offset + 2) * 65536; }
+
+/** Identifica JPEG, PNG ou WebP pela estrutura binária (assinatura, cabeçalho de dimensões e término). */
+function inspectImageBytes_(bytes) {
+  const invalid = () => apiError_('INVALID_IMAGE_CONTENT', 'O arquivo enviado não é uma imagem JPEG, PNG ou WebP válida.');
+  if (!bytes || bytes.length < PF_FLAVOR_IMAGE.minBytes) throw invalid();
+  let info = null;
+
+  if (bytesMatch_(bytes, 0, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
+    if (asciiAt_(bytes, 12, 4) !== 'IHDR' || asciiAt_(bytes, bytes.length - 8, 4) !== 'IEND') throw invalid();
+    info = { mimeType: 'image/png', width: uint32BE_(bytes, 16), height: uint32BE_(bytes, 20) };
+  } else if (bytesMatch_(bytes, 0, [0xFF, 0xD8, 0xFF])) {
+    let endFound = false;
+    for (let index = bytes.length - 2; index >= Math.max(2, bytes.length - 1024); index -= 1) {
+      if (unsignedByte_(bytes, index) === 0xFF && unsignedByte_(bytes, index + 1) === 0xD9) { endFound = true; break; }
+    }
+    if (!endFound) throw invalid();
+    let offset = 2;
+    while (offset + 9 < bytes.length && !info) {
+      if (unsignedByte_(bytes, offset) !== 0xFF) throw invalid();
+      const marker = unsignedByte_(bytes, offset + 1);
+      if (marker === 0xFF) { offset += 1; continue; }
+      if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { offset += 2; continue; }
+      if (marker === 0xD9 || marker === 0xDA) break;
+      const length = uint16BE_(bytes, offset + 2);
+      if (length < 2) throw invalid();
+      const isFrame = marker >= 0xC0 && marker <= 0xCF && ![0xC4, 0xC8, 0xCC].includes(marker);
+      if (isFrame) info = { mimeType: 'image/jpeg', height: uint16BE_(bytes, offset + 5), width: uint16BE_(bytes, offset + 7) };
+      offset += 2 + length;
+    }
+    if (!info) throw invalid();
+  } else if (asciiAt_(bytes, 0, 4) === 'RIFF' && asciiAt_(bytes, 8, 4) === 'WEBP') {
+    const riffSize = uint32LE_(bytes, 4);
+    if (riffSize + 8 !== bytes.length && riffSize + 9 !== bytes.length) throw invalid();
+    const chunk = asciiAt_(bytes, 12, 4);
+    if (chunk === 'VP8 ' && bytesMatch_(bytes, 23, [0x9D, 0x01, 0x2A])) {
+      info = { mimeType: 'image/webp', width: uint16LE_(bytes, 26) & 0x3FFF, height: uint16LE_(bytes, 28) & 0x3FFF };
+    } else if (chunk === 'VP8L' && unsignedByte_(bytes, 20) === 0x2F) {
+      const b1 = unsignedByte_(bytes, 22);
+      const b2 = unsignedByte_(bytes, 23);
+      const b3 = unsignedByte_(bytes, 24);
+      info = {
+        mimeType: 'image/webp',
+        width: 1 + (((b1 & 0x3F) << 8) | unsignedByte_(bytes, 21)),
+        height: 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+      };
+    } else if (chunk === 'VP8X') {
+      info = { mimeType: 'image/webp', width: 1 + uint24LE_(bytes, 24), height: 1 + uint24LE_(bytes, 27) };
+    } else {
+      throw invalid();
+    }
+  } else {
+    throw invalid();
+  }
+
+  if (!(info.width >= PF_FLAVOR_IMAGE.minDimension && info.height >= PF_FLAVOR_IMAGE.minDimension
+    && info.width <= PF_FLAVOR_IMAGE.maxDimension && info.height <= PF_FLAVOR_IMAGE.maxDimension)) {
+    throw apiError_('INVALID_IMAGE_DIMENSIONS', 'A imagem deve ter entre ' + PF_FLAVOR_IMAGE.minDimension + ' e ' + PF_FLAVOR_IMAGE.maxDimension + ' pixels por lado.');
+  }
+  return info;
+}
+
+/** Execute manualmente no editor para autorizar o Drive e criar (ou reutilizar) a pasta das fotos. */
+function setupFlavorImageStorage() {
+  const folder = getFlavorImageFolder_();
+  ensureFlavorImageRegistry_(getSpreadsheet_());
+  console.log('Pasta das fotos do catálogo pronta: ' + folder.getId());
+}
+
+// Pasta única do BOLOGIS: o ID fica nas Script Properties e a pasta só é recriada se tiver sido excluída.
+// A pasta em si não é compartilhada; somente cada foto recebe acesso de leitura por link.
+function getFlavorImageFolder_() {
+  const properties = PropertiesService.getScriptProperties();
+  const folderId = properties.getProperty(PF_FLAVOR_IMAGE.folderProperty);
+  if (folderId) {
+    try {
+      const existing = DriveApp.getFolderById(folderId);
+      if (!existing.isTrashed()) return existing;
+    } catch (_) { /* pasta removida ou inacessível: cria outra */ }
+  }
+  const folder = DriveApp.createFolder(PF_FLAVOR_IMAGE.folderName);
+  folder.setDescription('Fotos públicas do catálogo de sabores do BOLOGIS. Não guarde outros arquivos nesta pasta.');
+  properties.setProperty(PF_FLAVOR_IMAGE.folderProperty, folder.getId());
+  return folder;
+}
+
+function ensureFlavorImageRegistry_(ss) {
+  let sheet = ss.getSheetByName(PF_FLAVOR_IMAGE.registrySheet);
+  if (!sheet) {
+    sheet = ss.insertSheet(PF_FLAVOR_IMAGE.registrySheet);
+    sheet.getRange(1, 1, 1, PF_FLAVOR_IMAGE.registryHeaders.length).setValues([PF_FLAVOR_IMAGE.registryHeaders]);
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+function storeFlavorImage_(ss, flavorId, upload) {
+  const folder = getFlavorImageFolder_();
+  const stamp = Utilities.formatDate(new Date(), PF_ORDER.timezone, 'yyyyMMdd-HHmmss');
+  // Nome interno seguro: nunca reaproveita o nome enviado pelo navegador.
+  const fileName = 'sabor-' + (slug_(flavorId).slice(0, 60) || 'item') + '-' + stamp + '-' + Utilities.getUuid().slice(0, 8) + '.' + upload.extension;
+  const file = folder.createFile(Utilities.newBlob(upload.bytes, upload.mimeType, fileName));
+  file.setDescription('BOLOGIS — foto do catálogo (sabor ' + flavorId + ').');
+  let isPublic = true;
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (_) {
+    // Política da conta pode bloquear links públicos; a foto continua disponível pelo getFlavorImage.
+    isPublic = false;
+  }
+  const now = new Date();
+  ensureFlavorImageRegistry_(ss).appendRow([
+    file.getId(), sheetSafeText_(flavorId), PF_FLAVOR_IMAGE.states.active, upload.mimeType,
+    upload.bytes.length, upload.width, upload.height, isPublic, now, now
+  ]);
+  return { fileId: file.getId(), isPublic };
+}
+
+function findFlavorImageRecord_(ss, fileId) {
+  const sheet = ss.getSheetByName(PF_FLAVOR_IMAGE.registrySheet);
+  if (!sheet || !fileId) return null;
+  const rows = dataRows_(sheet);
+  for (let index = 0; index < rows.length; index += 1) {
+    if (String(rows[index][0]) === String(fileId)) {
+      return { rowNumber: index + 2, fileId: String(rows[index][0]), flavorId: readableSheetText_(rows[index][1]), state: String(rows[index][2] || ''), mimeType: String(rows[index][3] || ''), updatedAt: rows[index][9] };
+    }
+  }
+  return null;
+}
+
+function markFlavorImageState_(ss, fileId, state) {
+  const record = findFlavorImageRecord_(ss, fileId);
+  if (!record) return false;
+  const sheet = ss.getSheetByName(PF_FLAVOR_IMAGE.registrySheet);
+  sheet.getRange(record.rowNumber, 3).setValue(state);
+  sheet.getRange(record.rowNumber, 10).setValue(new Date());
+  return true;
+}
+
+function discardFlavorImage_(ss, fileId) {
+  try { DriveApp.getFileById(fileId).setTrashed(true); } catch (_) {}
+  try { markFlavorImageState_(ss, fileId, PF_FLAVOR_IMAGE.states.discarded); } catch (_) {}
+}
+
+/**
+ * Entrega a foto de um sabor como base64 (fallback quando o navegador não consegue exibi-la pelo Drive).
+ * Recebe o ID do sabor, nunca um ID de arquivo: só fotos registradas pelo próprio BOLOGIS são lidas.
+ */
+function getFlavorImage_(flavorId, includeInactive) {
+  const id = clean_(flavorId);
+  if (!id || id.length > 120) throw apiError_('FLAVOR_NOT_FOUND', 'Sabor não encontrado.');
+  const ss = getSpreadsheet_();
+  const item = dataRows_(ss.getSheetByName(PF.sheets.flavors)).map(flavorItemFromRow_)
+    .find(flavor => flavor.id === id && (includeInactive || flavor.active));
+  if (!item || !item.imageId) throw apiError_('FLAVOR_IMAGE_NOT_FOUND', 'Este sabor não possui foto.');
+  const record = findFlavorImageRecord_(ss, item.imageId);
+  if (!record || ![PF_FLAVOR_IMAGE.states.active, PF_FLAVOR_IMAGE.states.retired].includes(record.state)) {
+    throw apiError_('FLAVOR_IMAGE_NOT_FOUND', 'Este sabor não possui foto.');
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = PF_FLAVOR_IMAGE.cachePrefix + item.imageId;
+  const cachedMeta = cache.get(cacheKey);
+  if (cachedMeta) {
+    const meta = JSON.parse(cachedMeta);
+    const keys = [];
+    for (let index = 0; index < meta.parts; index += 1) keys.push(cacheKey + ':' + index);
+    const parts = cache.getAll(keys);
+    if (keys.every(key => parts[key])) {
+      return { flavorId: item.id, mimeType: meta.mimeType, data: keys.map(key => parts[key]).join('') };
+    }
+  }
+
+  const bytes = DriveApp.getFileById(item.imageId).getBlob().getBytes();
+  if (bytes.length > PF_FLAVOR_IMAGE.maxBytes) throw apiError_('FLAVOR_IMAGE_NOT_FOUND', 'Este sabor não possui foto.');
+  const inspected = inspectImageBytes_(bytes);
+  const data = Utilities.base64Encode(bytes);
+  try {
+    const entries = {};
+    let parts = 0;
+    for (let offset = 0; offset < data.length; offset += PF_FLAVOR_IMAGE.cacheChunkChars) {
+      entries[cacheKey + ':' + parts] = data.slice(offset, offset + PF_FLAVOR_IMAGE.cacheChunkChars);
+      parts += 1;
+    }
+    cache.putAll(entries, PF_FLAVOR_IMAGE.cacheSeconds);
+    cache.put(cacheKey, JSON.stringify({ mimeType: inspected.mimeType, parts }), PF_FLAVOR_IMAGE.cacheSeconds);
+  } catch (_) { /* cache é apenas otimização */ }
+  return { flavorId: item.id, mimeType: inspected.mimeType, data };
+}
+
+/**
+ * Manutenção manual (editor): envia à lixeira do Drive as fotos substituídas há mais de retiredGraceDays dias
+ * que não aparecem na aba Sabores nem nos snapshots de _ConfigBackups. A lixeira permite recuperação por 30 dias.
+ */
+function cleanupRetiredFlavorImages() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = getSpreadsheet_();
+    const registry = ss.getSheetByName(PF_FLAVOR_IMAGE.registrySheet);
+    if (!registry) return { trashed: 0, kept: 0 };
+    const referenced = {};
+    dataRows_(ss.getSheetByName(PF.sheets.flavors)).forEach(row => {
+      const imageId = readableSheetText_(row[PF_FLAVOR.columns.imageId]).trim();
+      if (imageId) referenced[imageId] = true;
+    });
+    const backups = ss.getSheetByName(PF_CONFIG.backupSheet);
+    const backupText = backups ? dataRows_(backups).map(row => String(row[4] || '')).join('') : '';
+    const limit = Date.now() - PF_FLAVOR_IMAGE.retiredGraceDays * 24 * 60 * 60 * 1000;
+    let trashed = 0;
+    let kept = 0;
+    dataRows_(registry).forEach((row, index) => {
+      const fileId = String(row[0] || '');
+      if (String(row[2]) !== PF_FLAVOR_IMAGE.states.retired || !fileId) return;
+      const updatedAt = row[9] instanceof Date ? row[9].getTime() : Date.parse(String(row[9] || ''));
+      if (referenced[fileId] || backupText.indexOf(fileId) >= 0 || !(updatedAt < limit)) { kept += 1; return; }
+      try {
+        DriveApp.getFileById(fileId).setTrashed(true);
+        registry.getRange(index + 2, 3).setValue(PF_FLAVOR_IMAGE.states.trashed);
+        registry.getRange(index + 2, 10).setValue(new Date());
+        trashed += 1;
+      } catch (_) { kept += 1; }
+    });
+    console.log('Fotos enviadas à lixeira: ' + trashed + '; mantidas: ' + kept + '.');
+    return { trashed, kept };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function writeSizeConfig_(ss, data) {

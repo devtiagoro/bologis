@@ -15,6 +15,19 @@ source = source.replace(
         renderStatusOptions,
         renderLocalOrders,
         renderFlavorEditor,
+        renderFlavorOptions,
+        publicFlavorCatalog,
+        selectFlavor,
+        openFlavorImageModal,
+        closeFlavorImageModal,
+        chooseFlavorFromModal,
+        flavorImageModalIndex() { return flavorImageModalState.index; },
+        openFlavorEditModal,
+        submitFlavorEdit,
+        removeFlavorEditImage,
+        flavorEditImage() { return { ...flavorEditState.image }; },
+        detectImageType,
+        fetchFlavorImageFallback,
         renderPricingEditor,
         renderPaymentEditor,
         renderOrderSuccess,
@@ -637,7 +650,8 @@ test('catálogo administra somente sabores, sem tamanhos, preços ou links antig
   assert.match(catalog, /Catálogo de sabores/);
   assert.match(catalog, /id="flavorEditor"/);
   assert.match(catalog, /id="addFlavorBtn"/);
-  assert.match(catalog, /id="saveCatalogBtn"/);
+  // Etapa 12: cada sabor é salvo pelo modal de cadastro/edição.
+  assert.match(html, /<dialog id="flavorEditModal"/);
   assert.doesNotMatch(catalog, /Tamanhos históricos|sizeEditor|addSizeBtn|size-price|Link de checkout|crédito\/débito/);
   assert.doesNotMatch(html, /size-pix-link|size-card-link|id="sizeEditor"/);
 });
@@ -2369,6 +2383,225 @@ test('arquivamento: estilos de hover, foco e toque', () => {
   assert.match(html, /\.kanban-archive-btn:hover \{ border-color: var\(--line\); background: var\(--surface-2\); color: var\(--accent-strong\); \}/);
   assert.match(html, /@media not all and \(hover: hover\) and \(pointer: fine\) \{\s*\.kanban-archive-btn \{ top: 4px; right: 4px; width: 44px; height: 44px; \}/);
   assert.match(html, /<select id="orderArchiveFilter" class="control">\s*<option value="active" selected>Ativos<\/option>\s*<option value="archived">Arquivados<\/option>\s*<option value="all">Todos<\/option>/);
+});
+
+// ---- Etapa 12: catálogo visual ----
+
+const visualCatalog = {
+  flavors: ['Chocolate', 'Ninho', 'Cenoura'],
+  flavorCatalog: [
+    { id: 'chocolate', name: 'Chocolate', subtitle: 'Massa de cacau', description: 'Brigadeiro belga e granulado.', badge: 'Mais pedido', imageId: 'driveFileId_Chocolate123', imageAlt: 'Fatia de chocolate' },
+    { id: 'ninho', name: 'Ninho', subtitle: '', description: '', badge: '', imageId: '', imageAlt: '' },
+    { id: 'cenoura', name: 'Cenoura', subtitle: '<img src=x onerror=alert(1)>', description: '"><script>alert(1)</script>', badge: '<b>novo</b>', imageId: 'javascript:alert(1)', imageAlt: '' }
+  ],
+  sizes: [], payments: [], progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 }
+};
+
+test('formulário mostra um card por sabor com foto do Drive, lazy loading e proporção reservada', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(visualCatalog);
+  api.renderFlavorOptions();
+  const grid = runtime.get('flavorGrid').innerHTML;
+  assert.equal((grid.match(/class="flavor-card[ "]/g) || []).length, 3);
+  assert.equal((grid.match(/type="radio" name="flavorChoice"/g) || []).length, 3);
+  assert.match(grid, /src="https:\/\/drive\.google\.com\/thumbnail\?id=driveFileId_Chocolate123&amp;sz=w640"/);
+  assert.match(grid, /width="640" height="480" loading="eager"/);
+  assert.match(grid, /<span class="flavor-badge">Mais pedido<\/span>/);
+  assert.match(grid, /Brigadeiro belga e granulado\./);
+  assert.match(grid, /aria-label="Ampliar foto de Chocolate"/);
+  assert.match(grid, /aria-label="Ver detalhes de Ninho"/, 'Sabor sem foto continua com detalhes acessíveis.');
+});
+
+test('sabores sem foto ou com ID inválido usam o placeholder da marca e nunca somem', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(visualCatalog);
+  api.renderFlavorOptions();
+  const grid = runtime.get('flavorGrid').innerHTML;
+  assert.equal((grid.match(/class="flavor-photo is-placeholder"/g) || []).length, 2);
+  assert.match(grid, /Primeira Fornada<\/small>/);
+  assert.doesNotMatch(grid, /javascript:alert/);
+  assert.doesNotMatch(grid, /<script>|<img src=x|<b>novo<\/b>/, 'Textos do catálogo são escapados.');
+  // Backend anterior à Etapa 12 (só nomes): todos os sabores aparecem como cards.
+  api.setConfig({ flavors: ['Antigo 1', 'Antigo 2'], sizes: [], payments: [] });
+  api.renderFlavorOptions();
+  assert.equal((runtime.get('flavorGrid').innerHTML.match(/class="flavor-card[ "]/g) || []).length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.publicFlavorCatalog().map(item => item.name))), ['Antigo 1', 'Antigo 2']);
+});
+
+test('lazy loading vale para os cards fora da primeira dobra', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  const flavorCatalog = Array.from({ length: 6 }, (_, index) => ({ id: `f${index}`, name: `Sabor ${index}`, imageId: `driveFileId_Sabor_${index}00` }));
+  api.setConfig({ flavors: flavorCatalog.map(item => item.name), flavorCatalog, sizes: [], payments: [] });
+  api.renderFlavorOptions();
+  const grid = runtime.get('flavorGrid').innerHTML;
+  assert.equal((grid.match(/loading="eager"/g) || []).length, 4);
+  assert.equal((grid.match(/loading="lazy"/g) || []).length, 2);
+  assert.equal((grid.match(/decoding="async"/g) || []).length, 6);
+});
+
+test('seleção por card alimenta o mesmo campo do pedido e permite vários sabores com preço progressivo', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(visualCatalog);
+  api.renderFlavorOptions();
+  api.selectFlavor('Chocolate');
+  assert.equal(runtime.get('flavorSelect').value, 'Chocolate');
+  api.setBuilderQuantity(3);
+  api.addSelectedOrderItem();
+  api.selectFlavor('Ninho');
+  api.addSelectedOrderItem();
+  api.selectFlavor('Sabor inexistente');
+  assert.equal(runtime.get('flavorSelect').value, '', 'Nome fora do catálogo não é aceito.');
+  const items = api.getOrderItems();
+  assert.deepEqual(JSON.parse(JSON.stringify(items.map(item => [item.flavor, item.quantity]))), [['Chocolate', 3], ['Ninho', 1]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(items.map(item => api.itemDetails(item).subtotal))), [49.97, 19.97]);
+});
+
+test('ampliar a foto não seleciona o sabor; o modal mostra foto grande, nome e descrição completa', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig(visualCatalog);
+  api.renderFlavorOptions();
+  assert.equal(api.openFlavorImageModal(0), true);
+  assert.equal(runtime.get('flavorSelect').value, '', 'Ampliar é independente da seleção.');
+  assert.equal(runtime.get('flavorImageModalTitle').textContent, 'Chocolate');
+  assert.equal(runtime.get('flavorImageModalDescription').textContent, 'Brigadeiro belga e granulado.');
+  assert.equal(runtime.get('flavorImageModalBadge').textContent, 'Mais pedido');
+  assert.match(runtime.get('flavorImageModalPhoto').innerHTML, /sz=w1600/);
+  assert.match(runtime.get('flavorImageModalPhoto').innerHTML, /alt="Fatia de chocolate"/);
+  assert.ok(runtime.window.__uxTest.bodyHas('modal-open'));
+  api.closeFlavorImageModal();
+  assert.equal(api.flavorImageModalIndex(), -1);
+  assert.equal(runtime.window.__uxTest.bodyHas('modal-open'), false);
+  api.openFlavorImageModal(1);
+  assert.equal(runtime.get('flavorImageModalPhoto').className, 'flavor-photo is-placeholder');
+  api.chooseFlavorFromModal();
+  assert.equal(runtime.get('flavorSelect').value, 'Ninho', '"Escolher este sabor" seleciona explicitamente.');
+  assert.equal(api.flavorImageModalIndex(), -1);
+});
+
+test('fallback de imagem consulta o Apps Script pelo ID do sabor e aceita só dados de imagem', async () => {
+  const calls = [];
+  const runtime = createRuntime(async url => {
+    calls.push(String(url));
+    return { ok: true, json: async () => ({ ok: true, image: { flavorId: 'chocolate', mimeType: 'image/webp', data: 'UklGRg==' } }) };
+  });
+  const api = runtime.window.__uxTest;
+  assert.equal(await api.fetchFlavorImageFallback('chocolate', 'driveFileId_Chocolate123', false), 'data:image/webp;base64,UklGRg==');
+  await api.fetchFlavorImageFallback('chocolate', 'driveFileId_Chocolate123', false);
+  assert.equal(calls.length, 1, 'Resultado reaproveitado para a mesma foto.');
+  assert.match(calls[0], /action=getFlavorImage/);
+  assert.match(calls[0], /flavorId=chocolate/);
+  assert.doesNotMatch(calls[0], /driveFileId/, 'O navegador nunca pede um arquivo pelo ID do Drive.');
+  const unsafe = createRuntime(async () => ({ ok: true, json: async () => ({ ok: true, image: { mimeType: 'text/html', data: 'PHNjcmlwdD4=' } }) })).window.__uxTest;
+  assert.equal(await unsafe.fetchFlavorImageFallback('x', 'driveFileId_Qualquer00', false), '');
+  const failing = createRuntime(async () => ({ ok: true, json: async () => ({ ok: false, code: 'FLAVOR_IMAGE_NOT_FOUND' }) })).window.__uxTest;
+  assert.equal(await failing.fetchFlavorImageFallback('x', 'driveFileId_Qualquer00', false), '', 'Sem fallback, o card usa o placeholder.');
+});
+
+test('central lista miniatura, nome, badge e status e abre o modal de edição', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({
+    flavorItems: [
+      { id: 'chocolate', name: 'Chocolate', active: true, order: 1, badge: 'Novo', imageId: 'driveFileId_Chocolate123', subtitle: 'Cacau', description: 'Desc', imageAlt: 'Alt' },
+      { id: 'antigo', name: 'Sabor antigo', active: false, order: 2 }
+    ],
+    flavors: ['Chocolate'], sizes: [], payments: []
+  });
+  api.renderFlavorEditor();
+  const list = runtime.get('flavorEditor').innerHTML;
+  assert.match(list, /thumbnail\?id=driveFileId_Chocolate123&amp;sz=w160/);
+  assert.match(list, /flavor-admin-badge">Novo</);
+  assert.match(list, /● Ativo/);
+  assert.match(list, /○ Inativo/);
+  assert.match(list, /Sem foto/);
+  assert.match(list, /Reativar/);
+  assert.equal(api.openFlavorEditModal(0), true);
+  assert.equal(runtime.get('flavorEditModalTitle').textContent, 'Editar sabor');
+  assert.deepEqual(['flavorEditName', 'flavorEditSubtitle', 'flavorEditDescription', 'flavorEditBadge', 'flavorEditAlt', 'flavorEditOrder'].map(id => runtime.get(id).value), ['Chocolate', 'Cacau', 'Desc', 'Novo', 'Alt', '1']);
+  assert.equal(runtime.get('flavorEditActive').checked, true);
+  assert.equal(runtime.get('flavorEditFileLabel').textContent, 'Substituir imagem');
+  api.openFlavorEditModal(-1);
+  assert.equal(runtime.get('flavorEditModalTitle').textContent, 'Adicionar sabor');
+  assert.equal(runtime.get('flavorEditOrder').value, '3');
+  assert.equal(runtime.get('flavorEditFileLabel').textContent, 'Selecionar imagem');
+  assert.match(html, /id="flavorEditFile"[^>]*type="file" accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.doesNotMatch(html, /id="flavorEdit(Url|ImageUrl)"/, 'Administrador não informa URL de imagem.');
+});
+
+test('salvar sabor envia saveFlavor autenticado sem ID de arquivo nem URL e remove a foto quando pedido', async () => {
+  const payloads = [];
+  const runtime = createRuntime(async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    payloads.push(payload);
+    return { ok: true, json: async () => ({ ok: true, revision: '8', config: { revision: '8', flavors: ['Chocolate Belga'], flavorItems: [{ id: 'chocolate', name: 'Chocolate Belga', active: true, order: 1 }], sizes: [], payments: [] } }) };
+  });
+  const api = runtime.window.__uxTest;
+  api.setConfig({ revision: '7', flavorItems: [{ id: 'chocolate', name: 'Chocolate', active: true, order: 1, imageId: 'driveFileId_Chocolate123' }], flavors: ['Chocolate'], sizes: [], payments: [] });
+  api.openFlavorEditModal(0);
+  runtime.get('flavorEditName').value = 'Chocolate Belga';
+  runtime.get('flavorEditBadge').value = 'Novo';
+  api.removeFlavorEditImage();
+  assert.equal(api.flavorEditImage().action, 'remove');
+  await api.submitFlavorEdit({ preventDefault() {} });
+  assert.equal(payloads.length, 1);
+  const [payload] = payloads;
+  assert.equal(payload.action, 'saveFlavor');
+  assert.equal(payload.revision, '7');
+  assert.ok('adminToken' in payload, 'Token da sessão anexado pela rota administrativa.');
+  assert.deepEqual(payload.image, { action: 'remove' });
+  assert.deepEqual(Object.keys(payload.flavor).sort(), ['active', 'badge', 'description', 'id', 'imageAlt', 'name', 'order', 'subtitle']);
+  assert.equal(payload.flavor.name, 'Chocolate Belga');
+  assert.equal(payload.flavor.badge, 'Novo');
+  assert.equal(api.getConfig().revision, '8');
+  assert.match(runtime.get('catalogSaveMessage').textContent, /Sabor salvo/);
+});
+
+test('modal recusa nome vazio ou duplicado sem chamar o servidor', async () => {
+  let calls = 0;
+  const runtime = createRuntime(async () => { calls += 1; return { ok: true, json: async () => ({ ok: true }) }; });
+  const api = runtime.window.__uxTest;
+  api.setConfig({ revision: '1', flavorItems: [{ id: 'a', name: 'Chocolate', active: true }, { id: 'b', name: 'Ninho', active: true }], flavors: ['Chocolate', 'Ninho'], sizes: [], payments: [] });
+  api.openFlavorEditModal(1);
+  runtime.get('flavorEditName').value = '  ';
+  await api.submitFlavorEdit({ preventDefault() {} });
+  assert.match(runtime.get('flavorEditMessage').textContent, /Informe o nome/);
+  runtime.get('flavorEditName').value = 'chocolate';
+  await api.submitFlavorEdit({ preventDefault() {} });
+  assert.match(runtime.get('flavorEditMessage').textContent, /Já existe/);
+  assert.equal(calls, 0);
+});
+
+test('conflito de revisão no modal preserva os campos e explica como continuar', async () => {
+  const runtime = createRuntime(async () => ({ ok: true, json: async () => ({ ok: false, code: 'CONFIG_CONFLICT', currentRevision: '9', message: 'conflito' }) }));
+  const api = runtime.window.__uxTest;
+  api.setConfig({ revision: '1', flavorItems: [{ id: 'a', name: 'Chocolate', active: true }], flavors: ['Chocolate'], sizes: [], payments: [] });
+  api.openFlavorEditModal(0);
+  runtime.get('flavorEditDescription').value = 'Texto em edição';
+  await api.submitFlavorEdit({ preventDefault() {} });
+  assert.match(runtime.get('flavorEditMessage').textContent, /Conflito de revisão/);
+  assert.equal(runtime.get('flavorEditDescription').value, 'Texto em edição');
+  assert.equal(api.getConfig().revision, '1');
+});
+
+test('assinatura do arquivo é conferida no navegador antes da otimização', () => {
+  const api = createRuntime().window.__uxTest;
+  assert.equal(api.detectImageType([0xFF, 0xD8, 0xFF, 0xE0]), 'image/jpeg');
+  assert.equal(api.detectImageType([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), 'image/png');
+  assert.equal(api.detectImageType([...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WEBP')]), 'image/webp');
+  assert.equal(api.detectImageType([...Buffer.from('<svg xmlns=')]), '');
+  assert.equal(api.detectImageType([...Buffer.from('MZ\x90\x00')]), '');
+});
+
+test('CSP libera somente fotos do Drive e blobs locais, sem abrir scripts ou conexões', () => {
+  const csp = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
+  assert.match(csp, /img-src 'self' data: blob: https:\/\/drive\.google\.com https:\/\/\*\.googleusercontent\.com;/);
+  assert.match(csp, /script-src 'self' 'unsafe-inline';/);
+  assert.match(csp, /connect-src https:\/\/script\.google\.com https:\/\/script\.googleusercontent\.com;/);
 });
 
 (async () => {

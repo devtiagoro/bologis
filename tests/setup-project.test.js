@@ -237,7 +237,11 @@ test('dados historicos, configuracoes e CheckoutCobrancas sao preservados', () =
   assert.equal(config.businessWhatsapp, '(34) 99999-0000');
   assert.equal(config.firstSlicePrice, 21.5, 'Preço configurado não é substituído pelo padrão.');
   assert.equal(config.deliveryEnabled, false, 'Padrão ausente é apenas acrescentado.');
-  assert.deepEqual(snapshot(runtime.sheets.get('Sabores').rows), [['ID', 'Nome', 'Ativo', 'Ordem'], ['choconinho', 'Choconinho', true, 1]]);
+  // Etapa 12: cabeçalhos do catálogo visual são acrescentados à direita; o sabor histórico fica intacto.
+  assert.deepEqual(snapshot(runtime.sheets.get('Sabores').rows), [
+    ['ID', 'Nome', 'Ativo', 'Ordem', 'Subtítulo', 'Descrição', 'Badge', 'Imagem ID', 'Texto alternativo'],
+    ['choconinho', 'Choconinho', true, 1]
+  ]);
   assert.equal(runtime.state.formats['CheckoutCobrancas:6'], undefined);
 });
 

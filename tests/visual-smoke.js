@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const root = path.resolve(__dirname, '..');
 const chromeCandidates = [
@@ -13,12 +14,44 @@ const chromeCandidates = [
 const chrome = chromeCandidates.find(candidate => fs.existsSync(candidate));
 if (!chrome) throw new Error('Google Chrome não encontrado para o teste visual local.');
 
+// Etapa 12: PNG real (decodificável pelo Chrome) para simular as fotos do catálogo.
+function crc32(buffer) {
+  let crc = ~0;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return (~crc) >>> 0;
+}
+function pngChunk(type, data) {
+  const length = Buffer.alloc(4); length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+function solidPng(width, height, [r, g, b]) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: width }, (_, x) => [r, g, (b + x) % 256]).flat())]);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), pngChunk('IHDR', header), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+const driveImages = { fotoDrivePublica_Chocolate: solidPng(640, 480, [92, 52, 34]) };
+const fallbackImages = { ninho: solidPng(640, 480, [240, 214, 196]) };
+
 const publicConfig = {
   brandName: 'Primeira Fornada',
   heroTitle: 'Primeira Fornada 🍰',
   heroSubtitle: 'Bolos artesanais por encomenda.',
   description: 'Escolha o sabor e o tamanho para reservar seu bolo.',
-  flavors: ['Chocolate', 'Ninho com morango'],
+  flavors: ['Chocolate', 'Ninho com morango', 'Cenoura', 'Red Velvet'],
+  // Chocolate: foto pelo Drive. Ninho: Drive recusa e o Apps Script serve. Cenoura: sem foto. Red Velvet: tudo falha.
+  flavorCatalog: [
+    { id: 'chocolate', name: 'Chocolate', subtitle: 'Massa de cacau 70%', description: 'Massa úmida de cacau, recheio de brigadeiro belga e cobertura de ganache. Uma descrição propositalmente longa para validar o corte em duas linhas no card e o texto completo no modal ampliado.', badge: 'Mais pedido', imageId: 'fotoDrivePublica_Chocolate', imageAlt: 'Fatia de bolo de chocolate com ganache' },
+    { id: 'ninho', name: 'Ninho com morango', subtitle: 'Creme de leite Ninho', description: 'Massa branca, creme de Ninho e morangos frescos.', badge: 'Novo', imageId: 'fotoBloqueadaNoDrive_Ninho', imageAlt: 'Fatia de bolo de Ninho com morangos' },
+    { id: 'cenoura', name: 'Cenoura', subtitle: '', description: 'Cobertura de chocolate.', badge: '', imageId: '', imageAlt: '' },
+    { id: 'red-velvet', name: 'Red Velvet', subtitle: 'Cream cheese', description: '', badge: '', imageId: 'fotoIndisponivel_RedVelvet', imageAlt: '' }
+  ],
   sizes: [
     { id: 'p', name: 'Pequeno', description: 'Serve aproximadamente 8 pessoas', price: 89 },
     { id: 'm', name: 'Médio', description: 'Serve aproximadamente 15 pessoas', price: 129 }
@@ -107,12 +140,28 @@ async function launchDevTools() {
     socket.send(JSON.stringify({ id, method, params, sessionId }));
   });
   return {
-    async openPage(url, viewport) {
+    async openPage(url, viewport, options = {}) {
       const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
       const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
       const pageSend = (method, params) => send(method, params, sessionId);
       await pageSend('Page.enable');
       await pageSend('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false });
+      // Etapa 12: as fotos "do Drive" são respondidas localmente; nenhuma requisição sai para a internet.
+      if (options.driveImages) {
+        await pageSend('Fetch.enable', { patterns: [{ urlPattern: 'https://drive.google.com/*' }, { urlPattern: 'https://*.googleusercontent.com/*' }] });
+        listeners.add(message => {
+          if (message.sessionId !== sessionId || message.method !== 'Fetch.requestPaused') return;
+          const { requestId, request } = message.params;
+          const id = new URL(request.url).searchParams.get('id') || '';
+          const image = options.driveImages[id];
+          if (image) {
+            pageSend('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: image.toString('base64') }).catch(() => {});
+          } else {
+            // Simula o Drive recusando a exibição direta (403/limite): o navegador recorre ao Apps Script.
+            pageSend('Fetch.fulfillRequest', { requestId, responseCode: 403, responseHeaders: [{ name: 'Content-Type', value: 'text/html' }], body: Buffer.from('<html>Forbidden</html>').toString('base64') }).catch(() => {});
+          }
+        });
+      }
       const loaded = new Promise(resolve => {
         const listener = message => {
           if (message.sessionId === sessionId && message.method === 'Page.loadEventFired') { listeners.delete(listener); resolve(); }
@@ -181,7 +230,7 @@ const PUBLIC_FORM_PROBE = `(async () => {
     await wait(100);
   }
   const ready = !document.getElementById('deliveryChoice').classList.contains('hidden');
-  document.getElementById('flavorSelect').value = document.getElementById('flavorSelect').options[1]?.value || '';
+  document.querySelector('#flavorGrid .flavor-card-body')?.click();
   const minus = document.getElementById('itemQuantityDecrease');
   const plus = document.getElementById('itemQuantityIncrease');
   const visor = document.getElementById('itemQuantity');
@@ -235,6 +284,196 @@ const PUBLIC_FORM_PROBE = `(async () => {
   document.getElementById('fulfillmentDelivery').click();
   await frame();
   return snapshot;
+})()`;
+
+// Etapa 12: grade de cards (foto do Drive, fallback do Apps Script e placeholder), seleção e foto ampliada.
+const CATALOG_PROBE = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  for (let attempt = 0; attempt < 60 && !document.querySelectorAll('#flavorGrid .flavor-card').length; attempt++) await wait(100);
+  const grid = document.getElementById('flavorGrid');
+  const cards = [...grid.querySelectorAll('.flavor-card')];
+  const settled = () => [...grid.querySelectorAll('img')].every(img => img.closest('.flavor-photo').classList.contains('is-placeholder') || (img.complete && img.naturalWidth > 0 && img.dataset.fallback !== 'pending'));
+  for (let attempt = 0; attempt < 80 && !settled(); attempt++) await wait(100);
+  await document.fonts.ready;
+  await frame();
+  const page = document.documentElement;
+  const formCard = document.querySelector('.order-card').getBoundingClientRect();
+  const within = (element, box) => { const rect = element.getBoundingClientRect(); return rect.left >= box.left - 1 && rect.right <= box.right + 1; };
+  const photoState = card => {
+    const frameEl = card.querySelector('.flavor-photo');
+    const img = frameEl.querySelector('img');
+    if (frameEl.classList.contains('is-placeholder')) return getComputedStyle(frameEl.querySelector('.flavor-placeholder')).display !== 'none' ? 'placeholder' : 'hidden-placeholder';
+    if (!img || !img.naturalWidth) return 'broken';
+    return img.src.startsWith('data:image/png;base64,') ? 'fallback' : img.src.startsWith('https://drive.google.com/thumbnail') ? 'drive' : 'other';
+  };
+  const lefts = [...new Set(cards.map(card => Math.round(card.getBoundingClientRect().left)))];
+  const result = {
+    count: cards.length,
+    columns: lefts.length,
+    states: cards.map(photoState),
+    ratios: cards.every(card => { const rect = card.querySelector('.flavor-photo').getBoundingClientRect(); return Math.abs(rect.height - rect.width * 0.75) <= 1.5; }),
+    minPhotoWidth: Math.round(Math.min(...cards.map(card => card.querySelector('.flavor-photo').getBoundingClientRect().width))),
+    gridWithin: within(grid, formCard),
+    textWithin: cards.every(card => { const box = card.getBoundingClientRect(); return [...card.querySelectorAll('strong, .flavor-subtitle, .flavor-summary, .flavor-badge')].every(element => within(element, box)); }),
+    summaryClamped: (() => { const summary = cards[0].querySelector('.flavor-summary'); return summary.scrollHeight > summary.clientHeight + 1 && summary.getBoundingClientRect().height <= parseFloat(getComputedStyle(summary).lineHeight) * 2 + 1; })(),
+    zoomTargets: cards.every(card => { const rect = card.querySelector('.flavor-zoom').getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44; }),
+    gridHeight: Math.round(grid.getBoundingClientRect().height),
+    lazyBelowFold: [...grid.querySelectorAll('img')].every((img, index) => img.loading === (index < 4 ? 'eager' : 'lazy')),
+    sizedImages: [...grid.querySelectorAll('img')].every(img => img.getAttribute('width') && img.getAttribute('height')),
+    pageOverflow: page.scrollWidth > page.clientWidth + 1
+  };
+
+  // Ampliar não seleciona; Escape fecha e devolve o foco ao botão.
+  const zoom = cards[0].querySelector('.flavor-zoom');
+  zoom.click();
+  const dialog = document.getElementById('flavorImageModal');
+  const modalImage = () => dialog.querySelector('img');
+  for (let attempt = 0; attempt < 40 && !(modalImage()?.complete && modalImage()?.naturalWidth); attempt++) await wait(100);
+  await frame();
+  const modalRect = dialog.getBoundingClientRect();
+  result.modal = {
+    open: dialog.open && dialog.matches(':modal'),
+    selectionUntouched: document.getElementById('flavorSelect').value === '' && !cards.some(card => card.classList.contains('is-selected')),
+    focus: document.activeElement?.id,
+    title: document.getElementById('flavorImageModalTitle').textContent,
+    fullDescription: document.getElementById('flavorImageModalDescription').textContent.includes('texto completo no modal ampliado'),
+    imageLoaded: Boolean(modalImage()?.naturalWidth) && /sz=w1600/.test(modalImage()?.src || ''),
+    alt: modalImage()?.alt,
+    within: modalRect.left >= 0 && modalRect.top >= 0 && modalRect.right <= innerWidth && modalRect.bottom <= innerHeight,
+    closeTarget: (() => { const rect = document.getElementById('flavorImageModalClose').getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44; })(),
+    pageOverflow: page.scrollWidth > page.clientWidth + 1
+  };
+  document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await frame();
+  result.modal.closedByEscape = !dialog.open;
+  result.modal.focusRestored = document.activeElement === zoom;
+
+  // Clique no card seleciona; outro clique troca a seleção (um destaque por vez).
+  cards[1].querySelector('.flavor-card-body').click();
+  await frame();
+  const selected = () => cards.map(card => card.classList.contains('is-selected'));
+  result.selection = {
+    afterFirst: selected(),
+    value: document.getElementById('flavorSelect').value,
+    radioChecked: cards[1].querySelector('.flavor-radio').checked,
+    highlighted: getComputedStyle(cards[1]).boxShadow !== 'none'
+  };
+  document.getElementById('addOrderItemBtn').click();
+  cards[2].querySelector('.flavor-card-body').click();
+  document.getElementById('itemQuantityIncrease').click();
+  document.getElementById('addOrderItemBtn').click();
+  await frame();
+  result.selection.afterSecond = selected();
+  result.selection.orderItems = [...document.querySelectorAll('#orderItems .order-item strong')].map(element => element.textContent);
+  result.selection.summary = document.getElementById('summarySubtotal').textContent;
+  grid.scrollIntoView({ block: 'start', behavior: 'instant' });
+  await frame();
+  return result;
+})()`;
+
+// Etapa 12: lista do catálogo na central e modal de cadastro/edição.
+const ADMIN_CATALOG_PROBE = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  document.querySelector('[data-panel="catalogPanel"]').click();
+  const settled = () => [...document.querySelectorAll('#flavorEditor img')].every(img => img.closest('.flavor-photo').classList.contains('is-placeholder') || (img.complete && img.naturalWidth > 0 && img.dataset.fallback !== 'pending'));
+  for (let attempt = 0; attempt < 80 && !settled(); attempt++) await wait(100);
+  await wait(400);
+  await frame();
+  const page = document.documentElement;
+  const panel = document.getElementById('catalogPanel').getBoundingClientRect();
+  const rows = [...document.querySelectorAll('#flavorEditor .flavor-admin-row')];
+  const within = (element, box) => { const rect = element.getBoundingClientRect(); return rect.left >= box.left - 1 && rect.right <= box.right + 1; };
+  const result = {
+    rows: rows.length,
+    rowsWithin: rows.every(row => within(row, panel)),
+    thumbs: rows.map(row => row.querySelector('.flavor-photo').classList.contains('is-placeholder') ? 'placeholder' : 'photo'),
+    badges: rows.map(row => row.querySelector('.flavor-admin-badge')?.textContent || ''),
+    states: rows.map(row => row.querySelector('.item-state').textContent.trim()),
+    targets: rows.every(row => [...row.querySelectorAll('button')].every(button => button.getBoundingClientRect().height >= 38)),
+    pageOverflow: page.scrollWidth > page.clientWidth + 1
+  };
+  rows[0].querySelector('.flavor-admin-open').click();
+  await frame();
+  const dialog = document.getElementById('flavorEditModal');
+  const rect = dialog.getBoundingClientRect();
+  const fields = ['flavorEditName', 'flavorEditSubtitle', 'flavorEditDescription', 'flavorEditBadge', 'flavorEditOrder', 'flavorEditAlt', 'flavorEditActive', 'flavorEditFileLabel', 'flavorEditRemoveImage', 'flavorEditSave', 'flavorEditCancel'];
+  const scroll = dialog.querySelector('.order-modal-scroll');
+  result.modal = {
+    open: dialog.open && dialog.matches(':modal'),
+    title: document.getElementById('flavorEditModalTitle').textContent,
+    focus: document.activeElement?.id,
+    name: document.getElementById('flavorEditName').value,
+    within: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+    fieldsInside: fields.every(id => { const element = document.getElementById(id); return element.getClientRects().length && within(element, rect); }),
+    replaceLabel: document.getElementById('flavorEditFileLabel').textContent,
+    previewRatio: (() => { const box = document.getElementById('flavorEditPreview').getBoundingClientRect(); return Math.abs(box.height - box.width * 0.75) <= 1.5; })(),
+    footerTargets: ['flavorEditSave', 'flavorEditCancel'].every(id => document.getElementById(id).getBoundingClientRect().height >= 44),
+    scrollContained: scroll.scrollWidth <= scroll.clientWidth + 1,
+    pageOverflow: page.scrollWidth > page.clientWidth + 1
+  };
+  return result;
+})()`;
+
+// Etapa 12: seleção de arquivo no modal (otimização real no Chrome) e envio para a API simulada — sem upload real.
+const ADMIN_UPLOAD_PROBE = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const calls = [];
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => { if (options?.body) calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
+  document.querySelector('[data-panel="catalogPanel"]').click();
+  await wait(200);
+  document.querySelector('#flavorEditor [data-flavor-open="2"]').click();
+  const input = document.getElementById('flavorEditFile');
+  const status = document.getElementById('flavorEditImageStatus');
+  const choose = async file => {
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let attempt = 0; attempt < 100 && (!status.textContent || status.textContent === 'Otimizando a foto...'); attempt++) await wait(100);
+    return status.textContent;
+  };
+  const result = {};
+  const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><script>alert(1)</script></svg>'], 'bolo.png', { type: 'image/png' });
+  result.svgStatus = await choose(svg);
+  result.svgTone = status.dataset.tone || '';
+  result.svgKeptPlaceholder = document.getElementById('flavorEditPreview').classList.contains('is-placeholder');
+  status.textContent = '';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2000; canvas.height = 1500;
+  const context = canvas.getContext('2d');
+  const gradient = context.createLinearGradient(0, 0, 2000, 1500);
+  gradient.addColorStop(0, '#5c3422'); gradient.addColorStop(1, '#f2d7c9');
+  context.fillStyle = gradient; context.fillRect(0, 0, 2000, 1500);
+  const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  result.photoStatus = await choose(new File([pngBlob], 'IMG_0001.png', { type: 'image/png' }));
+  const preview = document.querySelector('#flavorEditPreview img');
+  result.preview = { blob: preview?.src.startsWith('blob:') || false, loaded: Boolean(preview?.naturalWidth), placeholder: document.getElementById('flavorEditPreview').classList.contains('is-placeholder') };
+  result.label = document.getElementById('flavorEditFileLabel').textContent;
+  result.removeVisible = !document.getElementById('flavorEditRemoveImage').classList.contains('hidden');
+  document.getElementById('flavorEditAlt').value = 'Fatia de bolo de cenoura';
+  document.getElementById('flavorEditSave').click();
+  for (let attempt = 0; attempt < 50 && !calls.some(call => call.action === 'saveFlavor'); attempt++) await wait(100);
+  await wait(300);
+  const sent = calls.find(call => call.action === 'saveFlavor');
+  const bytes = sent ? Uint8Array.from(atob(sent.image.data.slice(0, 64)), char => char.charCodeAt(0)) : new Uint8Array();
+  result.sent = sent ? {
+    flavorId: sent.flavor.id,
+    imageAction: sent.image.action,
+    mimeType: sent.image.mimeType,
+    fileName: sent.image.fileName,
+    signature: String.fromCharCode(...bytes.slice(0, 4)) + '/' + String.fromCharCode(...bytes.slice(8, 12)),
+    bytes: Math.floor(sent.image.data.length * 3 / 4),
+    alt: sent.flavor.imageAlt,
+    keys: Object.keys(sent.flavor).sort().join(','),
+    hasToken: 'adminToken' in sent
+  } : null;
+  result.closed = !document.getElementById('flavorEditModal').open;
+  result.width = (result.photoStatus.match(/(\\d+)×(\\d+)/) || []).slice(1).map(Number);
+  return result;
 })()`;
 
 // Mede apenas depois de fontes, animações e layout estabilizarem (duas leituras iguais seguidas).
@@ -513,6 +752,15 @@ async function mouseDrag(page, from, to, { steps = 8, beforeRelease } = {}) {
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
+  if (url.pathname === '/api' && url.searchParams.get('action') === 'getFlavorImage') {
+    const flavorId = url.searchParams.get('flavorId') || '';
+    response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    const image = fallbackImages[flavorId];
+    response.end(JSON.stringify(image
+      ? { ok: true, image: { flavorId, mimeType: 'image/png', data: image.toString('base64') } }
+      : { ok: false, code: 'FLAVOR_IMAGE_NOT_FOUND', message: 'Este sabor não possui foto.' }));
+    return;
+  }
   if (url.pathname === '/api') {
     let raw = '';
     request.on('data', chunk => { raw += chunk; });
@@ -526,6 +774,10 @@ const server = http.createServer((request, response) => {
       if (body.action === 'archiveOrder' || body.action === 'unarchiveOrder') {
         const archivedAt = body.action === 'archiveOrder' ? '2026-10-23T18:30:00.000Z' : '';
         return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.expectedStatus, archivedAt, unchanged: false } })), 350);
+      }
+      if (body.action === 'getFlavorImage') {
+        const image = fallbackImages[body.flavorId];
+        return response.end(JSON.stringify(image ? { ok: true, image: { flavorId: body.flavorId, mimeType: 'image/png', data: image.toString('base64') } } : { ok: false, code: 'FLAVOR_IMAGE_NOT_FOUND' }));
       }
       if (body.action === 'registerCheckoutReturn') return response.end(JSON.stringify({ ok: true, checkout: { state: 'returned_unverified' } }));
       if (body.action === 'verifyCheckoutPayment') {
@@ -590,7 +842,7 @@ const server = http.createServer((request, response) => {
     ];
     adminPreviewHtml = html.replace(
       'initializeApp();',
-      `config = normalizeConfig(${JSON.stringify({ ...publicConfig, revision: '7', flavorItems: publicConfig.flavors.map((name, index) => ({ id: `f-${index}`, name, active: index === 0, order: index + 1 })), orderStatuses: DEFAULT_STATUSES })});
+      `config = normalizeConfig(${JSON.stringify({ ...publicConfig, revision: '7', flavorItems: publicConfig.flavorCatalog.map((item, index) => ({ ...item, active: index !== 3, order: index + 1 })), orderStatuses: DEFAULT_STATUSES })});
        appState.config = config;
        appState.orders = ${JSON.stringify(fakeOrders)};
        adminWasUnlocked = true;
@@ -995,6 +1247,95 @@ const server = http.createServer((request, response) => {
         assert.equal(form.stepper.capped, true, `Contador ultrapassou 20 fatias em ${label}.`);
         assert.equal(form.stepper.floored, true, `Contador ficou abaixo de 1 fatia em ${label}.`);
         assert.equal(form.stepper.resetAfterAdd, true, `Contador não voltou a 1 após adicionar em ${label}.`);
+
+        // Etapa 12: catálogo visual público.
+        const catalogPage = await devTools.openPage(`${origin}/?public=1`, viewport, { driveImages });
+        const catalog = await catalogPage.evaluate(CATALOG_PROBE);
+        await catalogPage.screenshot(path.join(tempDir, `public-catalog-${label}.png`));
+        await catalogPage.evaluate(`document.querySelector('#flavorGrid .flavor-zoom').click(); new Promise(resolve => setTimeout(resolve, 400))`);
+        await catalogPage.screenshot(path.join(tempDir, `public-catalog-zoom-${label}.png`));
+        await catalogPage.close();
+        assert.equal(catalog.count, 4, `Cards ausentes em ${label}.`);
+        assert.deepEqual(catalog.states, ['drive', 'fallback', 'placeholder', 'placeholder'], `Foto do Drive, fallback ou placeholder incorretos em ${label}.`);
+        if (viewport.width < 560) assert.equal(catalog.columns, 2, `Celular deveria exibir duas colunas em ${label}.`);
+        assert.ok(catalog.columns >= 2, `Grade em coluna única em ${label}.`);
+        assert.ok(catalog.minPhotoWidth >= 150, `Foto pequena demais em ${label}: ${catalog.minPhotoWidth}px.`);
+        assert.equal(catalog.ratios, true, `Proporção 4:3 das fotos não reservada em ${label}.`);
+        assert.equal(catalog.gridWithin, true, `Grade saiu do formulário em ${label}.`);
+        assert.equal(catalog.textWithin, true, `Texto saiu do card em ${label}.`);
+        assert.equal(catalog.summaryClamped, true, `Descrição do card não foi limitada a duas linhas em ${label}.`);
+        assert.equal(catalog.zoomTargets, true, `Botão de ampliar menor que 44px em ${label}.`);
+        assert.ok(catalog.gridHeight <= Math.max(900, viewport.height * 1.1), `Catálogo alto demais em ${label}: ${catalog.gridHeight}px.`);
+        assert.equal(catalog.sizedImages, true, `Imagens sem dimensões reservadas em ${label}.`);
+        assert.equal(catalog.pageOverflow, false, `Catálogo provocou overflow em ${label}.`);
+        assert.equal(catalog.modal.open, true, `Foto ampliada não abriu como modal em ${label}.`);
+        assert.equal(catalog.modal.selectionUntouched, true, `Ampliar a foto alterou a seleção em ${label}.`);
+        assert.equal(catalog.modal.focus, 'flavorImageModalClose', `Foco inicial do modal incorreto em ${label}.`);
+        assert.equal(catalog.modal.title, 'Chocolate');
+        assert.equal(catalog.modal.fullDescription, true, `Descrição completa ausente no modal em ${label}.`);
+        assert.equal(catalog.modal.imageLoaded, true, `Foto grande não carregou no modal em ${label}.`);
+        assert.equal(catalog.modal.alt, 'Fatia de bolo de chocolate com ganache');
+        assert.equal(catalog.modal.within, true, `Modal da foto saiu da tela em ${label}.`);
+        assert.equal(catalog.modal.closeTarget, true, `Botão fechar menor que 44px em ${label}.`);
+        assert.equal(catalog.modal.pageOverflow, false, `Modal da foto provocou overflow em ${label}.`);
+        assert.equal(catalog.modal.closedByEscape, true, `Escape não fechou a foto ampliada em ${label}.`);
+        assert.equal(catalog.modal.focusRestored, true, `Foco não voltou ao botão de ampliar em ${label}.`);
+        assert.deepEqual(catalog.selection.afterFirst, [false, true, false, false], `Seleção por card incorreta em ${label}.`);
+        assert.equal(catalog.selection.value, 'Ninho com morango');
+        assert.equal(catalog.selection.radioChecked, true);
+        assert.equal(catalog.selection.highlighted, true, `Card selecionado sem destaque em ${label}.`);
+        assert.deepEqual(catalog.selection.afterSecond, [false, false, true, false], `Mais de um card destacado em ${label}.`);
+        assert.deepEqual(catalog.selection.orderItems, ['Ninho com morango · 1 fatia', 'Cenoura · 2 fatias'], `Vários sabores não foram adicionados em ${label}.`);
+        assert.match(catalog.selection.summary, /54,94/, `Preço progressivo incorreto com vários sabores em ${label}.`);
+
+        const adminCatalogPage = await devTools.openPage(`${origin}/admin-preview`, viewport, { driveImages });
+        const adminCatalog = await adminCatalogPage.evaluate(ADMIN_CATALOG_PROBE);
+        await adminCatalogPage.screenshot(path.join(tempDir, `admin-catalog-modal-${label}.png`));
+        const closedByCancel = await adminCatalogPage.evaluate(`document.getElementById('flavorEditCancel').click(); new Promise(resolve => requestAnimationFrame(() => resolve(!document.getElementById('flavorEditModal').open && document.activeElement?.dataset.flavorOpen === '0')))`);
+        await adminCatalogPage.screenshot(path.join(tempDir, `admin-catalog-${label}.png`));
+        await adminCatalogPage.close();
+        assert.equal(closedByCancel, true, `Cancelar não fechou o modal nem devolveu o foco à linha em ${label}.`);
+
+        const uploadPage = await devTools.openPage(`${origin}/admin-preview`, viewport, { driveImages });
+        const upload = await uploadPage.evaluate(ADMIN_UPLOAD_PROBE);
+        await uploadPage.close();
+        assert.match(upload.svgStatus, /JPEG, PNG ou WebP/, `SVG disfarçado não foi recusado em ${label}.`);
+        assert.equal(upload.svgTone, 'error');
+        assert.equal(upload.svgKeptPlaceholder, true);
+        assert.match(upload.photoStatus, /^Foto pronta: 1600×1200 px · .+ \(WEBP\)/, `Otimização inesperada em ${label}: ${upload.photoStatus}`);
+        assert.deepEqual(upload.preview, { blob: true, loaded: true, placeholder: false }, `Pré-visualização ausente em ${label}.`);
+        assert.equal(upload.label, 'Substituir imagem');
+        assert.equal(upload.removeVisible, true);
+        assert.ok(upload.sent, `saveFlavor não enviado em ${label}.`);
+        assert.equal(upload.sent.flavorId, 'cenoura');
+        assert.equal(upload.sent.imageAction, 'replace');
+        assert.equal(upload.sent.mimeType, 'image/webp');
+        assert.equal(upload.sent.fileName, 'cenoura.webp');
+        assert.equal(upload.sent.signature, 'RIFF/WEBP', 'Bytes enviados não são WebP reais.');
+        assert.ok(upload.sent.bytes <= 2 * 1024 * 1024, `Foto otimizada acima de 2 MB em ${label}.`);
+        assert.equal(upload.sent.alt, 'Fatia de bolo de cenoura');
+        assert.equal(upload.sent.keys, 'active,badge,description,id,imageAlt,name,order,subtitle', 'Payload do sabor com campos inesperados (ID/URL de imagem).');
+        assert.equal(upload.sent.hasToken, true);
+        assert.equal(upload.closed, true, `Modal não fechou após salvar em ${label}.`);
+        assert.equal(adminCatalog.rows, 4, `Lista do catálogo incompleta em ${label}.`);
+        assert.equal(adminCatalog.rowsWithin, true, `Linha do catálogo saiu do painel em ${label}.`);
+        // Ninho chega pelo fallback autenticado; Red Velvet (sem foto em nenhum caminho) e Cenoura usam o placeholder.
+        assert.deepEqual(adminCatalog.thumbs, ['photo', 'photo', 'placeholder', 'placeholder'], `Miniaturas incorretas em ${label}.`);
+        assert.deepEqual(adminCatalog.badges, ['Mais pedido', 'Novo', '', '']);
+        assert.deepEqual(adminCatalog.states, ['● Ativo', '● Ativo', '● Ativo', '○ Inativo']);
+        assert.equal(adminCatalog.targets, true, `Botões da lista pequenos demais em ${label}.`);
+        assert.equal(adminCatalog.pageOverflow, false, `Catálogo da central com overflow em ${label}.`);
+        assert.equal(adminCatalog.modal.open, true, `Modal de edição não abriu em ${label}.`);
+        assert.equal(adminCatalog.modal.title, 'Editar sabor');
+        assert.equal(adminCatalog.modal.focus, 'flavorEditName', `Foco inicial do modal de edição incorreto em ${label}.`);
+        assert.equal(adminCatalog.modal.name, 'Chocolate');
+        assert.equal(adminCatalog.modal.within, true, `Modal de edição saiu da tela em ${label}.`);
+        assert.equal(adminCatalog.modal.fieldsInside, true, `Campos do modal de edição fora do modal em ${label}.`);
+        assert.equal(adminCatalog.modal.replaceLabel, 'Substituir imagem');
+        assert.equal(adminCatalog.modal.previewRatio, true, `Pré-visualização sem proporção 4:3 em ${label}.`);
+        assert.equal(adminCatalog.modal.footerTargets, true, `Botões do modal de edição menores que 44px em ${label}.`);
+        assert.equal(adminCatalog.modal.scrollContained, true, `Conteúdo do modal de edição com rolagem horizontal em ${label}.`);
+        assert.equal(adminCatalog.modal.pageOverflow, false, `Modal de edição provocou overflow em ${label}.`);
       }
     } finally {
       await devTools.close();
@@ -1030,6 +1371,11 @@ const server = http.createServer((request, response) => {
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
     console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');
+    console.log('PASS catálogo visual: foto do Drive, fallback do Apps Script e placeholder, proporção 4:3 reservada e lazy loading nas seis resoluções');
+    console.log('PASS seleção por card com destaque único, vários sabores e preço progressivo; ampliar a foto não seleciona');
+    console.log('PASS foto ampliada: modal, foco inicial, descrição completa, Escape e foco restaurado nas seis resoluções');
+    console.log('PASS central: lista com miniatura, badge e status; modal de edição contido e com alvos de 44px nas seis resoluções');
+    console.log('PASS envio de foto pela central: SVG disfarçado recusado, otimização real para WebP 1600×1200 ≤ 2 MB, pré-visualização e saveFlavor sem ID/URL de arquivo (API simulada)');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {
     server.close();

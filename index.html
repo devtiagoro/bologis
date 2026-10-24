@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#F7F2EC" />
   <meta name="referrer" content="no-referrer" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; object-src 'none'; base-uri 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src https://script.google.com https://script.googleusercontent.com; img-src 'self' data: blob: https://drive.google.com https://*.googleusercontent.com; object-src 'none'; base-uri 'none'" />
   <title>Primeira Fornada — Encomendas</title>
   <style>
     :root {
@@ -1307,6 +1307,229 @@
 
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+    /* Etapa 12: catálogo visual de sabores */
+    .flavor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 14px;
+    }
+    .flavor-card {
+      position: relative;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #fff;
+      transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+    .flavor-card.is-selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent), 0 12px 26px rgba(168, 95, 66, .16);
+    }
+    /* O card é um <label> dentro de .field: anula o estilo de rótulo de formulário. */
+    .flavor-card-body, .field .flavor-card-body {
+      font-size: inherit;
+      font-weight: 400;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+      margin: 0;
+      border-radius: inherit;
+      cursor: pointer;
+      color: inherit;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .flavor-radio:focus-visible + .flavor-card-body { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .flavor-photo {
+      position: relative;
+      aspect-ratio: 4 / 3;
+      overflow: hidden;
+      border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+      background: linear-gradient(145deg, var(--accent-soft), #fff1e8);
+    }
+    .flavor-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .flavor-photo.is-placeholder img { display: none; }
+    .flavor-placeholder {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-content: center;
+      justify-items: center;
+      gap: 6px;
+      color: var(--accent-strong);
+      text-align: center;
+      background:
+        radial-gradient(circle at 20% 15%, rgba(255,255,255,.75), transparent 45%),
+        radial-gradient(circle at 85% 90%, rgba(221, 169, 78, .22), transparent 50%),
+        linear-gradient(145deg, var(--accent-soft), #fff1e8);
+    }
+    .flavor-photo.is-placeholder .flavor-placeholder { display: grid; }
+    .flavor-placeholder-mark {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      background: rgba(255,253,251,.8);
+      border: 1px solid rgba(201, 127, 93, .22);
+      font-size: 24px;
+    }
+    .flavor-placeholder small { font-size: 11px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
+    .flavor-badge {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      max-width: calc(100% - 70px);
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(47, 33, 26, .82);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 850;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .flavor-card-copy { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 12px 14px 14px; }
+    .flavor-card-copy strong { font-size: 15px; font-weight: 850; line-height: 1.3; overflow-wrap: anywhere; }
+    .flavor-subtitle { color: var(--accent-strong); font-size: 12.5px; font-weight: 750; line-height: 1.35; }
+    .flavor-summary {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .flavor-selected-tag { display: none; color: var(--success); font-size: 12px; font-weight: 850; }
+    .flavor-card.is-selected .flavor-selected-tag { display: block; }
+    .flavor-zoom {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 1;
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: 12px;
+      background: rgba(255,253,251,.92);
+      color: var(--text);
+      box-shadow: 0 6px 16px rgba(47, 33, 26, .16);
+    }
+    .flavor-zoom svg { width: 20px; height: 20px; }
+    .flavor-zoom:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .flavor-empty { padding: 18px; border: 1px dashed var(--line); border-radius: var(--radius-md); color: var(--muted); text-align: center; }
+    @media (hover: hover) and (pointer: fine) {
+      .flavor-card:hover { border-color: #d9b9a7; transform: translateY(-1px); }
+      .flavor-zoom:hover { background: #fff; }
+    }
+
+    .flavor-image-modal, .flavor-edit-modal {
+      width: min(760px, calc(100% - 32px));
+      max-width: none;
+      max-height: calc(100dvh - 48px);
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 28px 80px rgba(47, 33, 26, .28);
+      overflow: hidden;
+    }
+    .flavor-edit-modal { width: min(820px, calc(100% - 32px)); }
+    .flavor-image-modal[open], .flavor-edit-modal[open] { display: flex; flex-direction: column; }
+    .flavor-image-modal::backdrop, .flavor-edit-modal::backdrop { background: rgba(47, 33, 26, .5); }
+    .flavor-modal-media { position: relative; aspect-ratio: 4 / 3; max-height: 62dvh; margin: 0 auto; width: 100%; background: linear-gradient(145deg, var(--accent-soft), #fff1e8); }
+    .flavor-modal-media img { display: block; width: 100%; height: 100%; object-fit: contain; background: #fbf6f1; }
+    .flavor-modal-media .flavor-photo { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 0; }
+    .flavor-modal-media .flavor-photo img { object-fit: contain; }
+    .flavor-modal-copy { display: grid; gap: 8px; padding: 18px 24px 22px; }
+    .flavor-modal-copy p { margin: 0; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+    .flavor-modal-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; padding: 0 24px 20px; }
+    .flavor-modal-actions button { min-height: 44px; }
+
+    .flavor-admin-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+    .flavor-admin-row.is-inactive { background: #f7f4f2; }
+    .flavor-admin-open {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+      min-height: 64px;
+      padding: 4px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+    }
+    .flavor-admin-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .flavor-admin-open .flavor-photo { width: 64px; border-radius: 10px; }
+    .flavor-admin-open .flavor-placeholder-mark { width: 30px; height: 30px; border-radius: 10px; font-size: 16px; }
+    .flavor-admin-open .flavor-placeholder small { display: none; }
+    .flavor-admin-copy { display: grid; gap: 4px; min-width: 0; }
+    .flavor-admin-copy strong { overflow-wrap: anywhere; }
+    .flavor-admin-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    .flavor-admin-badge { padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-weight: 850; }
+    .flavor-admin-edit { color: var(--accent-strong); font-size: 13px; font-weight: 850; }
+    @media (hover: hover) and (pointer: fine) {
+      .flavor-admin-open:hover { background: var(--surface-2); }
+    }
+
+    .flavor-edit-form { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+    .flavor-edit-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); gap: 18px; }
+    .flavor-edit-fields { display: grid; gap: 14px; min-width: 0; }
+    .flavor-edit-fields .field { margin: 0; }
+    .flavor-edit-fields textarea.control { min-height: 96px; }
+    .field-hint { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .flavor-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; align-items: end; }
+    .flavor-image-editor { display: grid; gap: 10px; align-content: start; min-width: 0; }
+    .flavor-image-editor .flavor-photo { border-radius: 14px; border: 1px solid var(--line); }
+    .flavor-image-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .flavor-image-actions .ghost-btn, .flavor-image-actions .danger-btn { flex: 1 1 auto; min-height: 44px; }
+    .flavor-file-label { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .flavor-file-input:focus-visible + .flavor-file-label { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .flavor-image-status { min-height: 18px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .flavor-image-status[data-tone="error"] { color: #9c3535; }
+    .switch-field { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 800; cursor: pointer; }
+    .switch-field input { width: 22px; height: 22px; accent-color: var(--accent-strong); }
+    .flavor-edit-footer { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; padding: 14px 24px 18px; border-top: 1px solid var(--line); background: var(--surface-2); }
+    .flavor-edit-footer button { min-height: 44px; }
+    .flavor-edit-modal > .message, .flavor-edit-form > .message { margin: 12px 24px 0; }
+    .flavor-image-editor > .field-label { display: block; font-weight: 800; font-size: 14px; }
+    @media (max-width: 760px) {
+      .flavor-edit-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 560px) {
+      .flavor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .flavor-card-copy { padding: 10px 10px 12px; }
+      .flavor-card-copy strong { font-size: 14px; }
+      .flavor-summary { font-size: 12.5px; }
+      .flavor-badge { left: 6px; top: 6px; max-width: calc(100% - 58px); font-size: 10.5px; }
+      .flavor-zoom { top: 4px; right: 4px; }
+      .flavor-image-modal, .flavor-edit-modal { width: calc(100% - 16px); max-height: calc(100dvh - 16px); border-radius: 18px; }
+      .flavor-modal-copy, .flavor-modal-actions, .flavor-edit-footer { padding-left: 16px; padding-right: 16px; }
+      .flavor-modal-actions button, .flavor-edit-footer button { flex: 1 1 100%; }
+      .flavor-edit-row { grid-template-columns: minmax(0, 1fr) 96px; }
+      .flavor-admin-row { grid-template-columns: minmax(0, 1fr); }
+      .flavor-admin-open { grid-template-columns: 56px minmax(0, 1fr); }
+      .flavor-admin-open .flavor-photo { width: 56px; }
+      .flavor-admin-edit { display: none; }
+    }
+
     @media (max-width: 1180px) {
       .admin-workspace { grid-template-columns: 1fr; gap: 18px; }
       .admin-workspace .admin-nav {
@@ -1454,11 +1677,11 @@
                 </div>
               </div>
 
-              <div class="field full" style="margin-bottom:18px">
-                <label for="flavorSelect">Qual sabor você deseja?</label>
-                <select class="control" id="flavorSelect" name="flavor" required>
-                  <option value="">Selecione um sabor</option>
-                </select>
+              <div class="field full flavor-field" style="margin-bottom:18px">
+                <span class="field-label" id="flavorGridLabel">Qual sabor você deseja?</span>
+                <!-- Sabor escolhido no card; o envio continua usando o nome, validado pelo servidor. -->
+                <input id="flavorSelect" name="flavor" type="hidden" value="" />
+                <div id="flavorGrid" class="flavor-grid" role="radiogroup" aria-labelledby="flavorGridLabel"></div>
               </div>
 
               <div class="item-builder-actions">
@@ -1729,12 +1952,11 @@
           <div id="catalogPanel" class="admin-panel">
             <div class="admin-section">
               <h2>Catálogo de sabores</h2>
-              <p class="help">Cadastre e organize os sabores disponíveis para encomenda. Sabores desativados saem do formulário, mas permanecem no histórico. Os preços são definidos em Preços.</p>
+              <p class="help">Cadastre os sabores com foto, descrição e destaque. Clique em um sabor para editá-lo; cada sabor é salvo ao confirmar o modal. Sabores desativados saem do formulário, mas permanecem no histórico. Os preços são definidos em Preços.</p>
               <div id="flavorCatalogSummary" class="catalog-summary"></div>
               <div id="flavorEditor" class="list-editor"></div>
               <div class="editor-actions">
-                <button id="addFlavorBtn" class="ghost-btn" type="button">+ Adicionar sabor</button>
-                <button id="saveCatalogBtn" class="secondary-btn" type="button">Salvar catálogo</button>
+                <button id="addFlavorBtn" class="secondary-btn" type="button">+ Adicionar sabor</button>
               </div>
               <div id="catalogSaveMessage" class="message" role="status"></div>
             </div>
@@ -1945,11 +2167,97 @@
     <div id="orderModalBody" class="order-modal-scroll"></div>
   </dialog>
 
+  <!-- Etapa 12: foto ampliada do sabor (formulário público). -->
+  <dialog id="flavorImageModal" class="flavor-image-modal" aria-labelledby="flavorImageModalTitle" aria-describedby="flavorImageModalDescription">
+    <header class="order-modal-header">
+      <div class="order-modal-heading">
+        <span id="flavorImageModalBadge" class="flavor-admin-badge hidden"></span>
+        <h2 id="flavorImageModalTitle">Sabor</h2>
+      </div>
+      <button id="flavorImageModalClose" class="order-modal-close" type="button" aria-label="Fechar foto ampliada">×</button>
+    </header>
+    <div class="order-modal-scroll" style="padding:0">
+      <div class="flavor-modal-media"><div id="flavorImageModalPhoto" class="flavor-photo is-placeholder"></div></div>
+      <div class="flavor-modal-copy">
+        <strong id="flavorImageModalSubtitle" class="flavor-subtitle"></strong>
+        <p id="flavorImageModalDescription"></p>
+      </div>
+      <div class="flavor-modal-actions">
+        <button id="flavorImageModalChoose" class="secondary-btn" type="button">Escolher este sabor</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Etapa 12: cadastro e edição de sabor (Central de Gestão). -->
+  <dialog id="flavorEditModal" class="flavor-edit-modal" aria-labelledby="flavorEditModalTitle">
+    <form id="flavorEditForm" class="flavor-edit-form" method="dialog" novalidate>
+      <header class="order-modal-header">
+        <div class="order-modal-heading"><h2 id="flavorEditModalTitle">Adicionar sabor</h2></div>
+        <button id="flavorEditModalClose" class="order-modal-close" type="button" aria-label="Fechar edição do sabor">×</button>
+      </header>
+      <div id="flavorEditMessage" class="message" role="status" aria-live="polite"></div>
+      <div class="order-modal-scroll">
+        <div class="flavor-edit-grid">
+          <div class="flavor-edit-fields">
+            <div class="field">
+              <label for="flavorEditName">Nome do sabor</label>
+              <input class="control" id="flavorEditName" maxlength="120" required autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="flavorEditSubtitle">Subtítulo</label>
+              <input class="control" id="flavorEditSubtitle" maxlength="120" autocomplete="off" placeholder="Ex.: Massa de cacau com brigadeiro" />
+            </div>
+            <div class="field">
+              <label for="flavorEditDescription">Descrição</label>
+              <textarea class="control" id="flavorEditDescription" maxlength="600" placeholder="Ingredientes, recheio e cobertura."></textarea>
+              <span class="field-hint">O card mostra as primeiras linhas; a foto ampliada exibe o texto completo.</span>
+            </div>
+            <div class="flavor-edit-row">
+              <div class="field">
+                <label for="flavorEditBadge">Badge (opcional)</label>
+                <input class="control" id="flavorEditBadge" maxlength="30" autocomplete="off" placeholder="Ex.: Novo, Mais pedido" />
+              </div>
+              <div class="field">
+                <label for="flavorEditOrder">Ordem</label>
+                <input class="control" id="flavorEditOrder" type="number" min="1" max="9999" step="1" inputmode="numeric" />
+              </div>
+            </div>
+            <label class="switch-field" for="flavorEditActive"><input id="flavorEditActive" type="checkbox" checked /> Sabor ativo no formulário</label>
+          </div>
+          <div class="flavor-image-editor">
+            <span class="field-label" id="flavorEditImageLabel">Imagem do produto</span>
+            <div id="flavorEditPreview" class="flavor-photo is-placeholder" role="img" aria-label="Sem foto"></div>
+            <div class="flavor-image-actions">
+              <input id="flavorEditFile" class="flavor-file-input sr-only" type="file" accept="image/jpeg,image/png,image/webp" aria-describedby="flavorEditImageHint" />
+              <label id="flavorEditFileLabel" class="ghost-btn flavor-file-label" for="flavorEditFile">Selecionar imagem</label>
+              <button id="flavorEditRemoveImage" class="danger-btn hidden" type="button">Remover imagem</button>
+            </div>
+            <span id="flavorEditImageHint" class="field-hint">JPEG, PNG ou WebP do computador ou celular. A foto é otimizada automaticamente (até 1600 px e 2 MB).</span>
+            <div id="flavorEditImageStatus" class="flavor-image-status" aria-live="polite"></div>
+            <div class="field">
+              <label for="flavorEditAlt">Texto alternativo da imagem</label>
+              <input class="control" id="flavorEditAlt" maxlength="160" autocomplete="off" placeholder="Ex.: Fatia de bolo de chocolate com cobertura" />
+              <span class="field-hint">Descreve a foto para quem usa leitor de tela.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <footer class="flavor-edit-footer">
+        <button id="flavorEditCancel" class="ghost-btn" type="button">Cancelar</button>
+        <button id="flavorEditSave" class="secondary-btn" type="submit">Salvar sabor</button>
+      </footer>
+    </form>
+  </dialog>
+
   <script>
     (() => {
       'use strict';
 
       const DEFAULT_ORDER_STATUSES = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
+      // Etapa 12: somente IDs de arquivo do Drive; a URL da foto é montada aqui, nunca recebida pronta.
+      const FLAVOR_IMAGE_ID_PATTERN = /^[A-Za-z0-9_-]{10,200}$/;
+      const FLAVOR_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+      const FLAVOR_IMAGE_MAX_SIDE = 1600;
 
       const DEFAULT_CONFIG = {
         brandName: 'Primeira Fornada',
@@ -2132,6 +2440,8 @@
         adminSessionExpiresAt = 0;
         preserveAdminStateOnReauth = preserveState && adminWasUnlocked;
         clearTimeout(adminExpiryTimer);
+        // O modal do sabor ficaria sobre a tela de autenticação; é fechado sem pedir confirmação.
+        if ($('flavorEditModal').open) closeFlavorEditModal(true);
         $('adminView').classList.add('hidden');
         $('adminAuthView').classList.remove('hidden');
         $('appShell').classList.remove('admin-mode');
@@ -2272,14 +2582,22 @@
         next.progressivePricing.firstSlicePrice = Math.round(Number(next.progressivePricing.firstSlicePrice || 0) * 100) / 100;
         next.progressivePricing.additionalSlicePrice = Math.round(Number(next.progressivePricing.additionalSlicePrice || 0) * 100) / 100;
 
+        // Central: flavorItems completo. Formulário: flavorCatalog (somente ativos). Backend anterior: apenas nomes.
         const rawFlavorItems = Array.isArray(value?.flavorItems)
           ? value.flavorItems
-          : (value?.flavors || DEFAULT_CONFIG.flavors).map((name, index) => ({ id: normalizePaymentId(name, index), name, active: true, order: index + 1 }));
+          : Array.isArray(value?.flavorCatalog)
+            ? value.flavorCatalog.map((item, index) => ({ ...item, active: true, order: index + 1 }))
+            : (value?.flavors || DEFAULT_CONFIG.flavors).map((name, index) => ({ id: normalizePaymentId(name, index), name, active: true, order: index + 1 }));
         next.flavorItems = rawFlavorItems.map((item, index) => ({
           id: String(item.id || normalizePaymentId(item.name, index)),
           name: String(item.name || '').trim(),
           active: item.active !== false,
-          order: Number(item.order || index + 1)
+          order: Number(item.order || index + 1),
+          subtitle: String(item.subtitle || '').trim(),
+          description: String(item.description || '').trim(),
+          badge: String(item.badge || '').trim(),
+          imageId: FLAVOR_IMAGE_ID_PATTERN.test(String(item.imageId || '')) ? String(item.imageId) : '',
+          imageAlt: String(item.imageAlt || '').trim()
         })).filter(item => item.name);
         next.flavors = next.flavorItems.filter(item => item.active).map(item => item.name);
         next.sizes = (value?.sizes || DEFAULT_CONFIG.sizes).map((item, index) => ({
@@ -2412,12 +2730,178 @@
         document.title = `${config.brandName} — Encomendas`;
       }
 
+      // ---- Etapa 12: fotos dos sabores ----
+      // 1º Drive (thumbnail público), 2º cópia servida pelo Apps Script, 3º placeholder da marca.
+      function driveThumbnailUrl(imageId, width) {
+        return `https://drive.google.com/thumbnail?id=${encodeURIComponent(imageId)}&sz=w${width}`;
+      }
+
+      const flavorImageFallbacks = new Map();
+
+      function fetchFlavorImageFallback(flavorId, imageId, admin) {
+        const key = `${admin ? 'admin' : 'public'}:${flavorId}:${imageId}`;
+        if (!flavorImageFallbacks.has(key)) {
+          flavorImageFallbacks.set(key, (async () => {
+            try {
+              const data = admin
+                ? await apiPost({ action: 'getFlavorImage', flavorId }, { admin: true })
+                : await apiGet('getFlavorImage', { flavorId });
+              const mimeType = String(data.image?.mimeType || '');
+              const content = String(data.image?.data || '');
+              if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(content)) return '';
+              return `data:${mimeType};base64,${content}`;
+            } catch (_) {
+              return '';
+            }
+          })());
+        }
+        return flavorImageFallbacks.get(key);
+      }
+
+      function flavorPlaceholderHtml() {
+        return '<div class="flavor-placeholder" aria-hidden="true"><span class="flavor-placeholder-mark">🍰</span><small>Primeira Fornada</small></div>';
+      }
+
+      // Largura/altura fixas (4:3) reservam o espaço da foto e evitam saltos de layout.
+      function flavorHasImage(item) {
+        return FLAVOR_IMAGE_ID_PATTERN.test(item?.imageId || '');
+      }
+
+      function flavorPhotoInner(item, options = {}) {
+        const width = options.width || 640;
+        const badge = options.badge && item.badge ? `<span class="flavor-badge">${escapeHtml(item.badge)}</span>` : '';
+        const image = flavorHasImage(item)
+          ? `<img src="${escapeHtml(driveThumbnailUrl(item.imageId, width))}" alt="${escapeHtml(options.decorative ? '' : (item.imageAlt || `Foto do sabor ${item.name}`))}" width="${width}" height="${Math.round(width * 3 / 4)}" loading="${options.eager ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer" data-flavor-image="${escapeHtml(item.id)}" data-image-id="${escapeHtml(item.imageId)}"${options.admin ? ' data-admin-image="1"' : ''}>`
+          : '';
+        return `${image}${flavorPlaceholderHtml()}${badge}`;
+      }
+
+      function flavorPhotoHtml(item, options = {}) {
+        return `<div class="flavor-photo${flavorHasImage(item) ? '' : ' is-placeholder'}">${flavorPhotoInner(item, options)}</div>`;
+      }
+
+      function bindFlavorImages(root) {
+        qsa('img[data-flavor-image]', root).forEach(image => {
+          if (image.dataset.bound) return;
+          image.dataset.bound = '1';
+          image.addEventListener('error', async () => {
+            const frame = image.closest('.flavor-photo');
+            if (image.dataset.fallback) {
+              frame?.classList.add('is-placeholder');
+              return;
+            }
+            image.dataset.fallback = 'pending';
+            const source = await fetchFlavorImageFallback(image.dataset.flavorImage, image.dataset.imageId, image.dataset.adminImage === '1');
+            if (!source || !image.isConnected) {
+              frame?.classList.add('is-placeholder');
+              return;
+            }
+            image.dataset.fallback = 'done';
+            image.src = source;
+          });
+        });
+      }
+
+      // Cards do formulário: ordem e nomes vêm de config.flavors, os mesmos validados pelo servidor.
+      // Um sabor sem metadados ou sem foto continua aparecendo, com o placeholder da marca.
+      function publicFlavorCatalog() {
+        const byName = new Map(config.flavorItems.filter(item => item.active).map(item => [item.name, item]));
+        return config.flavors.map((name, index) => byName.get(name) || {
+          id: normalizePaymentId(name, index), name, subtitle: '', description: '', badge: '', imageId: '', imageAlt: ''
+        });
+      }
+
+      const ZOOM_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+
       function renderFlavorOptions() {
-        const select = $('flavorSelect');
-        const current = select.value;
-        select.innerHTML = '<option value="">Selecione um sabor</option>' +
-          config.flavors.map(flavor => `<option value="${escapeHtml(flavor)}">${escapeHtml(flavor)}</option>`).join('');
-        if (config.flavors.includes(current)) select.value = current;
+        const selected = $('flavorSelect');
+        const items = publicFlavorCatalog();
+        if (!items.some(item => item.name === selected.value)) selected.value = '';
+        const grid = $('flavorGrid');
+        grid.innerHTML = items.map((item, index) => {
+          const isSelected = item.name === selected.value;
+          const describedBy = item.description ? ` aria-describedby="flavorChoiceSummary-${index}"` : '';
+          return `<div class="flavor-card${isSelected ? ' is-selected' : ''}" data-flavor-card="${index}">
+            <input class="flavor-radio sr-only" type="radio" name="flavorChoice" id="flavorChoice-${index}" value="${escapeHtml(item.name)}"${isSelected ? ' checked' : ''}${describedBy}>
+            <label class="flavor-card-body" for="flavorChoice-${index}">
+              ${flavorPhotoHtml(item, { badge: true, eager: index < 4, decorative: true })}
+              <span class="flavor-card-copy">
+                <strong>${escapeHtml(item.name)}</strong>
+                ${item.subtitle ? `<span class="flavor-subtitle">${escapeHtml(item.subtitle)}</span>` : ''}
+                ${item.description ? `<span class="flavor-summary" id="flavorChoiceSummary-${index}">${escapeHtml(item.description)}</span>` : ''}
+                <span class="flavor-selected-tag" aria-hidden="true">✓ Selecionado</span>
+              </span>
+            </label>
+            <button class="flavor-zoom" type="button" data-flavor-zoom="${index}" aria-label="${escapeHtml(item.imageId ? `Ampliar foto de ${item.name}` : `Ver detalhes de ${item.name}`)}">${ZOOM_ICON}</button>
+          </div>`;
+        }).join('') || '<div class="flavor-empty">Nenhum sabor disponível no momento.</div>';
+        qsa('.flavor-radio', grid).forEach(radio => radio.addEventListener('change', () => selectFlavor(radio.value)));
+        qsa('[data-flavor-zoom]', grid).forEach(button => button.addEventListener('click', () => openFlavorImageModal(Number(button.dataset.flavorZoom))));
+        bindFlavorImages(grid);
+      }
+
+      function selectFlavor(name) {
+        const item = publicFlavorCatalog().find(flavor => flavor.name === name);
+        $('flavorSelect').value = item ? item.name : '';
+        qsa('.flavor-card', $('flavorGrid')).forEach(card => {
+          const radio = card.querySelector('.flavor-radio');
+          const checked = Boolean(item) && radio?.value === item.name;
+          if (radio) radio.checked = checked;
+          card.classList.toggle('is-selected', checked);
+        });
+        if (item) {
+          $('flavorSelect').removeAttribute('aria-invalid');
+          qsa('.flavor-field + .field-error').forEach(element => element.remove());
+        }
+        updateSummary();
+      }
+
+      // Modal da foto ampliada: Escape, X, fundo e "Escolher" fecham; o foco volta ao botão que abriu.
+      const flavorImageModalState = { index: -1 };
+
+      function openFlavorImageModal(index) {
+        const item = publicFlavorCatalog()[index];
+        if (!item) return false;
+        flavorImageModalState.index = index;
+        $('flavorImageModalTitle').textContent = item.name;
+        $('flavorImageModalBadge').textContent = item.badge;
+        $('flavorImageModalBadge').classList.toggle('hidden', !item.badge);
+        $('flavorImageModalSubtitle').textContent = item.subtitle;
+        $('flavorImageModalSubtitle').classList.toggle('hidden', !item.subtitle);
+        $('flavorImageModalDescription').textContent = item.description || 'Sabor artesanal da Primeira Fornada.';
+        const photo = $('flavorImageModalPhoto');
+        photo.className = `flavor-photo${flavorHasImage(item) ? '' : ' is-placeholder'}`;
+        photo.innerHTML = flavorPhotoInner(item, { width: 1600, eager: true });
+        bindFlavorImages(photo);
+        $('flavorImageModalChoose').textContent = $('flavorSelect').value === item.name ? 'Sabor selecionado' : 'Escolher este sabor';
+        const dialog = $('flavorImageModal');
+        if (typeof dialog.showModal === 'function') {
+          if (!dialog.open) dialog.showModal();
+        } else {
+          dialog.setAttribute('open', '');
+        }
+        document.body.classList.add('modal-open');
+        $('flavorImageModalClose').focus();
+        return true;
+      }
+
+      function closeFlavorImageModal(focusTarget) {
+        if (flavorImageModalState.index < 0) return;
+        const index = flavorImageModalState.index;
+        flavorImageModalState.index = -1;
+        const dialog = $('flavorImageModal');
+        if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+        else dialog.removeAttribute('open');
+        document.body.classList.remove('modal-open');
+        (focusTarget || $('flavorGrid').querySelector?.(`[data-flavor-zoom="${index}"]`))?.focus?.();
+      }
+
+      function chooseFlavorFromModal() {
+        const index = flavorImageModalState.index;
+        const item = publicFlavorCatalog()[index];
+        if (!item) return;
+        selectFlavor(item.name);
+        closeFlavorImageModal($('flavorGrid').querySelector?.(`#flavorChoice-${index}`));
       }
 
       function normalizeClientOrderItems(items) {
@@ -2446,7 +2930,12 @@
         clearFieldErrors();
         const flavor = $('flavorSelect').value;
         const quantity = builderQuantity;
-        if (!flavor) return showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
+        if (!flavor) {
+          showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
+          // O campo é oculto: o foco vai para o primeiro card da grade.
+          $('flavorGrid').querySelector?.('.flavor-radio')?.focus?.();
+          return;
+        }
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
           return showFieldError('itemQuantity', 'Informe uma quantidade de fatias entre 1 e 20.');
         }
@@ -2912,9 +3401,10 @@
         };
       }
 
-      async function apiGet(action) {
+      async function apiGet(action, extraParams = {}) {
         const url = new URL(APPS_SCRIPT_URL);
         url.searchParams.set('action', action);
+        Object.entries(extraParams).forEach(([key, value]) => url.searchParams.set(key, String(value)));
         // Evita que navegador/CDN reaproveite uma resposta antiga de getConfig.
         url.searchParams.set('_ts', String(Date.now()));
         const response = await fetch(url.toString(), { cache: 'no-store' });
@@ -3262,23 +3752,348 @@
         if (isOrdersOpen) loadAdminOrders();
       }
 
+      // Etapa 12: lista com miniatura, nome, badge e status; o clique abre o modal de edição.
       function renderFlavorEditor() {
         renderCatalogSummary('flavorCatalogSummary', config.flavorItems);
         $('flavorEditor').innerHTML = config.flavorItems.map((flavor, index) => `
-          <div class="list-row simple ${flavor.active === false ? 'is-inactive' : ''}" data-flavor-index="${index}">
-            <input class="control flavor-input" value="${escapeHtml(flavor.name)}" aria-label="Sabor ${index + 1}">
-            <span class="item-state ${flavor.active !== false ? 'active' : 'inactive'}">${flavor.active !== false ? '● Ativo' : '○ Inativo'}</span>
-            <input class="flavor-active hidden" type="checkbox" ${flavor.active !== false ? 'checked' : ''} tabindex="-1">
-            <button class="icon-btn toggle-item-btn toggle-flavor" type="button">${flavor.active !== false ? 'Desativar' : 'Reativar'}</button>
+          <div class="flavor-admin-row ${flavor.active === false ? 'is-inactive' : ''}" data-flavor-index="${index}">
+            <button class="flavor-admin-open" type="button" data-flavor-open="${index}">
+              ${flavorPhotoHtml(flavor, { width: 160, admin: true, decorative: true })}
+              <span class="flavor-admin-copy">
+                <strong>${escapeHtml(flavor.name)}</strong>
+                <span class="flavor-admin-meta">
+                  <span class="item-state ${flavor.active !== false ? 'active' : 'inactive'}">${flavor.active !== false ? '● Ativo' : '○ Inativo'}</span>
+                  ${flavor.badge ? `<span class="flavor-admin-badge">${escapeHtml(flavor.badge)}</span>` : ''}
+                  ${flavorHasImage(flavor) ? '' : '<span>Sem foto</span>'}
+                </span>
+              </span>
+              <span class="flavor-admin-edit" aria-hidden="true">Editar ›</span>
+            </button>
+            <button class="icon-btn toggle-item-btn toggle-flavor" type="button" data-flavor-toggle="${index}" aria-label="${flavor.active !== false ? 'Desativar' : 'Reativar'} ${escapeHtml(flavor.name)}">${flavor.active !== false ? 'Desativar' : 'Reativar'}</button>
           </div>
         `).join('') || '<div class="empty-state">Nenhum sabor cadastrado.</div>';
 
-        qsa('.toggle-flavor').forEach((button, index) => button.addEventListener('click', () => {
-          captureFlavorEditor();
-          config.flavorItems[index].active = !config.flavorItems[index].active;
-          markConfigDirty('flavors');
-          renderFlavorEditor();
-        }));
+        qsa('[data-flavor-open]', $('flavorEditor')).forEach(button => button.addEventListener('click', () => openFlavorEditModal(Number(button.dataset.flavorOpen), button)));
+        qsa('[data-flavor-toggle]', $('flavorEditor')).forEach(button => button.addEventListener('click', () => toggleFlavorActive(Number(button.dataset.flavorToggle), button)));
+        bindFlavorImages($('flavorEditor'));
+      }
+
+      // Ativar/desativar salva na hora, pela mesma rota do modal (a foto é mantida).
+      async function toggleFlavorActive(index, button) {
+        const flavor = config.flavorItems[index];
+        if (!flavor) return;
+        await withSavingState(button, async () => {
+          try {
+            await saveFlavorRemote(flavorPayload({ ...flavor, active: !flavor.active }), { action: 'keep' });
+            renderFlavorEditor();
+          } catch (error) {
+            showConfigSaveError('flavors', error);
+          }
+        });
+      }
+
+      function flavorPayload(flavor) {
+        return {
+          id: flavor.id || '',
+          name: String(flavor.name || '').trim(),
+          subtitle: String(flavor.subtitle || '').trim(),
+          description: String(flavor.description || '').trim(),
+          badge: String(flavor.badge || '').trim(),
+          imageAlt: String(flavor.imageAlt || '').trim(),
+          active: flavor.active !== false,
+          order: Number(flavor.order) || 1
+        };
+      }
+
+      async function saveFlavorRemote(flavor, image) {
+        if (configSaveInFlight) {
+          const error = new Error('Aguarde o salvamento atual terminar antes de iniciar outro.');
+          error.code = 'CONFIG_SAVE_IN_PROGRESS';
+          throw error;
+        }
+        configSaveInFlight = true;
+        const requestSequence = ++configRevision;
+        try {
+          const result = await apiPost({ action: 'saveFlavor', revision: config.revision, flavor, image }, { admin: true });
+          if (requestSequence !== configRevision) return result;
+          if (!result.config) throw new Error('O servidor não devolveu a configuração persistida.');
+          mergeSavedDomain(result.config, 'flavors');
+          dirtyConfigDomains.delete('flavors');
+          const notice = result.imagePublic === false
+            ? `Sabor salvo. Revisão ${config.revision}. A conta do Google bloqueou o link público da foto; o formulário usará a cópia servida pelo Apps Script.`
+            : `Sabor salvo. Revisão ${config.revision}.`;
+          setMessage($('catalogSaveMessage'), result.imagePublic === false ? 'info' : 'success', notice);
+          applyConfigEverywhere();
+          showToast('Sabor salvo');
+          return result;
+        } finally {
+          configSaveInFlight = false;
+        }
+      }
+
+      // ---- Modal de cadastro/edição do sabor ----
+      const flavorEditState = { index: -1, returnFocus: null, dirty: false, busy: false, image: { action: 'keep' } };
+
+      function currentEditFlavor() {
+        return flavorEditState.index >= 0 ? config.flavorItems[flavorEditState.index] || null : null;
+      }
+
+      function resetFlavorEditImage() {
+        if (flavorEditState.image.previewUrl) URL.revokeObjectURL?.(flavorEditState.image.previewUrl);
+        flavorEditState.image = { action: 'keep' };
+      }
+
+      function setFlavorImageStatus(text, tone = '') {
+        const status = $('flavorEditImageStatus');
+        status.textContent = text;
+        if (tone) status.dataset.tone = tone;
+        else delete status.dataset.tone;
+      }
+
+      function renderFlavorEditPreview() {
+        const flavor = currentEditFlavor();
+        const image = flavorEditState.image;
+        const preview = $('flavorEditPreview');
+        const name = $('flavorEditName').value.trim() || 'sabor';
+        let hasPhoto = false;
+        if (image.action === 'replace') {
+          hasPhoto = true;
+          preview.className = 'flavor-photo';
+          preview.innerHTML = `<img src="${escapeHtml(image.previewUrl)}" alt="" width="${image.width}" height="${image.height}">${flavorPlaceholderHtml()}`;
+        } else if (image.action === 'keep' && flavorHasImage(flavor)) {
+          hasPhoto = true;
+          preview.className = 'flavor-photo';
+          preview.innerHTML = flavorPhotoInner(flavor, { width: 800, eager: true, admin: true, decorative: true });
+          bindFlavorImages(preview);
+        } else {
+          preview.className = 'flavor-photo is-placeholder';
+          preview.innerHTML = flavorPlaceholderHtml();
+        }
+        preview.setAttribute('aria-label', hasPhoto ? `Pré-visualização da foto de ${name}` : 'Sem foto');
+        $('flavorEditFileLabel').textContent = hasPhoto ? 'Substituir imagem' : 'Selecionar imagem';
+        $('flavorEditRemoveImage').classList.toggle('hidden', !hasPhoto);
+      }
+
+      function openFlavorEditModal(index, returnFocus) {
+        const flavor = index >= 0 ? config.flavorItems[index] : null;
+        if (index >= 0 && !flavor) return false;
+        flavorEditState.index = flavor ? index : -1;
+        flavorEditState.returnFocus = returnFocus || null;
+        flavorEditState.dirty = false;
+        resetFlavorEditImage();
+        const nextOrder = config.flavorItems.reduce((max, item) => Math.max(max, Number(item.order) || 0), 0) + 1;
+        $('flavorEditModalTitle').textContent = flavor ? 'Editar sabor' : 'Adicionar sabor';
+        $('flavorEditName').value = flavor?.name || '';
+        $('flavorEditSubtitle').value = flavor?.subtitle || '';
+        $('flavorEditDescription').value = flavor?.description || '';
+        $('flavorEditBadge').value = flavor?.badge || '';
+        $('flavorEditAlt').value = flavor?.imageAlt || '';
+        $('flavorEditOrder').value = String(flavor ? (Number(flavor.order) || index + 1) : nextOrder);
+        $('flavorEditActive').checked = flavor ? flavor.active !== false : true;
+        $('flavorEditFile').value = '';
+        setFlavorImageStatus('');
+        clearMessage($('flavorEditMessage'));
+        renderFlavorEditPreview();
+        const dialog = $('flavorEditModal');
+        if (typeof dialog.showModal === 'function') {
+          if (!dialog.open) dialog.showModal();
+        } else {
+          dialog.setAttribute('open', '');
+        }
+        document.body.classList.add('modal-open');
+        $('flavorEditName').focus();
+        return true;
+      }
+
+      function closeFlavorEditModal(force = false) {
+        const dialog = $('flavorEditModal');
+        if (!dialog.open && !dialog.hasAttribute('open')) return true;
+        if (!force && flavorEditState.busy) return false;
+        if (!force && flavorEditState.dirty && !window.confirm('Descartar as alterações deste sabor?')) return false;
+        flavorEditState.dirty = false;
+        resetFlavorEditImage();
+        if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+        else dialog.removeAttribute('open');
+        document.body.classList.remove('modal-open');
+        const target = flavorEditState.returnFocus;
+        flavorEditState.returnFocus = null;
+        (target?.isConnected ? target : $('addFlavorBtn'))?.focus?.();
+        return true;
+      }
+
+      // Assinatura real do arquivo: o tipo informado pelo navegador não basta (SVG renomeado, por exemplo).
+      function detectImageType(bytes) {
+        if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+        if (bytes.length >= 8 && [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A].every((value, index) => bytes[index] === value)) return 'image/png';
+        if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+        return '';
+      }
+
+      async function decodeImageFile(file) {
+        if (typeof createImageBitmap === 'function') {
+          try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (_) { /* tenta pelo <img> */ }
+        }
+        const url = URL.createObjectURL(file);
+        try {
+          const image = new Image();
+          image.decoding = 'async';
+          image.src = url;
+          await image.decode();
+          return image;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+
+      function canvasToBlob(canvas, type, quality) {
+        return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+      }
+
+      // Redimensiona (lado maior até 1600 px), remove metadados (EXIF/GPS) e recodifica em WebP;
+      // se o navegador não gerar WebP de fato, usa JPEG. O servidor revalida tudo.
+      async function optimizeFlavorImage(file) {
+        const source = await decodeImageFile(file);
+        const sourceWidth = source.width || source.naturalWidth;
+        const sourceHeight = source.height || source.naturalHeight;
+        if (!sourceWidth || !sourceHeight) throw new Error('Não foi possível ler esta imagem.');
+        if (Math.min(sourceWidth, sourceHeight) < 64) throw new Error('A imagem é muito pequena; use pelo menos 64 px por lado.');
+        for (const maxSide of [FLAVOR_IMAGE_MAX_SIDE, 1200, 960]) {
+          const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+          const width = Math.max(64, Math.round(sourceWidth * scale));
+          const height = Math.max(64, Math.round(sourceHeight * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext('2d');
+          for (const type of ['image/webp', 'image/jpeg']) {
+            context.clearRect(0, 0, width, height);
+            if (type === 'image/jpeg') {
+              context.fillStyle = '#fffdfb';
+              context.fillRect(0, 0, width, height);
+            }
+            context.drawImage(source, 0, 0, width, height);
+            for (const quality of [0.86, 0.78, 0.68]) {
+              const blob = await canvasToBlob(canvas, type, quality);
+              if (!blob || blob.type !== type) break;
+              if (blob.size <= FLAVOR_IMAGE_MAX_BYTES) {
+                source.close?.();
+                return { blob, mimeType: type, width, height };
+              }
+            }
+          }
+        }
+        source.close?.();
+        throw new Error('Mesmo otimizada, a imagem passou de 2 MB. Escolha outra foto.');
+      }
+
+      function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+          reader.onerror = () => reject(new Error('Não foi possível ler a imagem otimizada.'));
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      function formatBytes(value) {
+        return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(value / 1024))} KB`;
+      }
+
+      async function handleFlavorImageFile(file) {
+        if (!file) return;
+        clearMessage($('flavorEditMessage'));
+        const allowedName = /\.(jpe?g|png|webp)$/i.test(file.name || '');
+        const header = Array.from(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+        const detected = detectImageType(header);
+        if (!allowedName || !detected || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type || detected)) {
+          setFlavorImageStatus('Envie uma foto JPEG, PNG ou WebP. SVG e outros arquivos não são aceitos.', 'error');
+          return;
+        }
+        if (file.size > 25 * 1024 * 1024) {
+          setFlavorImageStatus('O arquivo é grande demais para ser otimizado no navegador (máximo 25 MB).', 'error');
+          return;
+        }
+        setFlavorImageStatus('Otimizando a foto...');
+        try {
+          const optimized = await optimizeFlavorImage(file);
+          resetFlavorEditImage();
+          const extension = optimized.mimeType === 'image/webp' ? 'webp' : 'jpg';
+          flavorEditState.image = {
+            action: 'replace',
+            blob: optimized.blob,
+            mimeType: optimized.mimeType,
+            fileName: `${normalizePaymentId($('flavorEditName').value, 0).slice(0, 60) || 'sabor'}.${extension}`,
+            width: optimized.width,
+            height: optimized.height,
+            previewUrl: URL.createObjectURL(optimized.blob)
+          };
+          flavorEditState.dirty = true;
+          renderFlavorEditPreview();
+          setFlavorImageStatus(`Foto pronta: ${optimized.width}×${optimized.height} px · ${formatBytes(optimized.blob.size)} (${extension.toUpperCase()}). Será enviada ao salvar.`);
+        } catch (error) {
+          setFlavorImageStatus(error.message || 'Não foi possível ler esta imagem. Use JPEG, PNG ou WebP.', 'error');
+        }
+      }
+
+      function removeFlavorEditImage() {
+        const hadSaved = flavorHasImage(currentEditFlavor());
+        resetFlavorEditImage();
+        flavorEditState.image = { action: hadSaved ? 'remove' : 'keep' };
+        flavorEditState.dirty = true;
+        $('flavorEditFile').value = '';
+        renderFlavorEditPreview();
+        setFlavorImageStatus(hadSaved ? 'A foto será removida ao salvar. O sabor continua no catálogo com o placeholder.' : '');
+      }
+
+      async function submitFlavorEdit(event) {
+        event?.preventDefault?.();
+        if (flavorEditState.busy) return;
+        const original = currentEditFlavor();
+        const name = $('flavorEditName').value.trim();
+        if (!name) {
+          setMessage($('flavorEditMessage'), 'error', 'Informe o nome do sabor.');
+          $('flavorEditName').focus();
+          return;
+        }
+        const duplicate = config.flavorItems.some(item => item !== original && item.name.trim().toLowerCase() === name.toLowerCase());
+        if (duplicate) {
+          setMessage($('flavorEditMessage'), 'error', 'Já existe um sabor com este nome.');
+          $('flavorEditName').focus();
+          return;
+        }
+        const order = Math.trunc(Number($('flavorEditOrder').value));
+        const flavor = flavorPayload({
+          id: original?.id || '',
+          name,
+          subtitle: $('flavorEditSubtitle').value,
+          description: $('flavorEditDescription').value,
+          badge: $('flavorEditBadge').value,
+          imageAlt: $('flavorEditAlt').value,
+          active: $('flavorEditActive').checked,
+          order: order >= 1 && order <= 9999 ? order : (original?.order || config.flavorItems.length + 1)
+        });
+        const pending = flavorEditState.image;
+        flavorEditState.busy = true;
+        try {
+          await withSavingState($('flavorEditSave'), async () => {
+            try {
+              const image = pending.action === 'replace'
+                ? { action: 'replace', fileName: pending.fileName, mimeType: pending.mimeType, data: await blobToBase64(pending.blob) }
+                : { action: pending.action === 'remove' ? 'remove' : 'keep' };
+              await saveFlavorRemote(flavor, image);
+              flavorEditState.busy = false;
+              closeFlavorEditModal(true);
+              renderFlavorEditor();
+            } catch (error) {
+              const message = error.code === 'CONFIG_CONFLICT'
+                ? 'Conflito de revisão: outra sessão salvou alterações. Seus campos foram mantidos; feche, recarregue as configurações e tente novamente.'
+                : `Não foi possível salvar: ${error.message}`;
+              setMessage($('flavorEditMessage'), 'error', message);
+            }
+          }, pending.action === 'replace' ? 'Enviando foto...' : 'Salvando...');
+        } finally {
+          flavorEditState.busy = false;
+        }
       }
 
       function renderPricingEditor() {
@@ -3292,21 +4107,6 @@
         const additional = Number($('adminAdditionalSlicePrice').value || 0);
         const preview = progressivePriceDetails(4, { firstSlicePrice: first, additionalSlicePrice: additional });
         $('pricingAdminPreview').innerHTML = `<span>Exemplo com 4 fatias<br>1 × ${brl(first)} + 3 × ${brl(additional)}</span><strong>${brl(preview.subtotal)}<br><span class="economy">Economia ${brl(preview.savings)}</span></strong>`;
-      }
-
-      function captureFlavorEditor() {
-        const rows = qsa('[data-flavor-index]', $('flavorEditor'));
-        if (!rows.length) return;
-        config.flavorItems = rows.map((row, index) => {
-          const old = config.flavorItems[index] || {};
-          return {
-            id: old.id || `flavor-${Date.now()}-${index}`,
-            name: row.querySelector('.flavor-input').value.trim(),
-            active: row.querySelector('.flavor-active').checked,
-            order: old.order || index + 1
-          };
-        }).filter(item => item.name);
-        config.flavors = config.flavorItems.filter(item => item.active).map(item => item.name);
       }
 
       function renderPaymentEditor() {
@@ -4681,24 +5481,37 @@
         }
       }));
 
-      $('addFlavorBtn').addEventListener('click', () => {
-        captureFlavorEditor();
-        config.flavorItems.push({ id: `flavor-${Date.now()}`, name: 'Novo sabor', active: true, order: config.flavorItems.length + 1 });
-        config.flavors = config.flavorItems.filter(item => item.active).map(item => item.name);
-        markConfigDirty('flavors');
-        renderFlavorEditor();
+      // Etapa 12: cada sabor é salvo pelo modal (somente a aba Sabores e, se houver, a foto).
+      $('addFlavorBtn').addEventListener('click', () => openFlavorEditModal(-1, $('addFlavorBtn')));
+      $('flavorEditForm').addEventListener('submit', submitFlavorEdit);
+      $('flavorEditForm').addEventListener('input', () => { flavorEditState.dirty = true; });
+      $('flavorEditFile').addEventListener('change', event => {
+        const file = event.target.files?.[0];
+        handleFlavorImageFile(file).finally(() => { event.target.value = ''; });
       });
+      $('flavorEditRemoveImage').addEventListener('click', removeFlavorEditImage);
+      $('flavorEditCancel').addEventListener('click', () => closeFlavorEditModal());
+      $('flavorEditModalClose').addEventListener('click', () => closeFlavorEditModal());
+      $('flavorEditModal').addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeFlavorEditModal();
+      });
+      $('flavorEditModal').addEventListener('cancel', event => {
+        event.preventDefault();
+        closeFlavorEditModal();
+      });
+      $('flavorEditModal').addEventListener('click', event => { if (event.target === $('flavorEditModal')) closeFlavorEditModal(); });
 
-      // Salva somente a aba Sabores: tamanhos históricos e links antigos não trafegam neste salvamento.
-      $('saveCatalogBtn').addEventListener('click', () => withSavingState($('saveCatalogBtn'), async () => {
-        captureFlavorEditor();
-        try {
-          await saveConfigRemote('flavors');
-          renderFlavorEditor();
-        } catch (error) {
-          showConfigSaveError('flavors', error);
-        }
-      }));
+      $('flavorImageModalClose').addEventListener('click', () => closeFlavorImageModal());
+      $('flavorImageModalChoose').addEventListener('click', chooseFlavorFromModal);
+      $('flavorImageModal').addEventListener('close', () => closeFlavorImageModal());
+      $('flavorImageModal').addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeFlavorImageModal();
+      });
+      $('flavorImageModal').addEventListener('click', event => { if (event.target === $('flavorImageModal')) closeFlavorImageModal(); });
 
       $('addPaymentBtn').addEventListener('click', () => {
         capturePaymentEditor();

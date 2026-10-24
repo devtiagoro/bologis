@@ -114,3 +114,42 @@ Nada desta seção deve ser executado sem autorização explícita. Validar prim
 ### Limitação
 
 O `payment_check` exige `transaction_nsu` e `slug`, e a InfinitePay não oferece consulta por `order_nsu` apenas. Um pedido pago cujo cliente não retornou e cuja notificação nunca chegou não pode ser confirmado automaticamente; ele continua em "Aguardando pagamento" para conferência manual na InfinitePay.
+
+## 10. Catálogo visual com fotos no Google Drive (Etapa 12)
+
+Nada desta seção deve ser executado sem autorização explícita. Validar primeiro no ambiente isolado de homologação.
+
+### Como funciona
+
+- A Central envia a foto pela ação autenticada `saveFlavor`. O navegador redimensiona a foto (lado maior de até 1600 px), remove metadados e a recodifica em WebP, ou em JPEG se o navegador não gerar WebP. O resultado tem no máximo 2 MB.
+- O servidor confere de novo o MIME, a extensão, a assinatura binária, as dimensões, o término do arquivo e o limite de 2 MB. SVG e qualquer outro formato são recusados. O nome do arquivo é gerado pelo servidor.
+- O transporte usa um único POST JSON em base64 (até ~2,8 MB). Somente `saveFlavor` pode passar do limite geral de 256 KB; as demais ações continuam restritas.
+- As fotos ficam em uma única pasta, `BOLOGIS — Fotos do catálogo`, cujo ID é guardado em `FLAVOR_IMAGE_FOLDER_ID`. A pasta não é compartilhada. Cada foto recebe "qualquer pessoa com o link: leitor". Planilha, pasta e demais arquivos não mudam de permissão.
+- A aba `Sabores` guarda somente o ID do arquivo (coluna `Imagem ID`), nunca base64 ou URL. O registro técnico fica na aba oculta `_ImagensSabores`.
+- Uma foto substituída ou removida é marcada como `retired` e **não é apagada**, porque os snapshots de `_ConfigBackups` podem restaurá-la. `cleanupRetiredFlavorImages()` (execução manual) envia à lixeira somente fotos aposentadas há mais de 7 dias que não aparecem em `Sabores` nem nos backups. A lixeira do Drive permite recuperar por 30 dias.
+
+### Limitação da exibição pública
+
+O Google Drive não oferece URL de imagem direta com suporte oficial para sites externos:
+
+- `uc?export=view` deixou de funcionar de forma confiável (403 e bloqueio de cookies de terceiros).
+- `drive.google.com/thumbnail?id=…&sz=w…` funciona para arquivos públicos, mas não é documentado e sofre limite de taxa com muitas imagens.
+- Um link de compartilhamento (`/file/d/…/view`) abre uma página HTML, não uma imagem.
+
+Por isso o frontend usa três camadas, sem novos serviços:
+
+1. `drive.google.com/thumbnail` (640 px nos cards e 1600 px na foto ampliada).
+2. Se a imagem falhar, `GET ?action=getFlavorImage&flavorId=…` no próprio Apps Script devolve a foto em base64. A consulta é feita pelo ID do sabor, nunca pelo ID do arquivo: só fotos registradas pelo BOLOGIS são lidas. O resultado fica em cache por 6 horas. Esse caminho também cobre contas que bloqueiam links públicos.
+3. Se ambos falharem, o card mostra o placeholder da Primeira Fornada, e o sabor continua selecionável.
+
+A CSP passa a aceitar imagens somente de `drive.google.com`, `*.googleusercontent.com` (destino do redirecionamento do thumbnail) e `blob:` (pré-visualização local). `connect-src` e `script-src` não mudam.
+
+### Ativação
+
+1. Fazer backup da planilha (seção 1).
+2. Atualizar o `code.gs` no projeto de homologação.
+3. Executar `setupProject()`. Ele apenas acrescenta os cabeçalhos `Subtítulo`, `Descrição`, `Badge`, `Imagem ID` e `Texto alternativo` à direita da aba `Sabores`, sem apagar linhas.
+4. Executar `setupFlavorImageStorage()` no editor. Ele pede a autorização do Google Drive, cria (ou reutiliza) a pasta e grava `FLAVOR_IMAGE_FOLDER_ID`. Sem essa autorização, o Web App não consegue gravar fotos.
+5. Publicar uma **nova versão** do deployment de homologação. O escopo do Drive só vale para versões publicadas depois da autorização.
+6. Validar em homologação: cadastro sem foto; envio de JPEG, PNG e WebP pelo computador e pelo celular; substituição; remoção; abertura do formulário público em janela anônima (a foto precisa aparecer); fallback com o thumbnail bloqueado no DevTools; conflito de revisão em duas abas; recusa de SVG renomeado.
+7. Repetir os passos 1 a 5 em produção somente depois da aprovação, publicando o Apps Script **antes** do frontend. O frontend antigo continua funcionando com o backend novo: `flavors` não mudou, e salvamentos em lote antigos preservam as colunas novas.
