@@ -1325,7 +1325,7 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 2px var(--accent), 0 12px 26px rgba(168, 95, 66, .16);
     }
-    /* O card é um <label> dentro de .field: anula o estilo de rótulo de formulário. */
+    /* Área clicável do card (role="radio"); anula estilos herdados de .field. */
     .flavor-card-body, .field .flavor-card-body {
       font-size: inherit;
       font-weight: 400;
@@ -1338,7 +1338,9 @@
       color: inherit;
       -webkit-tap-highlight-color: transparent;
     }
-    .flavor-radio:focus-visible + .flavor-card-body { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .flavor-card-body:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .flavor-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+    .add-item-hint { margin: 8px 0 0; }
     .flavor-photo {
       position: relative;
       aspect-ratio: 4 / 3;
@@ -1693,8 +1695,9 @@
                     <button id="itemQuantityIncrease" class="stepper-btn" type="button" aria-label="Aumentar uma fatia">+</button>
                   </div>
                 </div>
-                <button id="addOrderItemBtn" class="secondary-btn add-item-btn" type="button">Adicionar à encomenda</button>
+                <button id="addOrderItemBtn" class="secondary-btn add-item-btn" type="button" aria-describedby="addItemHint" disabled>Adicionar à encomenda</button>
               </div>
+              <p id="addItemHint" class="field-hint add-item-hint" aria-live="polite">Escolha um sabor acima para adicionar à encomenda.</p>
 
               <div id="pricingEstimate" class="pricing-estimate" aria-live="polite"></div>
 
@@ -2813,46 +2816,116 @@
 
       const ZOOM_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
 
+      // Registros antigos guardam a descrição no nome ("Bolo de X (massa..., recheio...)"). Só a exibição é
+      // resumida: o nome completo continua sendo o valor enviado e validado pelo servidor.
+      function flavorDisplayParts(item) {
+        const name = String(item?.name || '').trim();
+        const match = name.match(/^(.+?)\s*\(([^()]+)\)\s*$/);
+        const title = match ? match[1].trim() : name;
+        const detail = match ? match[2].trim() : '';
+        const subtitle = item?.subtitle || detail;
+        const description = item?.description || (item?.subtitle ? detail : '');
+        return { title, subtitle, description };
+      }
+
+      // Etapa 12.1: a seleção não depende mais de <label>/<input type="radio"> ocultos. Esses rádios ficavam
+      // dentro de #orderForm e eram desabilitados junto com os demais campos, e o clique no card não fazia nada.
+      // Agora um único ouvinte delegado na grade trata clique, toque e teclado.
       function renderFlavorOptions() {
         const selected = $('flavorSelect');
         const items = publicFlavorCatalog();
         if (!items.some(item => item.name === selected.value)) selected.value = '';
+        const selectedIndex = items.findIndex(item => item.name === selected.value);
         const grid = $('flavorGrid');
         grid.innerHTML = items.map((item, index) => {
-          const isSelected = item.name === selected.value;
-          const describedBy = item.description ? ` aria-describedby="flavorChoiceSummary-${index}"` : '';
+          const isSelected = index === selectedIndex;
+          const focusable = isSelected || (selectedIndex < 0 && index === 0);
+          const display = flavorDisplayParts(item);
+          const describedBy = display.description ? ` aria-describedby="flavorChoiceSummary-${index}"` : '';
           return `<div class="flavor-card${isSelected ? ' is-selected' : ''}" data-flavor-card="${index}">
-            <input class="flavor-radio sr-only" type="radio" name="flavorChoice" id="flavorChoice-${index}" value="${escapeHtml(item.name)}"${isSelected ? ' checked' : ''}${describedBy}>
-            <label class="flavor-card-body" for="flavorChoice-${index}">
+            <div class="flavor-card-body" role="radio" tabindex="${focusable ? 0 : -1}" aria-checked="${isSelected}" data-flavor-select="${index}" title="${escapeHtml(item.name)}"${describedBy}>
               ${flavorPhotoHtml(item, { badge: true, eager: index < 4, decorative: true })}
               <span class="flavor-card-copy">
-                <strong>${escapeHtml(item.name)}</strong>
-                ${item.subtitle ? `<span class="flavor-subtitle">${escapeHtml(item.subtitle)}</span>` : ''}
-                ${item.description ? `<span class="flavor-summary" id="flavorChoiceSummary-${index}">${escapeHtml(item.description)}</span>` : ''}
+                <strong class="flavor-title">${escapeHtml(display.title)}</strong>
+                ${display.subtitle ? `<span class="flavor-subtitle">${escapeHtml(display.subtitle)}</span>` : ''}
+                ${display.description ? `<span class="flavor-summary" id="flavorChoiceSummary-${index}">${escapeHtml(display.description)}</span>` : ''}
                 <span class="flavor-selected-tag" aria-hidden="true">✓ Selecionado</span>
               </span>
-            </label>
-            <button class="flavor-zoom" type="button" data-flavor-zoom="${index}" aria-label="${escapeHtml(item.imageId ? `Ampliar foto de ${item.name}` : `Ver detalhes de ${item.name}`)}">${ZOOM_ICON}</button>
+            </div>
+            <button class="flavor-zoom" type="button" data-flavor-zoom="${index}" aria-label="${escapeHtml(item.imageId ? `Ampliar foto de ${display.title}` : `Ver detalhes de ${display.title}`)}">${ZOOM_ICON}</button>
           </div>`;
         }).join('') || '<div class="flavor-empty">Nenhum sabor disponível no momento.</div>';
-        qsa('.flavor-radio', grid).forEach(radio => radio.addEventListener('change', () => selectFlavor(radio.value)));
-        qsa('[data-flavor-zoom]', grid).forEach(button => button.addEventListener('click', () => openFlavorImageModal(Number(button.dataset.flavorZoom))));
         bindFlavorImages(grid);
+        updateAddItemState();
+      }
+
+      // Clique/toque no card seleciona; o botão de ampliar é tratado antes e nunca chega à seleção.
+      function handleFlavorGridClick(event) {
+        const zoom = event.target?.closest?.('[data-flavor-zoom]');
+        if (zoom) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          openFlavorImageModal(Number(zoom.dataset.flavorZoom));
+          return 'zoom';
+        }
+        const card = event.target?.closest?.('[data-flavor-card]');
+        const item = card && publicFlavorCatalog()[Number(card.dataset.flavorCard)];
+        if (!item) return '';
+        selectFlavor(item.name);
+        return 'select';
+      }
+
+      // Padrão de grupo de rádio: Enter/Espaço selecionam; as setas movem o foco e a seleção.
+      function handleFlavorGridKeydown(event) {
+        const body = event.target?.closest?.('[data-flavor-select]');
+        if (!body) return '';
+        const items = publicFlavorCatalog();
+        const index = Number(body.dataset.flavorSelect);
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+          event.preventDefault?.();
+          if (items[index]) selectFlavor(items[index].name);
+          return 'select';
+        }
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+        if (!step || !items.length) return '';
+        event.preventDefault?.();
+        const next = (index + step + items.length) % items.length;
+        selectFlavor(items[next].name);
+        $('flavorGrid').querySelector?.(`[data-flavor-select="${next}"]`)?.focus?.();
+        return 'move';
+      }
+
+      // O botão só fica disponível com a fornada aberta e um sabor do catálogo escolhido.
+      function updateAddItemState() {
+        const open = isOrdersOpenToday();
+        const hasFlavor = publicFlavorCatalog().some(item => item.name === $('flavorSelect').value);
+        $('addOrderItemBtn').disabled = !open || !hasFlavor;
+        $('addItemHint').textContent = !open
+          ? 'As encomendas estão encerradas neste período.'
+          : hasFlavor ? '' : 'Escolha um sabor acima para adicionar à encomenda.';
+        $('addItemHint').classList.toggle('hidden', open && hasFlavor);
       }
 
       function selectFlavor(name) {
-        const item = publicFlavorCatalog().find(flavor => flavor.name === name);
+        const items = publicFlavorCatalog();
+        const selectedIndex = items.findIndex(flavor => flavor.name === name);
+        const item = items[selectedIndex];
         $('flavorSelect').value = item ? item.name : '';
         qsa('.flavor-card', $('flavorGrid')).forEach(card => {
-          const radio = card.querySelector('.flavor-radio');
-          const checked = Boolean(item) && radio?.value === item.name;
-          if (radio) radio.checked = checked;
+          const index = Number(card.dataset.flavorCard);
+          const checked = Boolean(item) && index === selectedIndex;
           card.classList.toggle('is-selected', checked);
+          const body = card.querySelector('[data-flavor-select]');
+          if (body) {
+            body.setAttribute('aria-checked', String(checked));
+            body.setAttribute('tabindex', checked || (!item && index === 0) ? '0' : '-1');
+          }
         });
         if (item) {
           $('flavorSelect').removeAttribute('aria-invalid');
           qsa('.flavor-field + .field-error').forEach(element => element.remove());
         }
+        updateAddItemState();
         updateSummary();
       }
 
@@ -2863,12 +2936,13 @@
         const item = publicFlavorCatalog()[index];
         if (!item) return false;
         flavorImageModalState.index = index;
-        $('flavorImageModalTitle').textContent = item.name;
+        const display = flavorDisplayParts(item);
+        $('flavorImageModalTitle').textContent = display.title;
         $('flavorImageModalBadge').textContent = item.badge;
         $('flavorImageModalBadge').classList.toggle('hidden', !item.badge);
-        $('flavorImageModalSubtitle').textContent = item.subtitle;
-        $('flavorImageModalSubtitle').classList.toggle('hidden', !item.subtitle);
-        $('flavorImageModalDescription').textContent = item.description || 'Sabor artesanal da Primeira Fornada.';
+        $('flavorImageModalSubtitle').textContent = display.subtitle;
+        $('flavorImageModalSubtitle').classList.toggle('hidden', !display.subtitle);
+        $('flavorImageModalDescription').textContent = display.description || 'Sabor artesanal da Primeira Fornada.';
         const photo = $('flavorImageModalPhoto');
         photo.className = `flavor-photo${flavorHasImage(item) ? '' : ' is-placeholder'}`;
         photo.innerHTML = flavorPhotoInner(item, { width: 1600, eager: true });
@@ -2901,7 +2975,7 @@
         const item = publicFlavorCatalog()[index];
         if (!item) return;
         selectFlavor(item.name);
-        closeFlavorImageModal($('flavorGrid').querySelector?.(`#flavorChoice-${index}`));
+        closeFlavorImageModal($('flavorGrid').querySelector?.(`[data-flavor-select="${index}"]`));
       }
 
       function normalizeClientOrderItems(items) {
@@ -2933,7 +3007,7 @@
         if (!flavor) {
           showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
           // O campo é oculto: o foco vai para o primeiro card da grade.
-          $('flavorGrid').querySelector?.('.flavor-radio')?.focus?.();
+          $('flavorGrid').querySelector?.('[data-flavor-select][tabindex="0"]')?.focus?.();
           return;
         }
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
@@ -3320,7 +3394,7 @@
         $('deadlineSummary').textContent = `O pedido será registrado como aguardando pagamento. A reserva será confirmada manualmente após o pagamento, até ${deadlineText}.`;
         $('successDeadlineNote').textContent = `A reserva será confirmada manualmente após a conferência do pagamento, até ${deadlineText}.`;
         qsa('#orderForm input, #orderForm select, #orderForm textarea, #submitOrderBtn').forEach(element => element.disabled = !open);
-        $('addOrderItemBtn').disabled = !open;
+        updateAddItemState();
         $('orderDate').value = toISODateLocal(delivery);
         if (!open) $('submitOrderBtn').disabled = true;
       }
@@ -5354,6 +5428,8 @@
       $('itemQuantityDecrease').addEventListener('click', () => setBuilderQuantity(builderQuantity - 1));
       $('itemQuantityIncrease').addEventListener('click', () => setBuilderQuantity(builderQuantity + 1));
       $('addOrderItemBtn').addEventListener('click', addSelectedOrderItem);
+      $('flavorGrid').addEventListener('click', handleFlavorGridClick);
+      $('flavorGrid').addEventListener('keydown', handleFlavorGridKeydown);
 
       $('copyPublicLinkBtn').addEventListener('click', copyPublicUrl);
 

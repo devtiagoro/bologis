@@ -356,7 +356,7 @@ const CATALOG_PROBE = `(async () => {
   result.selection = {
     afterFirst: selected(),
     value: document.getElementById('flavorSelect').value,
-    radioChecked: cards[1].querySelector('.flavor-radio').checked,
+    radioChecked: cards[1].querySelector('[data-flavor-select]').getAttribute('aria-checked') === 'true',
     highlighted: getComputedStyle(cards[1]).boxShadow !== 'none'
   };
   document.getElementById('addOrderItemBtn').click();
@@ -370,6 +370,45 @@ const CATALOG_PROBE = `(async () => {
   grid.scrollIntoView({ block: 'start', behavior: 'instant' });
   await frame();
   return result;
+})()`;
+
+// Etapa 12.1: helpers para entrada real (mouse, teclado e toque via CDP) sobre os cards.
+const CARD_INPUT_HELPERS = `(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 60 && !document.querySelectorAll('#flavorGrid .flavor-card').length; attempt++) await wait(100);
+  const cards = () => [...document.querySelectorAll('#flavorGrid .flavor-card')];
+  const center = rect => ({ x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) });
+  window.__cards = {
+    // Ponto na foto, no canto oposto ao botão de ampliar; ou no título do card.
+    point(index, part) {
+      const card = cards()[index];
+      card.scrollIntoView({ block: 'center', behavior: 'instant' });
+      if (part === 'zoom') return center(card.querySelector('.flavor-zoom').getBoundingClientRect());
+      if (part === 'title') return center(card.querySelector('.flavor-title').getBoundingClientRect());
+      const photo = card.querySelector('.flavor-photo').getBoundingClientRect();
+      return { x: Math.round(photo.left + photo.width * 0.25), y: Math.round(photo.top + photo.height * 0.75) };
+    },
+    focus(index) { cards()[index].querySelector('[data-flavor-select]').focus(); return document.activeElement?.dataset.flavorSelect; },
+    state() {
+      return {
+        value: document.getElementById('flavorSelect').value,
+        selected: cards().map(card => card.classList.contains('is-selected')),
+        checked: cards().map(card => card.querySelector('[data-flavor-select]').getAttribute('aria-checked') === 'true'),
+        tag: cards().map(card => getComputedStyle(card.querySelector('.flavor-selected-tag')).display !== 'none'),
+        addDisabled: document.getElementById('addOrderItemBtn').disabled,
+        hint: document.getElementById('addItemHint').classList.contains('hidden') ? '' : document.getElementById('addItemHint').textContent,
+        modalOpen: document.getElementById('flavorImageModal').open,
+        focus: document.activeElement?.dataset?.flavorZoom !== undefined ? 'zoom-' + document.activeElement.dataset.flavorZoom : (document.activeElement?.dataset?.flavorSelect !== undefined ? 'card-' + document.activeElement.dataset.flavorSelect : document.activeElement?.id || ''),
+        cursor: getComputedStyle(cards()[0].querySelector('.flavor-card-body')).cursor,
+        items: [...document.querySelectorAll('#orderItems .order-item strong')].map(element => element.textContent),
+        quantity: document.getElementById('itemQuantity').textContent,
+        estimate: document.getElementById('pricingEstimate').textContent,
+        pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+      };
+    },
+    controlPoint(id) { const element = document.getElementById(id); element.scrollIntoView({ block: 'center', behavior: 'instant' }); return center(element.getBoundingClientRect()); }
+  };
+  return cards().length;
 })()`;
 
 // Etapa 12: lista do catálogo na central e modal de cadastro/edição.
@@ -1288,6 +1327,93 @@ const server = http.createServer((request, response) => {
         assert.deepEqual(catalog.selection.orderItems, ['Ninho com morango · 1 fatia', 'Cenoura · 2 fatias'], `Vários sabores não foram adicionados em ${label}.`);
         assert.match(catalog.selection.summary, /54,94/, `Preço progressivo incorreto com vários sabores em ${label}.`);
 
+        // Etapa 12.1: entrada real (sem .click() sintético) sobre os cards.
+        const inputPage = await devTools.openPage(`${origin}/?public=1`, viewport, { driveImages });
+        assert.equal(await inputPage.evaluate(CARD_INPUT_HELPERS), 4);
+        const cardState = () => inputPage.evaluate('window.__cards.state()');
+        const point = (index, part) => inputPage.evaluate(`window.__cards.point(${index}, '${part}')`);
+        const key = async (keyName, code, keyCode, text) => {
+          await inputPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, code, windowsVirtualKeyCode: keyCode, text });
+          await inputPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: keyCode });
+          await sleep(80);
+        };
+        const initial = await cardState();
+        assert.equal(initial.addDisabled, true, `"Adicionar" habilitado sem sabor em ${label}.`);
+        assert.match(initial.hint, /Escolha um sabor/, `Orientação ausente sem sabor em ${label}.`);
+        assert.equal(initial.cursor, 'pointer', `Cursor do card incorreto em ${label}.`);
+
+        await mouseClick(inputPage, await point(1, 'photo'));
+        await sleep(80);
+        let picked = await cardState();
+        assert.equal(picked.value, 'Ninho com morango', `Clique na foto do card não selecionou em ${label}.`);
+        assert.deepEqual(picked.selected, [false, true, false, false], `Destaque incorreto após clique na foto em ${label}.`);
+        assert.deepEqual(picked.checked, picked.selected, `aria-checked divergente em ${label}.`);
+        assert.deepEqual(picked.tag, picked.selected, `Indicador "Selecionado" divergente em ${label}.`);
+        assert.equal(picked.addDisabled, false, `"Adicionar" não habilitou após a seleção em ${label}.`);
+        assert.equal(picked.hint, '');
+
+        await mouseClick(inputPage, await point(0, 'zoom'));
+        await sleep(200);
+        picked = await cardState();
+        assert.equal(picked.modalOpen, true, `Ícone de ampliar não abriu a foto em ${label}.`);
+        assert.equal(picked.value, 'Ninho com morango', `Ícone de ampliar alterou a seleção em ${label}.`);
+        await key('Escape', 'Escape', 27);
+        picked = await cardState();
+        assert.equal(picked.modalOpen, false, `Escape não fechou a foto em ${label}.`);
+        assert.equal(picked.value, 'Ninho com morango', `Fechar a foto alterou a seleção em ${label}.`);
+        assert.equal(picked.focus, 'zoom-0', `Foco não voltou ao ícone de ampliar em ${label}.`);
+        assert.deepEqual(picked.items, [], `Ampliar adicionou item à encomenda em ${label}.`);
+
+        await mouseClick(inputPage, await point(2, 'title'));
+        await sleep(80);
+        picked = await cardState();
+        assert.equal(picked.value, 'Cenoura', `Sabor sem foto não foi selecionado pelo título em ${label}.`);
+        assert.deepEqual(picked.selected, [false, false, true, false], `Seleção anterior não foi substituída em ${label}.`);
+
+        await inputPage.evaluate('window.__cards.focus(3)');
+        await key('Enter', 'Enter', 13, '\r');
+        assert.equal((await cardState()).value, 'Red Velvet', `Enter não selecionou o card em ${label}.`);
+        await inputPage.evaluate('window.__cards.focus(0)');
+        await key(' ', 'Space', 32, ' ');
+        assert.equal((await cardState()).value, 'Chocolate', `Espaço não selecionou o card em ${label}.`);
+        await key('ArrowRight', 'ArrowRight', 39);
+        picked = await cardState();
+        assert.equal(picked.value, 'Ninho com morango', `Seta não moveu a seleção em ${label}.`);
+        assert.equal(picked.focus, 'card-1', `Seta não moveu o foco em ${label}.`);
+
+        await inputPage.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+        const tap = await point(2, 'photo');
+        await inputPage.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [tap] });
+        await inputPage.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await sleep(250);
+        assert.equal((await cardState()).value, 'Cenoura', `Toque no card não selecionou em ${label}.`);
+        const zoomTap = await point(3, 'zoom');
+        await inputPage.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [zoomTap] });
+        await inputPage.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await sleep(250);
+        picked = await cardState();
+        assert.equal(picked.modalOpen, true, `Toque no ícone não abriu a foto em ${label}.`);
+        assert.equal(picked.value, 'Cenoura', `Toque no ícone alterou a seleção em ${label}.`);
+        await mouseClick(inputPage, await inputPage.evaluate("window.__cards.controlPoint('flavorImageModalClose')"));
+        await inputPage.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await sleep(150);
+
+        // Cenoura × 3 e depois Chocolate × 1, pelo contador e pelo botão reais.
+        const plus = await inputPage.evaluate("window.__cards.controlPoint('itemQuantityIncrease')");
+        await mouseClick(inputPage, plus);
+        await mouseClick(inputPage, plus);
+        assert.match((await cardState()).estimate, /^3 fatias[\s\S]*49,97[\s\S]*Economia/, `Prévia não acompanhou o contador em ${label}.`);
+        await mouseClick(inputPage, await inputPage.evaluate("window.__cards.controlPoint('addOrderItemBtn')"));
+        await mouseClick(inputPage, await point(0, 'photo'));
+        await mouseClick(inputPage, await inputPage.evaluate("window.__cards.controlPoint('addOrderItemBtn')"));
+        await sleep(100);
+        picked = await cardState();
+        assert.deepEqual(picked.items, ['Cenoura · 3 fatias', 'Chocolate · 1 fatia'], `Itens adicionados incorretos em ${label}.`);
+        assert.equal(picked.quantity, '1', `Contador não voltou a 1 em ${label}.`);
+        assert.equal(picked.pageOverflow, false, `Seleção provocou overflow em ${label}.`);
+        await inputPage.screenshot(path.join(tempDir, `public-card-selection-${label}.png`));
+        await inputPage.close();
+
         const adminCatalogPage = await devTools.openPage(`${origin}/admin-preview`, viewport, { driveImages });
         const adminCatalog = await adminCatalogPage.evaluate(ADMIN_CATALOG_PROBE);
         await adminCatalogPage.screenshot(path.join(tempDir, `admin-catalog-modal-${label}.png`));
@@ -1374,6 +1500,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS catálogo visual: foto do Drive, fallback do Apps Script e placeholder, proporção 4:3 reservada e lazy loading nas seis resoluções');
     console.log('PASS seleção por card com destaque único, vários sabores e preço progressivo; ampliar a foto não seleciona');
     console.log('PASS foto ampliada: modal, foco inicial, descrição completa, Escape e foco restaurado nas seis resoluções');
+    console.log('PASS seleção direta com entrada real: clique na foto e no título, toque, Enter, Espaço e setas; ampliar (mouse e toque) não seleciona; "Adicionar" só com sabor escolhido');
     console.log('PASS central: lista com miniatura, badge e status; modal de edição contido e com alvos de 44px nas seis resoluções');
     console.log('PASS envio de foto pela central: SVG disfarçado recusado, otimização real para WebP 1600×1200 ≤ 2 MB, pré-visualização e saveFlavor sem ID/URL de arquivo (API simulada)');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);

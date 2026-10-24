@@ -18,6 +18,10 @@ source = source.replace(
         renderFlavorOptions,
         publicFlavorCatalog,
         selectFlavor,
+        handleFlavorGridClick,
+        handleFlavorGridKeydown,
+        flavorDisplayParts,
+        applyPublicAvailability,
         openFlavorImageModal,
         closeFlavorImageModal,
         chooseFlavorFromModal,
@@ -2404,7 +2408,8 @@ test('formulário mostra um card por sabor com foto do Drive, lazy loading e pro
   api.renderFlavorOptions();
   const grid = runtime.get('flavorGrid').innerHTML;
   assert.equal((grid.match(/class="flavor-card[ "]/g) || []).length, 3);
-  assert.equal((grid.match(/type="radio" name="flavorChoice"/g) || []).length, 3);
+  assert.equal((grid.match(/role="radio" tabindex="(0|-1)" aria-checked="false" data-flavor-select=/g) || []).length, 3);
+  assert.doesNotMatch(grid, /<input|<label/, 'A seleção não depende de rádios ocultos que o formulário desabilita.');
   assert.match(grid, /src="https:\/\/drive\.google\.com\/thumbnail\?id=driveFileId_Chocolate123&amp;sz=w640"/);
   assert.match(grid, /width="640" height="480" loading="eager"/);
   assert.match(grid, /<span class="flavor-badge">Mais pedido<\/span>/);
@@ -2595,6 +2600,123 @@ test('assinatura do arquivo é conferida no navegador antes da otimização', ()
   assert.equal(api.detectImageType([...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WEBP')]), 'image/webp');
   assert.equal(api.detectImageType([...Buffer.from('<svg xmlns=')]), '');
   assert.equal(api.detectImageType([...Buffer.from('MZ\x90\x00')]), '');
+});
+
+// ---- Etapa 12.1: seleção direta pelo card ----
+
+// Alvo de clique simulado: closest() devolve o elemento correspondente ao seletor, como no DOM real.
+function gridTarget({ card, zoom, select }) {
+  const found = {
+    '[data-flavor-zoom]': zoom === undefined ? null : { dataset: { flavorZoom: String(zoom) } },
+    '[data-flavor-card]': card === undefined ? null : { dataset: { flavorCard: String(card) } },
+    '[data-flavor-select]': select === undefined ? null : { dataset: { flavorSelect: String(select) } }
+  };
+  return { closest: selector => found[selector] || null };
+}
+
+function openCatalogRuntime() {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({ ...visualCatalog, orderWindow: { open: true } });
+  api.renderFlavorOptions();
+  return { runtime, api };
+}
+
+test('clique no card (texto ou foto) seleciona e habilita "Adicionar à encomenda"', () => {
+  const { runtime, api } = openCatalogRuntime();
+  assert.equal(runtime.get('addOrderItemBtn').disabled, true, 'Sem sabor escolhido o botão fica desabilitado.');
+  assert.match(runtime.get('addItemHint').textContent, /Escolha um sabor/);
+  assert.equal(api.handleFlavorGridClick({ target: gridTarget({ card: 0, select: 0 }) }), 'select');
+  assert.equal(runtime.get('flavorSelect').value, 'Chocolate');
+  assert.equal(runtime.get('addOrderItemBtn').disabled, false);
+  assert.ok(runtime.get('addItemHint').classList.contains('hidden'));
+  // Foto do card (fora do botão de ampliar) também seleciona.
+  api.handleFlavorGridClick({ target: gridTarget({ card: 1, select: 1 }) });
+  assert.equal(runtime.get('flavorSelect').value, 'Ninho', 'Selecionar outro card substitui a seleção anterior.');
+});
+
+test('ícone de ampliar abre a foto sem selecionar nem adicionar; fechar preserva a seleção anterior', () => {
+  const { runtime, api } = openCatalogRuntime();
+  api.handleFlavorGridClick({ target: gridTarget({ card: 1, select: 1 }) });
+  let stopped = false;
+  const result = api.handleFlavorGridClick({ target: gridTarget({ card: 0, zoom: 0 }), stopPropagation() { stopped = true; }, preventDefault() {} });
+  assert.equal(result, 'zoom');
+  assert.equal(stopped, true, 'O clique no ícone não se propaga para o card.');
+  assert.equal(api.flavorImageModalIndex(), 0);
+  assert.equal(runtime.get('flavorSelect').value, 'Ninho', 'Ampliar outro sabor não troca a seleção.');
+  assert.equal(api.getOrderItems().length, 0, 'Ampliar não adiciona itens.');
+  api.closeFlavorImageModal();
+  assert.equal(runtime.get('flavorSelect').value, 'Ninho');
+  assert.equal(runtime.get('addOrderItemBtn').disabled, false);
+});
+
+test('sabor sem fotografia é selecionável pelo card', () => {
+  const { runtime, api } = openCatalogRuntime();
+  api.handleFlavorGridClick({ target: gridTarget({ card: 2, select: 2 }) });
+  assert.equal(runtime.get('flavorSelect').value, 'Cenoura');
+  assert.equal(runtime.get('addOrderItemBtn').disabled, false);
+});
+
+test('teclado: Enter e Espaço selecionam; setas movem a seleção', () => {
+  const { runtime, api } = openCatalogRuntime();
+  let prevented = 0;
+  const key = (keyName, index) => api.handleFlavorGridKeydown({ key: keyName, target: gridTarget({ select: index }), preventDefault() { prevented += 1; } });
+  assert.equal(key('Enter', 1), 'select');
+  assert.equal(runtime.get('flavorSelect').value, 'Ninho');
+  assert.equal(key(' ', 2), 'select');
+  assert.equal(runtime.get('flavorSelect').value, 'Cenoura');
+  assert.equal(key('ArrowRight', 2), 'move');
+  assert.equal(runtime.get('flavorSelect').value, 'Chocolate', 'A seta volta ao primeiro sabor depois do último.');
+  assert.equal(key('ArrowLeft', 0), 'move');
+  assert.equal(runtime.get('flavorSelect').value, 'Cenoura');
+  assert.equal(key('Tab', 0), '', 'Tab mantém a navegação padrão.');
+  assert.equal(prevented, 4, 'Espaço não rola a página e as setas não rolam a grade.');
+});
+
+test('adicionar usa exatamente o sabor e a quantidade escolhidos, com limites e preço progressivo preservados', () => {
+  const { runtime, api } = openCatalogRuntime();
+  api.handleFlavorGridClick({ target: gridTarget({ card: 0, select: 0 }) });
+  api.setBuilderQuantity(3);
+  assert.match(runtime.get('pricingEstimate').innerHTML, /49,97[\s\S]*Economia/);
+  api.addSelectedOrderItem();
+  assert.equal(api.builderQuantity(), 1, 'Contador volta a 1 após adicionar.');
+  api.handleFlavorGridClick({ target: gridTarget({ card: 2, select: 2 }) });
+  api.setBuilderQuantity(2);
+  api.addSelectedOrderItem();
+  assert.deepEqual(JSON.parse(JSON.stringify(api.getOrderItems())), [{ flavor: 'Chocolate', quantity: 3 }, { flavor: 'Cenoura', quantity: 2 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.makeOrderPayload().items)), [{ flavor: 'Chocolate', quantity: 3 }, { flavor: 'Cenoura', quantity: 2 }]);
+  // 20 por sabor: 3 + 18 é recusado.
+  api.handleFlavorGridClick({ target: gridTarget({ card: 0, select: 0 }) });
+  api.setBuilderQuantity(18);
+  api.addSelectedOrderItem();
+  assert.equal(api.getOrderItems()[0].quantity, 3);
+});
+
+test('fornada encerrada mantém "Adicionar" desabilitado com explicação, mesmo com sabor escolhido', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({ ...visualCatalog, orderWindow: { open: false, message: 'Encerrado' } });
+  api.renderFlavorOptions();
+  api.handleFlavorGridClick({ target: gridTarget({ card: 0, select: 0 }) });
+  assert.equal(runtime.get('flavorSelect').value, 'Chocolate', 'O cliente ainda pode explorar o catálogo.');
+  assert.equal(runtime.get('addOrderItemBtn').disabled, true);
+  assert.match(runtime.get('addItemHint').textContent, /encerradas/);
+});
+
+test('nome antigo com descrição entre parênteses é resumido só na exibição', () => {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  const legacy = 'Bolo de Choconinho (Massa branca, recheio de brigadeiro e creme de ninho)';
+  assert.deepEqual(JSON.parse(JSON.stringify(api.flavorDisplayParts({ name: legacy }))), { title: 'Bolo de Choconinho', subtitle: 'Massa branca, recheio de brigadeiro e creme de ninho', description: '' });
+  assert.deepEqual(JSON.parse(JSON.stringify(api.flavorDisplayParts({ name: legacy, subtitle: 'Clássico' }))), { title: 'Bolo de Choconinho', subtitle: 'Clássico', description: 'Massa branca, recheio de brigadeiro e creme de ninho' });
+  assert.equal(api.flavorDisplayParts({ name: 'Red Velvet' }).title, 'Red Velvet');
+  api.setConfig({ flavors: [legacy], sizes: [], payments: [], orderWindow: { open: true } });
+  api.renderFlavorOptions();
+  const grid = runtime.get('flavorGrid').innerHTML;
+  assert.match(grid, /<strong class="flavor-title">Bolo de Choconinho<\/strong>/);
+  assert.match(grid, /title="Bolo de Choconinho \(Massa branca/, 'Nome completo continua disponível no card.');
+  api.handleFlavorGridClick({ target: gridTarget({ card: 0, select: 0 }) });
+  assert.equal(runtime.get('flavorSelect').value, legacy, 'O valor enviado ao servidor é o nome persistido.');
 });
 
 test('CSP libera somente fotos do Drive e blobs locais, sem abrir scripts ou conexões', () => {
