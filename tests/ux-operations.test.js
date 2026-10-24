@@ -54,7 +54,14 @@ source = source.replace(
         builderQuantity() { return builderQuantity; },
         changeOrderStatus,
         moveOrderToStatus,
-        orderStatusTransition,
+        handleKanbanCardClick,
+        openOrderModal,
+        closeOrderModal,
+        modalOrderId() { return orderModalState.orderId; },
+        startDrag(id) { draggedOrderId = id; },
+        endDrag() { draggedOrderId = ''; suppressCardClickUntil = Date.now() + 350; },
+        bodyHas(name) { return document.body.classList.contains(name); },
+        loadAdminOrders,
         kanbanColumns,
         kanbanDropKind,
         handleKanbanDrop,
@@ -120,6 +127,7 @@ function createRuntime(fetchImpl = async () => ({ ok: true, json: async () => ({
     history: { replaceState(_state, _title, url) { window.replacedUrl = url; } },
     crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' },
     confirm: runtimeOptions.confirm || (() => true),
+    matchMedia: runtimeOptions.matchMedia,
     setTimeout: callback => { callback(); return 1; },
     clearTimeout() {}, scrollTo() {}, open() {}
   };
@@ -1189,28 +1197,6 @@ test('kanban: distribui os pedidos pelas colunas e não perde status legados ou 
   assert.match(other.markup, /status-badge" data-status="Retirado na loja">Retirado na loja/);
 });
 
-test('kanban: card resume o pedido e mantém detalhes e dados técnicos dentro de "Mais informações"', () => {
-  const { layout } = kanbanRuntime();
-  const card = layout()[0].markup;
-  const surface = card.split('<details class="order-details">')[0];
-  assert.match(surface, /#KANB01/);
-  assert.match(surface, /Ana Aguardando/);
-  assert.match(surface, /Chocolate com brigadeiro · 2 fatias/);
-  assert.match(surface, /25\/10\/2026 · 10:00/);
-  assert.match(surface, /order-fulfillment">Entrega</);
-  assert.match(surface, /R\$\s*47,97/);
-  assert.doesNotMatch(surface, /invoice-kanban-tecnico|99999-1111|Sem nozes|Rua Fictícia|checkout\.infinitepay/);
-  const details = card.split('<details class="order-details">')[1];
-  assert.match(details, /wa\.me\/5534999991111/);
-  assert.match(details, /Rua Fictícia/);
-  assert.match(details, /Sem nozes/);
-  assert.match(details, /invoice-kanban-tecnico/);
-  assert.match(details, /Conferir na InfinitePay/);
-  assert.match(details, /Abrir checkout/);
-  assert.match(layout()[1].markup, /order-fulfillment">Retirada</);
-  assert.match(layout()[4].markup, /order-fulfillment">Não informado</);
-});
-
 test('kanban: arrastar para outra coluna só consolida após resposta positiva', async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -1283,105 +1269,150 @@ test('kanban: card acompanha a confirmação automática da InfinitePay', async 
   assert.equal(k.statusUpdates().length, 0, 'A confirmação automática não passa pela movimentação manual.');
 });
 
-test('kanban: arrastar para Confirmado exige confirmação manual explícita do pagamento', async () => {
-  const prompts = [];
-  let accept = false;
-  const k = kanbanRuntime(savedStatus, { confirm: message => { prompts.push(message); return accept; } });
-  assert.equal((await k.api.handleKanbanDrop('PF-20261020-120000-KANB01', 'Confirmado')).reason, 'dismissed');
-  assert.equal(k.requests.length, 0);
-  assert.match(prompts[0], /Confirmar manualmente o pagamento do pedido #KANB01/);
-  assert.match(prompts[0], /mover o pedido não valida pagamento/);
-  assert.equal(columnOf(k.runtime, 'PF-20261020-120000-KANB01'), 'Aguardando pagamento');
-  accept = true;
-  same(await k.api.handleKanbanDrop('PF-20261020-120000-KANB01', 'Confirmado'), { moved: true });
-  assert.equal(k.statusUpdates()[0].manualPaymentConfirmation, true);
-  assert.equal(k.statusUpdates()[0].confirmTransition, undefined);
-});
-
-test('kanban: produção sem pagamento confirmado e reversão de pagamento são bloqueadas sem requisição', async () => {
-  const k = kanbanRuntime(savedStatus);
-  for (const [id, target, message] of [
-    ['PF-20261020-120000-KANB01', 'Em produção', /Confirme o pagamento antes/],
-    ['PF-20261020-120000-KANB01', 'Concluído', /Confirme o pagamento antes/],
-    ['PF-K-2', 'Aguardando pagamento', /não voltam para "Aguardando pagamento"/],
-    ['PF-K-6', 'Em produção', /Confirme o pagamento antes/]
-  ]) {
-    assert.equal(k.api.kanbanDropKind(id, target), 'blocked');
-    assert.equal((await k.api.handleKanbanDrop(id, target)).reason, 'blocked');
-    assert.match(k.runtime.get('ordersMessage').textContent, message);
+test('kanban: movimentação livre em todas as combinações de status, sem diálogos', async () => {
+  const statuses = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
+  for (const from of statuses) {
+    for (const to of statuses.filter(status => status !== from)) {
+      let prompts = 0;
+      const k = kanbanRuntime(savedStatus, { confirm: () => { prompts += 1; return false; } });
+      k.api.setOrders([{ ...kanbanOrders[1], status: from }]);
+      k.api.renderLocalOrders();
+      same(await k.api.handleKanbanDrop('PF-K-2', to), { moved: true }, `${from} → ${to}`);
+      assert.equal(prompts, 0, `${from} → ${to} não pode pedir confirmação`);
+      assert.equal(columnOf(k.runtime, 'PF-K-2'), to, `${from} → ${to}`);
+      same(k.statusUpdates().map(({ adminToken, ...payload }) => payload), [{ action: 'updateOrderStatus', orderId: 'PF-K-2', status: to, expectedStatus: from }]);
+    }
   }
-  assert.equal(k.requests.length, 0);
 });
 
-test('kanban: cancelamento pede confirmação e envia autorização explícita', async () => {
-  const prompts = [];
-  let accept = false;
-  const k = kanbanRuntime(savedStatus, { confirm: message => { prompts.push(message); return accept; } });
-  assert.equal((await k.api.handleKanbanDrop('PF-K-3', 'Cancelado')).reason, 'dismissed');
-  assert.equal(k.requests.length, 0);
-  assert.equal(columnOf(k.runtime, 'PF-K-3'), 'Em produção');
-  assert.match(prompts[0], /Cancelar o pedido #PF-K-3 \(Célia Produção\)\?/);
-  accept = true;
-  await k.api.handleKanbanDrop('PF-K-3', 'Cancelado');
-  assert.equal(k.statusUpdates()[0].confirmTransition, true);
-  assert.equal(k.statusUpdates()[0].manualPaymentConfirmation, undefined);
-  assert.equal(columnOf(k.runtime, 'PF-K-3'), 'Cancelado');
+test('kanban: pula etapas, volta, reabre e reativa cancelados', async () => {
+  const k = kanbanRuntime(savedStatus, { confirm: () => { throw new Error('Diálogo inesperado'); } });
+  const id = 'PF-20261020-120000-KANB01';
+  const path = ['Concluído', 'Em produção', 'Confirmado', 'Aguardando pagamento', 'Cancelado', 'Em produção'];
+  for (const status of path) {
+    same(await k.api.handleKanbanDrop(id, status), { moved: true }, status);
+    assert.equal(columnOf(k.runtime, id), status);
+  }
+  same(k.statusUpdates().map(payload => [payload.expectedStatus, payload.status]), [
+    ['Aguardando pagamento', 'Concluído'], ['Concluído', 'Em produção'], ['Em produção', 'Confirmado'],
+    ['Confirmado', 'Aguardando pagamento'], ['Aguardando pagamento', 'Cancelado'], ['Cancelado', 'Em produção']
+  ]);
+  assert.equal(k.statusUpdates().some(payload => 'manualPaymentConfirmation' in payload || 'confirmTransition' in payload), false);
 });
 
-test('kanban: reabrir pedido concluído exige confirmação', async () => {
-  const prompts = [];
-  const k = kanbanRuntime(savedStatus, { confirm: message => { prompts.push(message); return true; } });
-  await k.api.handleKanbanDrop('PF-K-4', 'Em produção');
-  assert.match(prompts[0], /Reabrir o pedido #PF-K-4 \(Davi Concluído\) em "Em produção"/);
-  same(k.statusUpdates().map(payload => [payload.expectedStatus, payload.status, payload.confirmTransition]), [['Concluído', 'Em produção', true]]);
-  assert.equal(columnOf(k.runtime, 'PF-K-4'), 'Em produção');
-  // Avanços operacionais simples não interrompem com diálogos.
-  await k.api.handleKanbanDrop('PF-K-2', 'Em produção');
-  assert.equal(prompts.length, 1);
-});
-
-test('kanban: pedido cancelado fica travado e não é arrastável', async () => {
-  const k = kanbanRuntime(savedStatus);
+test('kanban: pedido cancelado continua arrastável e com todos os destinos', () => {
+  const k = kanbanRuntime();
   const cancelled = k.layout()[4].markup;
-  assert.match(cancelled, /draggable="false"/);
-  assert.match(cancelled, /Pedido cancelado: movimentação bloqueada\./);
-  assert.doesNotMatch(cancelled, /kanban-move-select/);
+  assert.match(cancelled, /data-kanban-card="PF-K-5"[^>]*draggable="true"/);
+  assert.doesNotMatch(cancelled, /bloquead|indisponível|disabled/);
   for (const status of ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído']) {
-    assert.equal((await k.api.handleKanbanDrop('PF-K-5', status)).reason, 'blocked');
+    assert.match(cancelled, new RegExp(`<option value="${status}">${status}</option>`));
   }
-  assert.equal(k.requests.length, 0);
+  assert.equal(k.api.kanbanDropKind('PF-K-5', 'Em produção'), 'allowed');
 });
 
-test('kanban: controle de movimentação por toque e teclado usa select nativo com destinos válidos', async () => {
+test('kanban: "Mover para…" oferece todos os destinos válidos por toque e teclado', async () => {
   const k = kanbanRuntime(savedStatus);
   const waiting = k.layout()[0].markup;
   assert.match(waiting, /<label class="kanban-move"><span class="sr-only">Mover pedido #KANB01 para<\/span><select class="control kanban-move-select"/);
   assert.match(waiting, /<option value="">Mover para…<\/option>/);
-  assert.match(waiting, /value="Confirmado" >Confirmado · confirmação manual/);
-  assert.match(waiting, /value="Em produção" disabled>Em produção · indisponível/);
-  assert.match(waiting, /value="Cancelado" >Cancelado · pede confirmação/);
+  for (const status of ['Confirmado', 'Em produção', 'Concluído', 'Cancelado']) {
+    assert.match(waiting, new RegExp(`<option value="${status}">${status}</option>`));
+  }
   assert.doesNotMatch(waiting, /value="Aguardando pagamento"/, 'O status atual não aparece como destino.');
-  assert.match(k.layout()[1].markup, /value="Em produção" >Em produção<\/option>/);
-  same(await k.api.moveOrderToStatus('PF-K-2', 'Em produção'), { moved: true });
-  assert.equal(columnOf(k.runtime, 'PF-K-2'), 'Em produção');
+  assert.doesNotMatch(waiting, /disabled|indisponível|pede confirmação|confirmação manual/);
+  same(await k.api.moveOrderToStatus('PF-20261020-120000-KANB01', 'Concluído'), { moved: true });
+  assert.equal(columnOf(k.runtime, 'PF-20261020-120000-KANB01'), 'Concluído');
 });
 
-test('kanban: Lista usa as mesmas regras e desabilita destinos bloqueados', async () => {
-  const prompts = [];
-  const runtime = createRuntime(async (_url, options) => apiResponse(savedStatus(JSON.parse(options.body))), { confirm: message => { prompts.push(message); return false; } });
-  const api = runtime.window.__uxTest;
-  api.setOrders(kanbanOrders.map(order => ({ ...order })));
-  api.setOrderView({ ...noFilters });
-  api.renderLocalOrders();
-  const waitingOptions = api.renderStatusOptions('Aguardando pagamento');
-  assert.match(waitingOptions, /value="Em produção" {2}disabled/);
-  assert.match(waitingOptions, /value="Concluído" {2}disabled/);
-  assert.doesNotMatch(waitingOptions, /value="Confirmado" {2}disabled/);
-  assert.match(api.renderStatusOptions('Cancelado'), /value="Confirmado" {2}disabled/);
-  assert.equal((await api.moveOrderToStatus('PF-K-3', 'Cancelado')).reason, 'dismissed');
-  assert.match(prompts[0], /Cancelar o pedido/);
-  assert.equal(api.state().orders.find(order => order.id === 'PF-K-3').status, 'Em produção');
-  assert.match(runtime.get('ordersContainer').innerHTML, /orders-table/);
+test('kanban: Lista e Kanban têm o mesmo comportamento', async () => {
+  const payloads = {};
+  for (const view of ['list', 'kanban']) {
+    let prompts = 0;
+    const k = kanbanRuntime(savedStatus, { confirm: () => { prompts += 1; return false; } });
+    k.api.setOrdersView(view);
+    for (const current of ['Aguardando pagamento', 'Confirmado', 'Concluído', 'Cancelado']) {
+      assert.doesNotMatch(k.api.renderStatusOptions(current), /disabled/, `${view}: ${current}`);
+    }
+    same(await k.api.moveOrderToStatus('PF-K-5', 'Concluído'), { moved: true });
+    same(await k.api.moveOrderToStatus('PF-K-2', 'Aguardando pagamento'), { moved: true });
+    assert.equal(prompts, 0);
+    payloads[view] = k.statusUpdates().map(({ adminToken, ...payload }) => payload);
+    assert.equal(k.statusOf('PF-K-5'), 'Concluído');
+  }
+  same(payloads.list, payloads.kanban);
+});
+
+test('kanban: status inexistente não é enviado ao servidor', async () => {
+  const k = kanbanRuntime(savedStatus);
+  same(await k.api.moveOrderToStatus('PF-K-2', 'Status inventado'), { moved: false, reason: 'unavailable' });
+  same(await k.api.handleKanbanDrop('PF-K-2', 'Status inventado'), { moved: false, reason: 'none' });
+  assert.equal(k.requests.length, 0);
+});
+
+test('kanban: status salvo permanece após atualizar a página e falha não altera a planilha', async () => {
+  // Estado "da planilha": só muda quando o servidor confirma a gravação.
+  const sheet = new Map(kanbanOrders.map(order => [order.id, order.status]));
+  let failWrites = false;
+  const server = payload => {
+    if (payload.action === 'getOrders') return { ok: true, orders: kanbanOrders.map(order => ({ ...order, status: sheet.get(order.id) })) };
+    if (payload.action !== 'updateOrderStatus') return { ok: true };
+    if (sheet.get(payload.orderId) !== payload.expectedStatus) return { ok: false, code: 'STATUS_CONFLICT', message: 'Conflito.', currentStatus: sheet.get(payload.orderId) };
+    if (failWrites) return { ok: false, code: 'STATUS_WRITE_FAILED', message: 'Não foi possível confirmar a gravação do status na planilha.' };
+    sheet.set(payload.orderId, payload.status);
+    return savedStatus(payload);
+  };
+  const reload = async () => {
+    const runtime = createRuntime(async (_url, options) => apiResponse(server(JSON.parse(options.body))), { localStorage: memoryStorage({ 'bologis:orders-view': 'kanban' }) });
+    await runtime.window.__uxTest.loadAdminOrders();
+    return runtime;
+  };
+  const first = await reload();
+  same(await first.window.__uxTest.handleKanbanDrop('PF-K-4', 'Confirmado'), { moved: true });
+  const afterReload = await reload();
+  assert.equal(columnOf(afterReload, 'PF-K-4'), 'Confirmado');
+  assert.equal(afterReload.window.__uxTest.state().orders.find(order => order.id === 'PF-K-4').status, 'Confirmado');
+
+  failWrites = true;
+  const result = await afterReload.window.__uxTest.handleKanbanDrop('PF-K-4', 'Cancelado');
+  assert.equal(result.reason, 'error');
+  assert.equal(columnOf(afterReload, 'PF-K-4'), 'Confirmado');
+  assert.match(afterReload.get('ordersMessage').textContent, /Não foi possível confirmar a gravação do status na planilha\. Ele permanece em "Confirmado"/);
+  assert.doesNotMatch(afterReload.get('toast').textContent, /movido para Cancelado/);
+  assert.equal(columnOf(await reload(), 'PF-K-4'), 'Confirmado');
+});
+
+test('kanban: após conflito o card pode ser movido novamente com o status atualizado', async () => {
+  const sheet = new Map(kanbanOrders.map(order => [order.id, order.status]));
+  sheet.set('PF-K-2', 'Em produção'); // outra sessão moveu o pedido
+  const k = kanbanRuntime(payload => {
+    if (payload.action === 'getOrders') return { ok: true, orders: kanbanOrders.map(order => ({ ...order, status: sheet.get(order.id) })) };
+    if (sheet.get(payload.orderId) !== payload.expectedStatus) return { ok: false, code: 'STATUS_CONFLICT', message: 'O pedido foi atualizado por outra operação. Os pedidos foram recarregados com o status mais recente.', currentStatus: sheet.get(payload.orderId) };
+    sheet.set(payload.orderId, payload.status);
+    return savedStatus(payload);
+  });
+  assert.equal((await k.api.handleKanbanDrop('PF-K-2', 'Concluído')).reason, 'conflict');
+  assert.equal(columnOf(k.runtime, 'PF-K-2'), 'Em produção');
+  assert.match(k.runtime.get('ordersMessage').textContent, /mova o pedido novamente/);
+  same(await k.api.handleKanbanDrop('PF-K-2', 'Concluído'), { moved: true });
+  same(k.statusUpdates().map(payload => payload.expectedStatus), ['Confirmado', 'Em produção']);
+  assert.equal(sheet.get('PF-K-2'), 'Concluído');
+});
+
+test('kanban: compatibilidade histórica com pedidos sem itens, sem recebimento e com horário serial', async () => {
+  const k = kanbanRuntime(savedStatus);
+  const legacy = k.layout().at(-1).markup.split('<article').find(chunk => chunk.includes('PF-K-6'));
+  const surface = legacy.split('<details')[0];
+  assert.match(surface, /Fábio Legado/);
+  assert.match(surface, /Cenoura · 1 bolo/);
+  assert.match(surface, /order-fulfillment">Não informado</);
+  assert.match(surface, /R\$\s*179,00/);
+  assert.match(surface, /27\/10\/2026</);
+  assert.doesNotMatch(legacy, /1899|GMT-/);
+  assert.match(surface, /<option value="Concluído">Concluído<\/option>/);
+  same(await k.api.handleKanbanDrop('PF-K-6', 'Concluído'), { moved: true });
+  assert.equal(k.statusUpdates()[0].expectedStatus, 'Pagamento não confirmado');
+  assert.equal(columnOf(k.runtime, 'PF-K-6'), 'Concluído');
 });
 
 test('kanban: filtros produzem os mesmos pedidos da Lista', () => {
@@ -1431,23 +1462,6 @@ test('kanban: totalização reutiliza o mesmo cálculo e acompanha os filtros', 
   same(totalFor(), ['0']);
 });
 
-test('kanban: estrutura acessível com região rolável, colunas rotuladas e alternância anunciada', () => {
-  const k = kanbanRuntime();
-  const markup = k.runtime.get('ordersContainer').innerHTML;
-  assert.match(markup, /<div class="kanban-board" role="region" aria-label="Quadro de pedidos por status" tabindex="0">/);
-  for (const [index, column] of k.layout().entries()) {
-    assert.match(column.markup, new RegExp(`aria-labelledby="kanban-column-${index}"[\\s\\S]*<h3 id="kanban-column-${index}">`));
-    assert.match(column.markup, new RegExp(`aria-label="${column.count} ${column.count === 1 ? 'pedido' : 'pedidos'}"`));
-  }
-  assert.equal([...markup.matchAll(/<article class="kanban-card[^>]*aria-label="Pedido #[^"]+, [^"]+"/g)].length, kanbanOrders.length);
-  assert.equal([...markup.matchAll(/<details class="order-details"><summary>Mais informações<\/summary>/g)].length, kanbanOrders.length);
-  assert.match(html, /<div class="orders-view-switch" role="group" aria-label="Visualização dos pedidos">/);
-  assert.match(html, /id="ordersListViewBtn" type="button" data-orders-view="list" aria-pressed="true">Lista</);
-  assert.match(html, /id="ordersKanbanViewBtn" type="button" data-orders-view="kanban" aria-pressed="false">Kanban</);
-  assert.match(html, /\.sr-only \{ position: absolute;/);
-  assert.match(html, /\.orders-view-switch button:focus-visible, \.kanban-board:focus-visible \{ outline: 2px solid var\(--accent\)/);
-});
-
 test('kanban: quadro tem rolagem horizontal contida e colunas adaptadas ao celular', () => {
   const board = html.match(/\.kanban-board \{([\s\S]*?)\n {4}\}/)[1];
   assert.match(board, /overflow-x: auto;/);
@@ -1458,19 +1472,6 @@ test('kanban: quadro tem rolagem horizontal contida e colunas adaptadas ao celul
   assert.match(html, /\.kanban-move \.control \{[^}]*min-height: 44px;/);
 });
 
-test('kanban: compatibilidade histórica com pedidos sem itens, sem recebimento e com horário serial', () => {
-  const k = kanbanRuntime(savedStatus);
-  const legacy = k.layout().at(-1).markup.split('<article').find(chunk => chunk.includes('PF-K-6'));
-  const surface = legacy.split('<details')[0];
-  assert.match(surface, /Fábio Legado/);
-  assert.match(surface, /Cenoura · 1 bolo/);
-  assert.match(surface, /order-fulfillment">Não informado</);
-  assert.match(surface, /R\$\s*179,00/);
-  assert.match(surface, /27\/10\/2026</);
-  assert.doesNotMatch(legacy, /1899|GMT-/);
-  assert.match(surface, /value="Aguardando pagamento" >Aguardando pagamento<\/option>/);
-});
-
 test('kanban: status legado pode ser normalizado para Aguardando pagamento sem diálogo', async () => {
   const prompts = [];
   const k = kanbanRuntime(savedStatus, { confirm: message => { prompts.push(message); return true; } });
@@ -1479,21 +1480,6 @@ test('kanban: status legado pode ser normalizado para Aguardando pagamento sem d
   assert.equal(k.statusUpdates()[0].expectedStatus, 'Retirado na loja');
   assert.equal(columnOf(k.runtime, 'PF-K-7'), 'Aguardando pagamento');
   assert.equal(k.layout().some(column => column.title === 'Outros status' && column.ids.includes('PF-K-7')), false);
-});
-
-test('kanban: regras do navegador espelham exatamente as do Apps Script', () => {
-  const backend = vm.createContext({});
-  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '..', 'code.gs'), 'utf8'), backend, { filename: 'code.gs' });
-  const api = createRuntime().window.__uxTest;
-  const statuses = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
-  for (const from of [...statuses, 'Novo', 'Pagamento não confirmado', 'Retirado na loja', '']) {
-    for (const to of statuses) {
-      const server = vm.runInContext(`orderStatusTransition_(${JSON.stringify(from)}, ${JSON.stringify(to)})`, backend);
-      const client = api.orderStatusTransition(from, to);
-      assert.equal(client.kind, server.kind, `${from || '(vazio)'} → ${to}`);
-      assert.equal(client.message, server.message, `${from || '(vazio)'} → ${to}`);
-    }
-  }
 });
 
 test('kanban: envio de status nunca marca confirmação financeira por padrão', async () => {
@@ -1517,6 +1503,345 @@ test('kanban: Lista também mostra o pedido em salvamento e não aceita nova alt
   same(await move, { moved: true });
   assert.doesNotMatch(k.runtime.get('ordersContainer').innerHTML, /aria-busy="true"/);
   assert.equal(k.statusUpdates().length, 1);
+});
+
+test('kanban: mensagem de erro do servidor é exibida sem cortes nem pontuação duplicada', async () => {
+  for (const [message, expected] of [['Planilha indisponível', 'Planilha indisponível. Ele permanece'], ['Planilha indisponível.', 'Planilha indisponível. Ele permanece']]) {
+    const k = kanbanRuntime(() => ({ ok: false, code: 'STATUS_WRITE_FAILED', message }));
+    await k.api.handleKanbanDrop('PF-K-2', 'Concluído');
+    assert.match(k.runtime.get('ordersMessage').textContent, new RegExp(`#PF-K-2: ${expected} em "Confirmado"\.$`));
+  }
+});
+
+// Etapa 11.2: modal de pedido
+function modalRuntime(handler = savedStatus, runtimeOptions = {}) {
+  const k = kanbanRuntime(handler, runtimeOptions);
+  const dialog = k.runtime.get('orderModal');
+  const focused = [];
+  dialog.showModalCalls = 0;
+  dialog.showModal = function showModal() { this.open = true; this.showModalCalls += 1; };
+  dialog.close = function close() { this.open = false; };
+  k.runtime.get('orderModalClose').focus = () => focused.push('orderModalClose');
+  const heading = () => k.runtime.get('orderModalHeading').innerHTML;
+  const body = () => k.runtime.get('orderModalBody').innerHTML;
+  const noControl = { closest: () => null };
+  const open = id => k.api.handleKanbanCardClick(id, noControl);
+  return { ...k, dialog, focused, heading, body, open, modalMessage: () => k.runtime.get('orderModalMessage') };
+}
+
+test('kanban: card resume o pedido sem dados técnicos e sem "Mais informações"', () => {
+  const { layout, runtime, api } = kanbanRuntime();
+  const card = layout()[0].markup;
+  assert.match(card, /#KANB01/);
+  assert.match(card, /Ana Aguardando/);
+  assert.match(card, /Chocolate com brigadeiro · 2 fatias/);
+  assert.match(card, /25\/10\/2026 · 10:00/);
+  assert.match(card, /order-fulfillment">Entrega</);
+  assert.match(card, /R\$\s*47,97/);
+  assert.doesNotMatch(card, /Mais informações|<details|invoice-kanban-tecnico|99999-1111|Sem nozes|Rua Fictícia|checkout\.infinitepay/);
+  assert.match(layout()[1].markup, /order-fulfillment">Retirada</);
+  assert.match(layout()[4].markup, /order-fulfillment">Não informado</);
+  // A Lista mantém os detalhes expansíveis.
+  api.setOrdersView('list');
+  assert.match(runtime.get('ordersContainer').innerHTML, /<details class="order-details"><summary>Mais informações<\/summary>/);
+  assert.match(runtime.get('ordersContainer').innerHTML, /Mais informações<\/button>/);
+});
+
+test('kanban: estrutura acessível com região rolável, colunas rotuladas e alternância anunciada', () => {
+  const k = kanbanRuntime();
+  const markup = k.runtime.get('ordersContainer').innerHTML;
+  assert.match(markup, /<div class="kanban-board" role="region" aria-label="Quadro de pedidos por status" tabindex="0">/);
+  for (const [index, column] of k.layout().entries()) {
+    assert.match(column.markup, new RegExp(`aria-labelledby="kanban-column-${index}"[\\s\\S]*<h3 id="kanban-column-${index}">`));
+    assert.match(column.markup, new RegExp(`aria-label="${column.count} ${column.count === 1 ? 'pedido' : 'pedidos'}"`));
+  }
+  assert.equal([...markup.matchAll(/<article class="kanban-card[^>]*aria-label="Pedido #[^"]+, [^"]+"/g)].length, kanbanOrders.length);
+  assert.equal([...markup.matchAll(/<button class="kanban-card-open" type="button" data-order-id="[^"]+" aria-haspopup="dialog" aria-label="Abrir detalhes do pedido #[^"]+, [^"]+">/g)].length, kanbanOrders.length);
+  assert.match(html, /<div class="orders-view-switch" role="group" aria-label="Visualização dos pedidos">/);
+  assert.match(html, /id="ordersListViewBtn" type="button" data-orders-view="list" aria-pressed="true">Lista</);
+  assert.match(html, /id="ordersKanbanViewBtn" type="button" data-orders-view="kanban" aria-pressed="false">Kanban</);
+  assert.match(html, /\.sr-only \{ position: absolute;/);
+  assert.match(html, /\.orders-view-switch button:focus-visible, \.kanban-board:focus-visible \{ outline: 2px solid var\(--accent\)/);
+});
+
+test('modal: clique no card abre o pedido correto sem alterar dados', () => {
+  const m = modalRuntime();
+  const before = JSON.stringify(m.api.state().orders);
+  assert.equal(m.open('PF-K-3'), true);
+  assert.equal(m.api.modalOrderId(), 'PF-K-3');
+  assert.equal(m.dialog.showModalCalls, 1);
+  assert.equal(m.api.bodyHas('modal-open'), true);
+  same(m.focused, ['orderModalClose']);
+  assert.match(m.heading(), /#PF-K-3/);
+  assert.match(m.heading(), /<h2 id="orderModalTitle">Célia Produção<\/h2>/);
+  assert.match(m.heading(), /status-badge" data-status="Em produção">Em produção/);
+  assert.match(m.body(), /<strong>Cenoura<\/strong><small>2 fatias<\/small>[\s\S]*R\$\s*34,97/);
+  assert.match(m.body(), /<strong>Red Velvet<\/strong><small>2 fatias<\/small>[\s\S]*R\$\s*29,97/);
+  assert.match(m.body(), /Quantidade total<\/dt><dd>4 fatias/);
+  assert.match(m.body(), /Total final<\/dt><dd>R\$\s*64,94/);
+  assert.equal(m.requests.length, 0, 'Abrir o modal não faz requisições.');
+  assert.equal(JSON.stringify(m.api.state().orders), before);
+});
+
+test('modal: apenas um modal; abrir outro card troca o conteúdo', () => {
+  const m = modalRuntime();
+  m.open('PF-K-2');
+  m.open('PF-K-4');
+  assert.equal(m.dialog.showModalCalls, 1);
+  assert.equal(m.api.modalOrderId(), 'PF-K-4');
+  assert.match(m.heading(), /Davi Concluído/);
+  assert.doesNotMatch(m.heading(), /Bruno Confirmado/);
+});
+
+test('modal: controles do card e o fim de um arraste não abrem o modal', () => {
+  const m = modalRuntime();
+  const insideSelect = { closest: selector => (selector.includes('select') ? {} : null) };
+  assert.equal(m.api.handleKanbanCardClick('PF-K-2', insideSelect), false);
+  m.api.startDrag('PF-K-2');
+  assert.equal(m.open('PF-K-2'), false, 'Durante o arraste não abre.');
+  m.api.endDrag();
+  assert.equal(m.open('PF-K-2'), false, 'O clique que encerra o arraste é ignorado.');
+  assert.equal(m.dialog.showModalCalls, 0);
+  assert.equal(m.api.modalOrderId(), '');
+  assert.equal(m.open('PF-INEXISTENTE'), false);
+});
+
+test('modal: fecha pelo X, pela tecla Escape e pelo fundo escurecido', () => {
+  for (const close of [
+    m => m.runtime.get('orderModalClose').dispatch('click'),
+    m => m.dialog.dispatch('keydown', { key: 'Escape', preventDefault() {} }),
+    m => m.dialog.dispatch('click', { target: m.dialog }),
+    m => m.dialog.dispatch('close')
+  ]) {
+    const m = modalRuntime();
+    m.open('PF-K-2');
+    m.dialog.dispatch('keydown', { key: 'Tab', preventDefault() {} });
+    m.dialog.dispatch('click', { target: m.runtime.get('orderModalBody') });
+    assert.equal(m.api.modalOrderId(), 'PF-K-2', 'Outras teclas e cliques no conteúdo mantêm o modal aberto.');
+    close(m);
+    assert.equal(m.api.modalOrderId(), '');
+    assert.equal(m.dialog.open, false);
+    assert.equal(m.api.bodyHas('modal-open'), false);
+    assert.doesNotThrow(() => m.api.closeOrderModal(), 'Fechar novamente é seguro.');
+  }
+});
+
+test('modal: pedido com entrega mostra endereço, taxa, economia e WhatsApp', () => {
+  const m = modalRuntime();
+  m.api.setOrders([{ ...kanbanOrders[0], items: [{ flavor: 'Chocolate com brigadeiro', quantity: 3, subtotal: 49.97, savings: 9.94, pricingModel: 'progressive-v1' }, { flavor: 'Ninho', quantity: 1, subtotal: 19.97, savings: 0, pricingModel: 'progressive-v1' }], subtotal: 69.94, deliveryFee: 8, total: 77.94, totalQuantity: 4, fulfillment: { ...kanbanOrders[0].fulfillment, instructions: 'Entregas a partir das 14h.' } }]);
+  m.open('PF-20261020-120000-KANB01');
+  const body = m.body();
+  assert.match(body, /<strong>Chocolate com brigadeiro<\/strong><small>3 fatias<\/small>[\s\S]*economia R\$\s*9,94/);
+  assert.match(body, /Economia progressiva<\/dt><dd>R\$\s*9,94/);
+  assert.match(body, /Subtotal<\/dt><dd>R\$\s*69,94/);
+  assert.match(body, /Taxa de entrega<\/dt><dd>R\$\s*8,00/);
+  assert.match(body, /Total final<\/dt><dd>R\$\s*77,94/);
+  assert.match(body, /Modalidade<\/dt><dd>Entrega/);
+  assert.match(body, /Rua Fictícia, 10[\s\S]*Centro — Cidade Exemplo\/MG[\s\S]*CEP 38400-000/);
+  assert.match(body, /Orientações<\/p><p class="order-modal-pre">Entregas a partir das 14h\./);
+  assert.match(body, /href="https:\/\/wa\.me\/5534999991111"[^>]*>Abrir conversa no WhatsApp/);
+  assert.match(body, /Pedido<\/dt><dd><span class="order-full-id">PF-20261020-120000-KANB01/);
+  assert.match(body, /Sem nozes/);
+});
+
+test('modal: pedido com retirada mostra orientações e não cobra taxa', () => {
+  const m = modalRuntime();
+  m.api.setConfig({ flavors: [], sizes: [], payments: [], fulfillment: { pickupEnabled: true, pickupAddress: 'Rua da Loja, 100', pickupInstructions: 'Das 9h às 12h.' } });
+  m.api.setOrders(kanbanOrders.map(order => ({ ...order })));
+  m.open('PF-K-2');
+  const body = m.body();
+  assert.match(body, /Modalidade<\/dt><dd>Retirada/);
+  assert.match(body, /Taxa de entrega<\/dt><dd>—/);
+  assert.match(body, /Orientações<\/p><p class="order-modal-pre">Rua da Loja, 100 — Das 9h às 12h\./);
+  assert.doesNotMatch(body, /Endereço<\/p>/);
+});
+
+test('modal: pedido histórico sem itens, sem modalidade e sem checkout', () => {
+  const m = modalRuntime();
+  m.open('PF-K-6');
+  const body = m.body();
+  assert.match(m.heading(), /Pagamento não confirmado/);
+  assert.match(body, /<strong>Cenoura<\/strong><small>1 × Grande<\/small>/);
+  assert.match(body, /Quantidade total<\/dt><dd>1 bolo/);
+  assert.match(body, /Total final<\/dt><dd>R\$\s*179,00/);
+  assert.match(body, /Modalidade<\/dt><dd>Não informado/);
+  assert.match(body, /Pedido anterior à escolha de entrega ou retirada/);
+  assert.match(body, /data-tone="muted">Sem cobrança InfinitePay registrada/);
+  assert.doesNotMatch(body, /1899|GMT-|Cobrança<\/dt>/);
+  assert.match(body, /<option value="Pagamento não confirmado" selected disabled>Pagamento não confirmado \(legado\)/);
+});
+
+test('modal: separa status operacional da situação financeira real', () => {
+  const m = modalRuntime();
+  m.api.setOrders([
+    { ...kanbanOrders[1], id: 'PF-P-1', status: 'Confirmado', checkout: undefined },
+    { ...kanbanOrders[1], id: 'PF-P-2', status: 'Aguardando pagamento', checkout: { state: 'paid_confirmed', chargeId: 'invoice-pago', expectedAmountCents: 1997 } },
+    { ...kanbanOrders[0], id: 'PF-P-3' },
+    { ...kanbanOrders[1], id: 'PF-P-4', status: 'Aguardando pagamento', checkout: { state: 'failed', canManualRetry: true, diagnostic: { category: 'timeout' }, attempts: 2 } },
+    { ...kanbanOrders[1], id: 'PF-P-5', status: 'Concluído', checkout: { state: 'payment_amount_mismatch', reviewReason: 'amount_mismatch', url: 'https://checkout.infinitepay.io/x' } }
+  ]);
+  m.open('PF-P-1');
+  assert.match(m.body(), /Status operacional<\/dt><dd>Confirmado/);
+  assert.match(m.body(), /data-tone="muted">Sem cobrança InfinitePay registrada/);
+  assert.doesNotMatch(m.body(), /Pagamento confirmado pela InfinitePay/, 'Status "Confirmado" não afirma pagamento.');
+  m.open('PF-P-2');
+  assert.match(m.body(), /Status operacional<\/dt><dd>Aguardando pagamento/);
+  assert.match(m.body(), /data-tone="success">Pagamento confirmado pela InfinitePay/);
+  assert.match(m.body(), /Cobrança<\/dt><dd>invoice-pago/);
+  m.open('PF-P-3');
+  assert.match(m.body(), /data-tone="pending">Aguardando confirmação da InfinitePay/);
+  assert.match(m.body(), /class="ghost-btn checkout-check" type="button" data-order-id="PF-P-3">Conferir na InfinitePay/);
+  assert.match(m.body(), /<a class="ghost-btn" href="https:\/\/checkout\.infinitepay\.io\/fictitious"[^>]*>Abrir checkout/);
+  m.open('PF-P-4');
+  assert.match(m.body(), /data-tone="warning">Falha na geração do checkout/);
+  assert.match(m.body(), /class="ghost-btn checkout-retry" type="button" data-order-id="PF-P-4">Gerar checkout novamente/);
+  assert.match(m.body(), /Falha: Tempo esgotado · 2 tentativa\(s\)/);
+  m.open('PF-P-5');
+  assert.match(m.body(), /data-tone="warning">Valor pago divergente: requer conferência/);
+  assert.match(m.body(), /Conferência: valor pago diferente do pedido/);
+  assert.match(m.body(), /Conferir na InfinitePay/);
+});
+
+test('modal: alteração de status usa o mesmo fluxo persistente do Kanban', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const m = modalRuntime(async payload => { await gate; return savedStatus(payload); });
+  m.open('PF-K-2');
+  assert.match(m.body(), /<select id="orderModalStatus" class="control" data-order-id="PF-K-2" >/);
+  const select = m.runtime.get('orderModalStatus');
+  select.value = 'Concluído';
+  select.dataset.orderId = 'PF-K-2';
+  select.dispatch('change');
+  assert.match(m.body(), /id="orderModalStatus"[^>]*disabled aria-busy="true"/);
+  assert.match(m.body(), /Salvando\.\.\./);
+  assert.match(m.heading(), /data-status="Confirmado"/, 'Status só muda após o servidor responder.');
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  same(m.statusUpdates().map(({ adminToken, ...payload }) => payload), [{ action: 'updateOrderStatus', orderId: 'PF-K-2', status: 'Concluído', expectedStatus: 'Confirmado' }]);
+  assert.match(m.heading(), /data-status="Concluído">Concluído/);
+  assert.match(m.body(), /Status operacional<\/dt><dd>Concluído/);
+  assert.equal(columnOf(m.runtime, 'PF-K-2'), 'Concluído');
+  assert.match(m.modalMessage().textContent, /movido para Concluído/);
+  assert.equal(m.api.modalOrderId(), 'PF-K-2', 'O modal continua aberto após salvar.');
+});
+
+test('modal: conflito atualiza os dados exibidos e mostra mensagem no modal', async () => {
+  const fresh = kanbanOrders.map(order => order.id === 'PF-K-2' ? { ...order, status: 'Em produção' } : order);
+  const m = modalRuntime(payload => payload.action === 'getOrders'
+    ? { ok: true, orders: fresh }
+    : { ok: false, code: 'STATUS_CONFLICT', message: 'O pedido foi atualizado por outra operação. Os pedidos foram recarregados com o status mais recente.', currentStatus: 'Em produção' });
+  m.open('PF-K-2');
+  assert.equal((await m.api.moveOrderToStatus('PF-K-2', 'Cancelado')).reason, 'conflict');
+  assert.match(m.heading(), /data-status="Em produção">Em produção/);
+  assert.match(m.modalMessage().className, /error/);
+  assert.match(m.modalMessage().textContent, /atualizado por outra operação[\s\S]*mova o pedido novamente/);
+  assert.equal(m.api.modalOrderId(), 'PF-K-2');
+});
+
+test('modal: falha de conexão mantém o status e informa dentro do modal', async () => {
+  const runtime = createRuntime(async () => { throw new TypeError('Failed to fetch'); });
+  const api = runtime.window.__uxTest;
+  const dialog = runtime.get('orderModal');
+  dialog.showModal = function showModal() { this.open = true; };
+  api.setOrders(kanbanOrders.map(order => ({ ...order })));
+  api.setOrderView({ ...noFilters });
+  api.setOrdersView('kanban');
+  api.handleKanbanCardClick('PF-K-2', { closest: () => null });
+  assert.equal((await api.moveOrderToStatus('PF-K-2', 'Concluído')).reason, 'error');
+  assert.match(runtime.get('orderModalHeading').innerHTML, /data-status="Confirmado"/);
+  assert.match(runtime.get('orderModalMessage').textContent, /falha de conexão\. Ele permanece em "Confirmado"/);
+  assert.doesNotMatch(runtime.get('orderModalMessage').className, /success/);
+});
+
+test('modal: dados extensos e caracteres especiais são escapados', () => {
+  const m = modalRuntime();
+  const longName = 'Cliente <img src=x onerror=alert(1)> com nome excepcionalmente extenso para validação visual';
+  m.api.setOrders([{ ...kanbanOrders[0], customerName: longName, notes: 'Observação "longa" & <b>especial</b> '.repeat(12), id: 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001' }]);
+  m.open('PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001');
+  assert.doesNotMatch(m.heading() + m.body(), /<img|<b>/);
+  assert.match(m.heading(), /Cliente &lt;img src=x onerror=alert\(1\)&gt; com nome excepcionalmente extenso/);
+  assert.match(m.body(), /Observação &quot;longa&quot; &amp; &lt;b&gt;especial&lt;\/b&gt;/);
+  assert.match(m.heading(), /#VA-001/);
+  assert.match(m.body(), /order-full-id">PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001/);
+});
+
+test('modal: fecha se o pedido deixar de existir após recarregar', async () => {
+  const m = modalRuntime(payload => payload.action === 'getOrders' ? { ok: true, orders: kanbanOrders.filter(order => order.id !== 'PF-K-2') } : { ok: true });
+  m.open('PF-K-2');
+  await m.api.loadAdminOrders();
+  assert.equal(m.api.modalOrderId(), '');
+  assert.equal(m.dialog.open, false);
+});
+
+test('modal: estrutura acessível e responsiva no HTML', () => {
+  assert.match(html, /<dialog id="orderModal" class="order-modal" aria-labelledby="orderModalTitle">/);
+  assert.match(html, /<button id="orderModalClose" class="order-modal-close" type="button" aria-label="Fechar detalhes do pedido">×<\/button>/);
+  assert.match(html, /<div id="orderModalMessage" class="message" role="status" aria-live="polite"><\/div>/);
+  assert.match(html, /\.order-modal::backdrop \{ background: rgba\(47, 33, 26, \.42\); \}/);
+  assert.match(html, /\.order-modal-scroll \{[^}]*overflow-y: auto;/);
+  assert.match(html, /@media \(max-width: 860px\) \{\s*\.order-modal-grid \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(html, /body\.modal-open \{ overflow: hidden; \}/);
+  const m = modalRuntime();
+  m.open('PF-K-3');
+  for (const id of ['orderModalItemsTitle', 'orderModalFulfillmentTitle', 'orderModalNotesTitle', 'orderModalStatusTitle', 'orderModalPaymentTitle', 'orderModalCustomerTitle']) {
+    assert.match(m.body(), new RegExp(`aria-labelledby="${id}"[\\s\\S]*<h3 id="${id}">`));
+  }
+  assert.match(m.body(), /<label for="orderModalStatus">Status do pedido<\/label>/);
+  assert.match(m.body(), /<aside class="order-modal-column" aria-label="Gestão do pedido">/);
+});
+
+function mediaQuery(initial) {
+  const query = { matches: initial, listeners: [], addEventListener(type, handler) { if (type === 'change') this.listeners.push(handler); } };
+  return { query, matchMedia: text => { assert.equal(text, '(max-width: 860px)'); return query; }, change(value) { query.matches = value; query.listeners.forEach(handler => handler({ matches: value })); } };
+}
+
+const sectionTitles = markup => [...markup.matchAll(/<h3 id="orderModal\w+Title">([^<]+)<\/h3>/g)].map(match => match[1]);
+
+test('modal compacto: Gestão logo abaixo do cabeçalho e ordem definida até 860px', () => {
+  const media = mediaQuery(true);
+  const m = modalRuntime(savedStatus, { matchMedia: media.matchMedia });
+  m.open('PF-20261020-120000-KANB01');
+  const body = m.body();
+  same(sectionTitles(body), ['Gestão', 'Encomenda', 'Recebimento', 'Pagamento', 'Observações do cliente', 'Cliente']);
+  assert.match(body, /^<div class="order-modal-grid is-compact"><section class="order-modal-section order-modal-status"/);
+  assert.equal([...body.matchAll(/id="orderModalStatus"/g)].length, 1, 'O controle de status não é duplicado.');
+  assert.doesNotMatch(body, /<aside/);
+  assert.match(body, /Conferir na InfinitePay[\s\S]*Abrir checkout/);
+  assert.match(body, /data-tone="pending">Aguardando confirmação da InfinitePay/);
+});
+
+test('modal desktop: preserva as duas colunas com a ordem atual', () => {
+  const m = modalRuntime(savedStatus, { matchMedia: mediaQuery(false).matchMedia });
+  m.open('PF-K-3');
+  const [main, aside] = m.body().split('<aside');
+  same(sectionTitles(main), ['Encomenda', 'Recebimento', 'Observações do cliente']);
+  same(sectionTitles(aside), ['Gestão', 'Pagamento', 'Cliente']);
+  assert.match(m.body(), /<aside class="order-modal-column" aria-label="Gestão do pedido">/);
+  assert.equal([...m.body().matchAll(/id="orderModalStatus"/g)].length, 1);
+});
+
+test('modal: cruzar 860px com o modal aberto reorganiza o conteúdo sem fechar', () => {
+  const media = mediaQuery(false);
+  const m = modalRuntime(savedStatus, { matchMedia: media.matchMedia });
+  m.open('PF-K-2');
+  assert.equal(sectionTitles(m.body())[0], 'Encomenda');
+  media.change(true);
+  assert.equal(sectionTitles(m.body())[0], 'Gestão');
+  assert.equal(m.api.modalOrderId(), 'PF-K-2');
+  media.change(false);
+  assert.equal(sectionTitles(m.body())[0], 'Encomenda');
+  m.api.closeOrderModal();
+  assert.doesNotThrow(() => media.change(true), 'Com o modal fechado a mudança é ignorada.');
+});
+
+test('modal compacto: alteração de status continua no mesmo fluxo persistente', async () => {
+  const m = modalRuntime(savedStatus, { matchMedia: mediaQuery(true).matchMedia });
+  m.open('PF-K-5');
+  same(await m.api.moveOrderToStatus('PF-K-5', 'Em produção'), { moved: true });
+  same(m.statusUpdates().map(payload => [payload.orderId, payload.status, payload.expectedStatus]), [['PF-K-5', 'Em produção', 'Cancelado']]);
+  assert.match(m.heading(), /data-status="Em produção"/);
+  assert.equal(sectionTitles(m.body())[0], 'Gestão');
+  assert.equal(columnOf(m.runtime, 'PF-K-5'), 'Em produção');
 });
 
 (async () => {

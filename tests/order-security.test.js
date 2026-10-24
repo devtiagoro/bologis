@@ -438,10 +438,10 @@ function moveStatus(h, id, status, options = {}) {
 
 test('status canonicos sao aceitos pelo servidor no fluxo operacional', () => {
   const h = createHarness({ rows: [statusRow('PF-STATUS-1', 'Aguardando pagamento')] });
-  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Confirmado', { manualPaymentConfirmation: true }).status, 'Confirmado');
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Confirmado').status, 'Confirmado');
   assert.equal(moveStatus(h, 'PF-STATUS-1', 'Em produção').status, 'Em produção');
   assert.equal(moveStatus(h, 'PF-STATUS-1', 'Concluído').status, 'Concluído');
-  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Cancelado', { confirmTransition: true }).status, 'Cancelado');
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Cancelado').status, 'Cancelado');
   assert.deepEqual([...h.statuses], ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado']);
 });
 
@@ -450,54 +450,77 @@ test('status legado e preservado, mas nao pode ser atribuido novamente', () => {
     const h = createHarness({ rows: [statusRow('PF-LEGACY-1', legacyStatus)] });
     assert.equal(h.context.getOrders_()[0].status, legacyStatus);
     assert.throws(() => moveStatus(h, 'PF-LEGACY-1', legacyStatus), /Status inválido/);
+    assert.throws(() => moveStatus(h, 'PF-LEGACY-1', 'Status inventado'), error => error.code === 'INVALID_STATUS');
     assert.equal(h.rows[0][13], legacyStatus);
   }
 });
 
-test('transicoes de status seguem a tabela operacional do servidor', () => {
-  const rule = (from, to) => vm.runInContext(`orderStatusTransition_(${JSON.stringify(from)}, ${JSON.stringify(to)}).kind`, createHarness().context);
-  const expected = [
-    ['Aguardando pagamento', 'Confirmado', 'payment'], ['Aguardando pagamento', 'Em produção', 'blocked'],
-    ['Aguardando pagamento', 'Concluído', 'blocked'], ['Aguardando pagamento', 'Cancelado', 'confirm'],
-    ['Confirmado', 'Em produção', 'allowed'], ['Confirmado', 'Concluído', 'confirm'], ['Confirmado', 'Aguardando pagamento', 'blocked'],
-    ['Em produção', 'Concluído', 'allowed'], ['Em produção', 'Confirmado', 'allowed'], ['Em produção', 'Aguardando pagamento', 'blocked'],
-    ['Concluído', 'Em produção', 'confirm'], ['Concluído', 'Confirmado', 'confirm'], ['Concluído', 'Cancelado', 'confirm'],
-    ['Cancelado', 'Aguardando pagamento', 'blocked'], ['Cancelado', 'Confirmado', 'blocked'], ['Cancelado', 'Em produção', 'blocked'],
-    ['Novo', 'Aguardando pagamento', 'allowed'], ['Novo', 'Confirmado', 'payment'], ['Pagamento não confirmado', 'Em produção', 'blocked'],
-    ['Status personalizado', 'Cancelado', 'confirm'], ['', 'Aguardando pagamento', 'allowed'],
-    ['Em produção', 'Em produção', 'same']
-  ];
-  for (const [from, to, kind] of expected) assert.equal(rule(from, to), kind, `${from || '(vazio)'} → ${to}`);
-});
-
-test('confirmacao manual de pagamento exige autorizacao explicita', () => {
-  const h = createHarness({ rows: [statusRow('PF-MANUAL-1', 'Aguardando pagamento')] });
-  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado'), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
-  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { confirmTransition: true }), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
-  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { manualPaymentConfirmation: 'true' }), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
-  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Em produção', { manualPaymentConfirmation: true }), error => error.code === 'PAYMENT_NOT_CONFIRMED');
-  assert.equal(h.rows[0][13], 'Aguardando pagamento');
-  assert.equal(moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { manualPaymentConfirmation: true }).previousStatus, 'Aguardando pagamento');
-  assert.equal(h.rows[0][13], 'Confirmado');
-});
-
-test('cancelamento e reabertura exigem confirmacao; cancelado fica bloqueado', () => {
-  const h = createHarness({ rows: [statusRow('PF-CANCEL-1', 'Concluído'), statusRow('PF-CANCEL-2', 'Em produção')] });
-  assert.throws(() => moveStatus(h, 'PF-CANCEL-1', 'Em produção'), error => error.code === 'TRANSITION_CONFIRMATION_REQUIRED');
-  assert.equal(moveStatus(h, 'PF-CANCEL-1', 'Em produção', { confirmTransition: true }).status, 'Em produção');
-  assert.throws(() => moveStatus(h, 'PF-CANCEL-2', 'Cancelado'), error => error.code === 'TRANSITION_CONFIRMATION_REQUIRED');
-  assert.equal(h.rows[1][13], 'Em produção');
-  moveStatus(h, 'PF-CANCEL-2', 'Cancelado', { confirmTransition: true });
-  for (const status of ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído']) {
-    assert.throws(() => moveStatus(h, 'PF-CANCEL-2', status, { confirmTransition: true, manualPaymentConfirmation: true }), error => error.code === 'ORDER_CANCELLED');
+test('movimentacao livre: todas as combinacoes entre status canonicos sao gravadas', () => {
+  const statuses = ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado'];
+  for (const from of statuses) {
+    for (const to of statuses.filter(status => status !== from)) {
+      const h = createHarness({ rows: [statusRow('PF-FREE-1', from)] });
+      const result = moveStatus(h, 'PF-FREE-1', to);
+      assert.equal(JSON.stringify(result), JSON.stringify({ id: 'PF-FREE-1', status: to, previousStatus: from, unchanged: false }), `${from} → ${to}`);
+      assert.equal(h.rows[0][13], to, `${from} → ${to}`);
+      // Recarregar a central lê o valor gravado na planilha.
+      assert.equal(h.context.getOrders_()[0].status, to, `${from} → ${to}`);
+    }
   }
-  assert.equal(h.rows[1][13], 'Cancelado');
+});
+
+test('movimentacao livre: pula etapas, volta, reabre e reativa cancelados sem flags extras', () => {
+  const h = createHarness({ rows: [statusRow('PF-JUMP-1', 'Aguardando pagamento')] });
+  for (const status of ['Concluído', 'Em produção', 'Confirmado', 'Aguardando pagamento', 'Cancelado', 'Em produção', 'Cancelado', 'Concluído']) {
+    assert.equal(moveStatus(h, 'PF-JUMP-1', status).status, status);
+    assert.equal(h.rows[0][13], status);
+  }
+  assert.equal(h.lockReleases, h.lockWaits);
+});
+
+test('movimentacao livre: pedidos legados saem do status antigo para qualquer status canonico', () => {
+  for (const legacyStatus of ['Novo', 'Pagamento não confirmado', 'Status personalizado', '']) {
+    for (const to of canonicalStatuses()) {
+      const h = createHarness({ rows: [statusRow('PF-OLD-1', legacyStatus)] });
+      assert.equal(moveStatus(h, 'PF-OLD-1', to).previousStatus, legacyStatus);
+      assert.equal(h.rows[0][13], to);
+    }
+  }
+});
+
+function canonicalStatuses() { return ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado']; }
+
+test('falha de gravacao nao responde sucesso', () => {
+  const h = createHarness({ rows: [statusRow('PF-WRITE-1', 'Confirmado')] });
+  const original = h.context.getSpreadsheet_;
+  h.context.getSpreadsheet_ = () => {
+    const ss = original();
+    return { ...ss, getSheetByName: name => {
+      const sheet = ss.getSheetByName(name);
+      return { ...sheet, getRange: (...args) => ({ ...sheet.getRange(...args), setValue() { /* gravação perdida */ } }) };
+    } };
+  };
+  assert.throws(() => moveStatus(h, 'PF-WRITE-1', 'Concluído'), error => error.code === 'STATUS_WRITE_FAILED');
+  assert.equal(h.rows[0][13], 'Confirmado');
+  assert.equal(h.lockReleases, h.lockWaits);
+  h.context.getSpreadsheet_ = () => { const ss = original(); return { ...ss, getSheetByName: () => { throw new Error('Sheets indisponível'); } }; };
+  const response = h.context.safeApiError_((() => { try { moveStatus(h, 'PF-WRITE-1', 'Concluído'); } catch (error) { return error; } })());
+  assert.equal(response.ok, false);
+  assert.equal(response.code, 'INTERNAL_ERROR');
+});
+
+test('gravacao confirmada chama flush antes de reler a celula', () => {
+  const h = createHarness({ rows: [statusRow('PF-FLUSH-1', 'Confirmado')] });
+  let flushes = 0;
+  h.context.SpreadsheetApp.flush = () => { flushes += 1; };
+  moveStatus(h, 'PF-FLUSH-1', 'Em produção');
+  assert.equal(flushes, 1);
 });
 
 test('status divergente do esperado devolve conflito com o status atual', () => {
   const h = createHarness({ rows: [statusRow('PF-RACE-1', 'Confirmado')] });
   const locksBefore = h.lockWaits;
-  assert.throws(() => h.context.updateOrderStatus_('PF-RACE-1', 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true }),
+  assert.throws(() => h.context.updateOrderStatus_('PF-RACE-1', 'Cancelado', { expectedStatus: 'Aguardando pagamento' }),
     error => error.code === 'STATUS_CONFLICT' && error.currentStatus === 'Confirmado');
   assert.throws(() => h.context.updateOrderStatus_('PF-RACE-1', 'Em produção'), error => error.code === 'STATUS_CONFLICT');
   assert.equal(h.rows[0][13], 'Confirmado');

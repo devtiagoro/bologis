@@ -199,15 +199,14 @@ test('updateOrderStatus passa pelo doPost autenticado', () => {
   assert.equal(result.ok, true);
   assert.deepEqual(JSON.parse(JSON.stringify(received)), {
     orderId: 'HML-FAKE-1', status: 'Confirmado',
-    options: { expectedStatus: 'Aguardando pagamento', confirmTransition: false, manualPaymentConfirmation: false }
+    options: { expectedStatus: 'Aguardando pagamento' }
   });
-  // Somente o booleano true autoriza; valores "verdadeiros" em texto não confirmam pagamento.
+  // Campos de confirmação de versões anteriores são ignorados e não chegam ao serviço.
   h.post({
     action: 'updateOrderStatus', adminToken: h.login(), orderId: 'HML-FAKE-1', status: 'Confirmado',
-    expectedStatus: 'Aguardando pagamento', manualPaymentConfirmation: 'true', confirmTransition: 1
+    expectedStatus: 'Aguardando pagamento', manualPaymentConfirmation: true, confirmTransition: true
   });
-  assert.equal(received.options.manualPaymentConfirmation, false);
-  assert.equal(received.options.confirmTransition, false);
+  assert.deepEqual(Object.keys(received.options), ['expectedStatus']);
 });
 
 test('endAdminSession passa pelo doPost e impede reutilizacao do token', () => {

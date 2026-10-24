@@ -650,11 +650,7 @@ function doPost(e) {
         order: updateOrderStatus_(
           body.orderId,
           body.status,
-          {
-            expectedStatus: body.expectedStatus,
-            confirmTransition: body.confirmTransition === true,
-            manualPaymentConfirmation: body.manualPaymentConfirmation === true
-          }
+          { expectedStatus: body.expectedStatus }
         )
       });
 
@@ -2434,8 +2430,9 @@ function publicPaymentStatus_(orderId) {
     getOrderItemsById_(ss.getSheetByName(PF.sheets.orderItems), orderId));
   const record = checkout && checkout.record;
   // Só o estado gravado pelo servidor após o payment_check libera a tela de obrigado.
+  // A cobrança é a fonte de verdade: mover o pedido para outra coluna não oculta um pagamento confirmado.
   const confirmed = Boolean(order && record) && record.state === PF_CHECKOUT.states.confirmed
-    && PF_CHECKOUT.advancedOrderStatuses.includes(order.status);
+    && order.status !== 'Cancelado';
   const refs = record && record.references || {};
   return {
     orderId,
@@ -2472,7 +2469,8 @@ function pendingPaymentCandidates_(now) {
   return Object.keys(checkouts).map(orderId => checkouts[orderId]).filter(record => {
     const refs = record.references || {};
     if (record.state !== PF_CHECKOUT.states.returned || !refs.slug || !refs.transactionNsu) return false;
-    if (statusByOrder[record.orderId] !== PF_ORDER.initialStatus) return false;
+    // Etapa 11.1: o status operacional é livre; um pedido adiantado manualmente continua sendo conferido.
+    if (statusByOrder[record.orderId] === undefined) return false;
     const nextCheck = new Date(refs.nextCheckAt || 0);
     if (!isNaN(nextCheck.getTime()) && nextCheck.getTime() > now.getTime()) return false;
     const expires = new Date(record.expiresAt || '');
@@ -3229,39 +3227,16 @@ function updateOrderStatus_(orderId, status, options) {
   }
 }
 
-/**
- * Etapa 11: regra de movimentação entre status, usada pela Lista e pelo Kanban.
- * kind: same (sem alteração), allowed, confirm (exige confirmTransition),
- * payment (exige manualPaymentConfirmation) ou blocked.
- * Status legados ou personalizados são tratados como anteriores ao pagamento.
- */
-function orderStatusTransition_(from, to) {
-  const [waiting, confirmed, production, done, cancelled] = PF_ORDER.statuses;
-  const current = String(from || '');
-  if (current === to) return { kind: 'same' };
-  if (current === cancelled) {
-    return { kind: 'blocked', code: 'ORDER_CANCELLED', message: 'Pedidos cancelados não podem ser movimentados.' };
-  }
-  if (to === cancelled) return { kind: 'confirm' };
-  if (![confirmed, production, done].includes(current)) {
-    if (to === waiting) return { kind: 'allowed' };
-    if (to === confirmed) return { kind: 'payment' };
-    return { kind: 'blocked', code: 'PAYMENT_NOT_CONFIRMED', message: 'Confirme o pagamento antes de iniciar a produção ou concluir o pedido.' };
-  }
-  if (to === waiting) {
-    return { kind: 'blocked', code: 'PAYMENT_REVERSAL_BLOCKED', message: 'Pedidos com pagamento confirmado não voltam para "Aguardando pagamento".' };
-  }
-  // Concluir sem passar pela produção ou reabrir um pedido concluído exige confirmação.
-  if ((current === confirmed && to === done) || current === done) return { kind: 'confirm' };
-  return { kind: 'allowed' };
-}
-
 function statusConflictError_(currentStatus) {
   const error = apiError_('STATUS_CONFLICT', 'O pedido foi atualizado por outra operação. Os pedidos foram recarregados com o status mais recente.');
   error.currentStatus = currentStatus;
   return error;
 }
 
+/**
+ * Etapa 11.1: movimentação livre entre os status canônicos (pular, voltar, reabrir e reativar).
+ * Altera somente a coluna "Status" de Pedidos; a cobrança e seu histórico ficam intactos.
+ */
 function writeOrderStatus_(orderId, status, options) {
   const settings = options || {};
   if (!PF_ORDER.statuses.includes(status)) throw apiError_('INVALID_STATUS', 'Status inválido.');
@@ -3275,18 +3250,15 @@ function writeOrderStatus_(orderId, status, options) {
   if (typeof settings.expectedStatus !== 'string' || settings.expectedStatus !== currentStatus) {
     throw statusConflictError_(currentStatus);
   }
-  const rule = orderStatusTransition_(currentStatus, status);
-  if (rule.kind === 'same') return { id, status: currentStatus, previousStatus: currentStatus, unchanged: true };
-  if (rule.kind === 'blocked') throw apiError_(rule.code, rule.message);
-  if (rule.kind === 'payment' && settings.manualPaymentConfirmation !== true) {
-    throw apiError_('PAYMENT_CONFIRMATION_REQUIRED', 'A confirmação exige pagamento validado pela InfinitePay ou confirmação manual autorizada.');
-  }
-  if (rule.kind === 'confirm' && settings.confirmTransition !== true) {
-    throw apiError_('TRANSITION_CONFIRMATION_REQUIRED', 'Confirme a movimentação para "' + status + '".');
-  }
+  if (currentStatus === status) return { id, status: currentStatus, previousStatus: currentStatus, unchanged: true };
 
-  sheet.getRange(record.rowNumber, 14).setValue(status);
-  return { id, status, previousStatus: currentStatus, unchanged: false };
+  const cell = sheet.getRange(record.rowNumber, 14);
+  cell.setValue(status);
+  // Só responde sucesso depois de confirmar que o valor ficou gravado na planilha.
+  if (typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
+  const persisted = String(cell.getValues()[0][0] || '');
+  if (persisted !== status) throw apiError_('STATUS_WRITE_FAILED', 'Não foi possível confirmar a gravação do status na planilha.');
+  return { id, status: persisted, previousStatus: currentStatus, unchanged: false };
 }
 
 

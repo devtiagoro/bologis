@@ -300,7 +300,7 @@ const KANBAN_PROBE = `(async () => {
     card(id).dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
     const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: data });
     column.dispatchEvent(over);
-    const state = { accepted: over.defaultPrevented, highlighted: column.classList.contains('is-drop-target'), blocked: column.classList.contains('is-drop-blocked') };
+    const state = { accepted: over.defaultPrevented, highlighted: column.classList.contains('is-drop-target') };
     column.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
     card(id)?.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
     return state;
@@ -308,18 +308,117 @@ const KANBAN_PROBE = `(async () => {
   const paidId = 'PF-20260831-113122-AB3E86';
   const waitingId = 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001';
   const columnOf = id => card(id)?.closest('.kanban-column')?.dataset.kanbanColumn;
-  const dnd = { same: drag(paidId, 'Confirmado'), blocked: drag(waitingId, 'Em produção'), callsBeforeMove: calls.length };
+  const settle = async id => { for (let attempt = 0; attempt < 50 && card(id)?.classList.contains('is-saving'); attempt++) await wait(50); };
+  const dnd = { same: drag(paidId, 'Confirmado'), callsBeforeMove: calls.length };
   dnd.move = drag(paidId, 'Em produção');
-  dnd.whileSaving = { column: columnOf(paidId), saving: card(paidId).classList.contains('is-saving') };
-  for (let attempt = 0; attempt < 50 && card(paidId)?.classList.contains('is-saving'); attempt++) await wait(50);
+  dnd.whileSaving = { column: columnOf(paidId), saving: card(paidId).classList.contains('is-saving'), draggable: card(paidId).getAttribute('draggable') };
+  // Card em salvamento não aceita nova soltura: evita requisições duplicadas.
+  dnd.duplicate = drag(paidId, 'Concluído');
+  await settle(paidId);
   dnd.after = columnOf(paidId);
+  // Pula etapas (Aguardando → Concluído) e volta (Em produção → Aguardando) sem diálogos.
+  window.confirm = () => { throw new Error('Diálogo inesperado'); };
+  dnd.skip = drag(waitingId, 'Concluído');
+  await settle(waitingId);
+  dnd.back = drag(paidId, 'Aguardando pagamento');
+  await settle(paidId);
+  dnd.final = [columnOf(paidId), columnOf(waitingId)];
   dnd.calls = calls.filter(call => call.action === 'updateOrderStatus').map(call => [call.orderId, call.status, call.expectedStatus]);
-  dnd.leftover = document.querySelectorAll('.is-drop-target, .is-drop-blocked, .is-dragging').length;
+  dnd.leftover = document.querySelectorAll('.is-drop-target, .is-dragging').length;
   window.fetch = originalFetch;
   // Restaura a preferência para a próxima resolução abrir na Lista.
   document.getElementById('ordersListViewBtn').click();
   layout.restoredList = Boolean(document.querySelector('#ordersContainer .orders-table-wrap'));
   return { layout, dnd };
+})()`;
+
+// Modal do pedido: abertura por clique, foco, fechamento, guarda de arraste, contenção e troca de status.
+// Termina com o modal aberto no pedido de dados extensos para a captura de tela.
+const MODAL_PROBE = `(async () => {
+  const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const calls = [];
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => { calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
+  document.getElementById('ordersKanbanViewBtn').click();
+  await frame();
+  const dialog = document.getElementById('orderModal');
+  const longId = 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001';
+  const paidId = 'PF-20260831-113122-AB3E86';
+  const card = id => document.querySelector('[data-kanban-card="' + id + '"]');
+  const openButton = id => card(id).querySelector('.kanban-card-open');
+  const result = {};
+
+  card(longId).querySelector('.kanban-card-items').click();
+  await frame();
+  const page = document.documentElement;
+  const rect = dialog.getBoundingClientRect();
+  const scroll = document.getElementById('orderModalBody');
+  const close = document.getElementById('orderModalClose').getBoundingClientRect();
+  const backdropHit = document.elementFromPoint(4, Math.round(innerHeight / 2));
+  const grid = getComputedStyle(scroll.querySelector('.order-modal-grid')).gridTemplateColumns.split(' ').length;
+  result.open = {
+    modal: dialog.open && dialog.matches(':modal'),
+    title: document.getElementById('orderModalTitle').textContent,
+    focus: document.activeElement?.id,
+    bodyLocked: document.body.classList.contains('modal-open'),
+    within: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5,
+    closeVisible: close.top >= 0 && close.bottom <= innerHeight && close.right <= innerWidth && close.height >= 44,
+    pageOverflow: page.scrollWidth > page.clientWidth + 1,
+    innerOverflowX: scroll.scrollWidth > scroll.clientWidth + 1,
+    scrollsInside: getComputedStyle(scroll).overflowY === 'auto',
+    backgroundInert: backdropHit === dialog || dialog.contains(backdropHit),
+    columns: grid,
+    sections: [...scroll.querySelectorAll('.order-modal-section h3')].map(item => item.textContent),
+    statusInView: (() => { const box = document.getElementById('orderModalStatus').getBoundingClientRect(); return box.top >= rect.top && box.bottom <= Math.min(rect.bottom, innerHeight); })(),
+    statusControls: dialog.querySelectorAll('select').length,
+    focusOrder: [...dialog.querySelectorAll('button, a[href], select')].filter(element => element.getClientRects().length).map(element => element.id || element.textContent.trim()),
+    finance: scroll.querySelector('.finance-state')?.textContent,
+    tapTargets: [...dialog.querySelectorAll('button, a, select')].filter(element => element.getClientRects().length).every(element => element.getBoundingClientRect().height >= 44),
+    shows1899: /1899|GMT-/.test(dialog.innerText)
+  };
+  dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await frame();
+  result.escape = { closed: !dialog.open, focusRestored: document.activeElement === openButton(longId), unlocked: !document.body.classList.contains('modal-open') };
+
+  openButton(paidId).focus();
+  openButton(paidId).click();
+  await frame();
+  result.keyboardOpen = dialog.open && document.getElementById('orderModalTitle').textContent === 'Cliente Histórico Fictício';
+  document.getElementById('orderModalClose').click();
+  await frame();
+  result.closeButton = { closed: !dialog.open, focusRestored: document.activeElement === openButton(paidId) };
+
+  const data = new DataTransfer();
+  card(paidId).dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
+  card(paidId).dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
+  card(paidId).querySelector('.kanban-card-items').click();
+  await frame();
+  result.dragGuard = !dialog.open;
+  await wait(400);
+  card(paidId).querySelector('.kanban-move-select').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  result.selectGuard = !dialog.open;
+
+  card(paidId).querySelector('.kanban-card-items').click();
+  await frame();
+  const select = document.getElementById('orderModalStatus');
+  select.value = 'Concluído';
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  result.saving = Boolean(document.getElementById('orderModalStatus')?.disabled) && /data-status="Confirmado"/.test(document.getElementById('orderModalHeading').innerHTML);
+  for (let attempt = 0; attempt < 50 && document.getElementById('orderModalStatus')?.disabled; attempt++) await wait(50);
+  result.statusChange = {
+    badge: document.querySelector('#orderModalHeading .status-badge').textContent,
+    stillOpen: dialog.open,
+    column: card(paidId).closest('.kanban-column').dataset.kanbanColumn,
+    message: document.getElementById('orderModalMessage').textContent,
+    calls: calls.filter(call => call.action === 'updateOrderStatus').map(call => [call.orderId, call.status, call.expectedStatus])
+  };
+  document.getElementById('orderModalClose').click();
+  await frame();
+  window.fetch = originalFetch;
+  card(longId).querySelector('.kanban-card-items').click();
+  await frame();
+  return result;
 })()`;
 
 const server = http.createServer((request, response) => {
@@ -534,14 +633,61 @@ const server = http.createServer((request, response) => {
         assert.equal(board.detailsOverflow, false, `Detalhes abertos no Kanban provocaram overflow em ${label}.`);
         assert.equal(board.detailsWithin, true, `Detalhes abertos saíram do card em ${label}.`);
         assert.equal(board.restoredList, true, `Retorno para Lista falhou em ${label}.`);
-        assert.deepEqual(dnd.same, { accepted: false, highlighted: false, blocked: false }, `Mesma coluna aceitou soltura em ${label}.`);
-        assert.deepEqual(dnd.blocked, { accepted: false, highlighted: false, blocked: true }, `Destino bloqueado aceitou soltura em ${label}.`);
-        assert.equal(dnd.callsBeforeMove, 0, `Soltura inválida gerou requisição em ${label}.`);
-        assert.deepEqual(dnd.move, { accepted: true, highlighted: true, blocked: false }, `Coluna de destino não foi destacada em ${label}.`);
-        assert.deepEqual(dnd.whileSaving, { column: 'Confirmado', saving: true }, `Card mudou antes da resposta do servidor em ${label}.`);
+        assert.deepEqual(dnd.same, { accepted: false, highlighted: false }, `Mesma coluna aceitou soltura em ${label}.`);
+        assert.equal(dnd.callsBeforeMove, 0, `Soltura na mesma coluna gerou requisição em ${label}.`);
+        assert.deepEqual(dnd.move, { accepted: true, highlighted: true }, `Coluna de destino não foi destacada em ${label}.`);
+        assert.deepEqual(dnd.whileSaving, { column: 'Confirmado', saving: true, draggable: 'false' }, `Card mudou antes da resposta do servidor em ${label}.`);
+        assert.deepEqual(dnd.duplicate, { accepted: false, highlighted: false }, `Card em salvamento aceitou nova soltura em ${label}.`);
         assert.equal(dnd.after, 'Em produção', `Card não foi para a coluna de destino em ${label}.`);
-        assert.deepEqual(dnd.calls, [['PF-20260831-113122-AB3E86', 'Em produção', 'Confirmado']], `Requisição de movimentação incorreta em ${label}.`);
+        assert.deepEqual(dnd.skip, { accepted: true, highlighted: true }, `Salto de etapa recusado em ${label}.`);
+        assert.deepEqual(dnd.back, { accepted: true, highlighted: true }, `Retorno a etapa anterior recusado em ${label}.`);
+        assert.deepEqual(dnd.final, ['Aguardando pagamento', 'Concluído'], `Movimentação livre não refletida no quadro em ${label}.`);
+        assert.deepEqual(dnd.calls, [
+          ['PF-20260831-113122-AB3E86', 'Em produção', 'Confirmado'],
+          ['PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001', 'Concluído', 'Aguardando pagamento'],
+          ['PF-20260831-113122-AB3E86', 'Aguardando pagamento', 'Em produção']
+        ], `Requisições de movimentação incorretas em ${label}.`);
         assert.equal(dnd.leftover, 0, `Destaques de arraste permaneceram em ${label}.`);
+
+        const modalPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
+        await modalPage.evaluate(STABLE_PROBE);
+        const modal = await modalPage.evaluate(MODAL_PROBE);
+        await modalPage.evaluate('document.fonts.ready.then(() => new Promise(resolve => setTimeout(resolve, 300)))');
+        await modalPage.screenshot(path.join(tempDir, `admin-modal-${label}.png`));
+        await modalPage.evaluate(`document.getElementById('orderModalClose').click(); document.getElementById('ordersListViewBtn').click()`);
+        await modalPage.close();
+        assert.equal(modal.open.modal, true, `Modal não abriu pelo clique no card em ${label}.`);
+        assert.equal(modal.open.title, 'Cliente com nome excepcionalmente extenso para validação visual', `Modal abriu o pedido errado em ${label}.`);
+        assert.equal(modal.open.focus, 'orderModalClose', `Foco inicial fora do modal em ${label}.`);
+        assert.equal(modal.open.bodyLocked, true, `Rolagem do fundo não foi travada em ${label}.`);
+        assert.equal(modal.open.within, true, `Modal ultrapassou a tela em ${label}.`);
+        assert.equal(modal.open.closeVisible, true, `Botão de fechar inacessível em ${label}.`);
+        assert.equal(modal.open.pageOverflow, false, `Modal provocou overflow da página em ${label}.`);
+        assert.equal(modal.open.innerOverflowX, false, `Conteúdo do modal com overflow horizontal em ${label}.`);
+        assert.equal(modal.open.scrollsInside, true, `Modal sem rolagem interna em ${label}.`);
+        assert.equal(modal.open.backgroundInert, true, `Fundo da central interativo com o modal aberto em ${label}.`);
+        assert.equal(modal.open.columns, viewport.width > 860 ? 2 : 1, `Layout do modal incorreto em ${label}.`);
+        const compact = viewport.width <= 860;
+        assert.deepEqual(modal.open.sections, compact
+          ? ['Gestão', 'Encomenda', 'Recebimento', 'Pagamento', 'Observações do cliente', 'Cliente']
+          : ['Encomenda', 'Recebimento', 'Observações do cliente', 'Gestão', 'Pagamento', 'Cliente'], `Ordem das seções do modal incorreta em ${label}.`);
+        assert.equal(modal.open.statusControls, 1, `Controle de status duplicado no modal em ${label}.`);
+        if (compact) assert.equal(modal.open.statusInView, true, `Seletor de status não aparece sem rolagem em ${label}.`);
+        assert.deepEqual(modal.open.focusOrder, ['orderModalClose', 'orderModalStatus', 'Conferir na InfinitePay', 'Abrir checkout', 'Abrir conversa no WhatsApp'], `Ordem de foco do modal incorreta em ${label}.`);
+        assert.equal(modal.open.finance, 'Aguardando confirmação da InfinitePay', `Situação financeira incorreta em ${label}.`);
+        assert.equal(modal.open.tapTargets, true, `Controles do modal menores que 44px em ${label}.`);
+        assert.equal(modal.open.shows1899, false, `Horário serial exibido no modal em ${label}.`);
+        assert.deepEqual(modal.escape, { closed: true, focusRestored: true, unlocked: true }, `Escape não fechou ou não restaurou o foco em ${label}.`);
+        assert.equal(modal.keyboardOpen, true, `Botão do card não abriu o modal em ${label}.`);
+        assert.deepEqual(modal.closeButton, { closed: true, focusRestored: true }, `Botão X não fechou ou não restaurou o foco em ${label}.`);
+        assert.equal(modal.dragGuard, true, `Fim do arraste abriu o modal em ${label}.`);
+        assert.equal(modal.selectGuard, true, `"Mover para…" abriu o modal em ${label}.`);
+        assert.equal(modal.saving, true, `Modal não mostrou salvamento antes da resposta em ${label}.`);
+        assert.equal(modal.statusChange.badge, 'Concluído', `Status do modal não atualizou em ${label}.`);
+        assert.equal(modal.statusChange.stillOpen, true, `Modal fechou após salvar em ${label}.`);
+        assert.equal(modal.statusChange.column, 'Concluído', `Card não mudou de coluna após salvar pelo modal em ${label}.`);
+        assert.match(modal.statusChange.message, /movido para Concluído/, `Confirmação ausente no modal em ${label}.`);
+        assert.deepEqual(modal.statusChange.calls, [['PF-20260831-113122-AB3E86', 'Concluído', 'Confirmado']], `Requisição do modal incorreta em ${label}.`);
 
         for (const [token, expected] of [['visual-verifying', 'verifying'], ['visual-confirmed', 'confirmed']]) {
           const forced = expected === 'verifying' ? '&paid=true&paymentState=confirmed&status=Confirmado' : '';
@@ -609,7 +755,9 @@ const server = http.createServer((request, response) => {
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
     console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
     console.log('PASS Kanban com seis colunas, cards contidos, rolagem horizontal restrita ao quadro e total reutilizado nas seis resoluções');
-    console.log('PASS drag-and-drop: destaque do destino, salvamento antes da consolidação, sem requisição na mesma coluna ou destino bloqueado');
+    console.log('PASS drag-and-drop livre: pula e volta etapas sem diálogos, salvamento antes da consolidação, sem requisição duplicada ou na mesma coluna');
+    console.log('PASS modal do pedido: clique, teclado, Escape, X, foco restaurado, fundo inerte, sem abrir após arraste e contido nas seis resoluções');
+    console.log('PASS modal compacto (390, 768): Gestão logo abaixo do cabeçalho; desktop (1024+) mantém duas colunas; um único seletor de status');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
     console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');

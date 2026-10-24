@@ -902,7 +902,7 @@ test('alteracao manual de status usa o mesmo lock da confirmacao automatica', ()
   let held = 0;
   let maxHeld = 0;
   h.context.LockService = { getScriptLock: () => ({ waitLock() { held += 1; maxHeld = Math.max(maxHeld, held); }, releaseLock() { held -= 1; } }) };
-  h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true });
+  h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento' });
   assert.equal(maxHeld, 1);
   assert.equal(held, 0);
   assert.equal(h.orderRows[0][13], 'Cancelado');
@@ -919,39 +919,64 @@ test('kanban: webhook que confirma antes da movimentacao gera conflito sem perde
   assert.equal(h.orderRows[0][13], 'Confirmado');
   const historyBefore = JSON.stringify(checkoutRefs(h).history);
   // Quadro desatualizado ainda mostra "Aguardando pagamento" e tenta cancelar.
-  assert.throws(() => h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true }),
+  assert.throws(() => h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento' }),
     error => error.code === 'STATUS_CONFLICT' && error.currentStatus === 'Confirmado');
   assert.equal(h.orderRows[0][13], 'Confirmado');
   assert.equal(JSON.stringify(checkoutRefs(h).history), historyBefore);
 });
 
-test('kanban: pagamento confirmado pela InfinitePay nao pode ser revertido', () => {
+test('kanban: voltar pedido pago para Aguardando nao reverte a cobranca nem e sobrescrito', () => {
   const { h, order } = returnedOrder();
   h.setPaymentCheck(approved());
   h.context.verifyCheckoutPayment_(order.id);
   const checkoutBefore = JSON.stringify(h.checkoutRows);
-  for (const options of [{ expectedStatus: 'Confirmado' }, { expectedStatus: 'Confirmado', confirmTransition: true, manualPaymentConfirmation: true }]) {
-    assert.throws(() => h.context.updateOrderStatus_(order.id, 'Aguardando pagamento', options), error => error.code === 'PAYMENT_REVERSAL_BLOCKED');
-  }
-  assert.equal(h.context.updateOrderStatus_(order.id, 'Em produção', { expectedStatus: 'Confirmado' }).status, 'Em produção');
+  assert.equal(h.context.updateOrderStatus_(order.id, 'Aguardando pagamento', { expectedStatus: 'Confirmado' }).status, 'Aguardando pagamento');
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
   assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore, 'Movimentação operacional não altera a cobrança nem o histórico.');
+  assert.equal(h.checkoutRows[0][7], 'paid_confirmed');
+  // Nova conferência reconhece o pagamento já confirmado e respeita a coluna escolhida.
+  assert.equal(h.context.verifyCheckoutPayment_(order.id).outcome, 'already_confirmed');
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+  assert.equal(h.context.publicPaymentStatus_(order.id).paymentState, 'confirmed', 'A cobrança continua sendo a fonte de verdade para o cliente.');
+  assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore);
 });
 
-test('kanban: arrastar para Confirmado nao representa validacao financeira', () => {
+test('kanban: mover para Confirmado nao cria pagamento nem marca a cobranca como paga', () => {
   const { h, order } = returnedOrder();
   const checkoutBefore = JSON.stringify(h.checkoutRows);
-  for (const options of [{ expectedStatus: 'Aguardando pagamento' }, { expectedStatus: 'Aguardando pagamento', confirmTransition: true }]) {
-    assert.throws(() => h.context.updateOrderStatus_(order.id, 'Confirmado', options), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
-  }
-  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
-  // Confirmação manual explícita muda apenas o status operacional; a cobrança segue aguardando a InfinitePay.
-  h.context.updateOrderStatus_(order.id, 'Confirmado', { expectedStatus: 'Aguardando pagamento', manualPaymentConfirmation: true });
+  h.context.updateOrderStatus_(order.id, 'Confirmado', { expectedStatus: 'Aguardando pagamento' });
   assert.equal(h.orderRows[0][13], 'Confirmado');
   assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore);
+  assert.equal(h.checkoutRows[0][7], 'returned_unverified');
+  assert.equal(h.context.publicPaymentStatus_(order.id).paymentState, 'verifying', 'Status operacional não libera a tela de obrigado.');
   h.setPaymentCheck(approved());
   const later = h.context.verifyCheckoutPayment_(order.id);
   assert.equal(later.outcome, 'already_advanced');
   assert.equal(h.orderRows[0][13], 'Confirmado');
+});
+
+test('kanban: pedido adiantado antes do pagamento continua na conciliacao e mantem o status escolhido', () => {
+  const { h, order } = returnedOrder();
+  h.context.updateOrderStatus_(order.id, 'Em produção', { expectedStatus: 'Aguardando pagamento' });
+  assert.deepEqual([...h.context.pendingPaymentCandidates_(new Date('2026-10-20T15:00:00Z'))], [order.id]);
+  h.setPaymentCheck(approved());
+  const result = h.context.verifyCheckoutPayment_(order.id, { source: 'reconcile' });
+  assert.equal(result.outcome, 'already_advanced');
+  assert.equal(h.orderRows[0][13], 'Em produção', 'Confirmação financeira não sobrescreve o status operacional.');
+  assert.equal(h.checkoutRows[0][7], 'paid_confirmed');
+  assert.equal(checkoutRefs(h).history, undefined, 'Sem mudança de status, nada é acrescentado ao histórico.');
+  assert.deepEqual([...h.context.pendingPaymentCandidates_(new Date('2026-10-20T15:00:00Z'))], []);
+});
+
+test('kanban: reativar pedido cancelado com pagamento aprovado preserva a conferencia financeira', () => {
+  const { h, order } = returnedOrder();
+  h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento' });
+  h.setPaymentCheck(approved());
+  h.context.verifyCheckoutPayment_(order.id);
+  assert.equal(checkoutRefs(h).reviewReason, 'order_cancelled');
+  const checkoutBefore = JSON.stringify(h.checkoutRows);
+  assert.equal(h.context.updateOrderStatus_(order.id, 'Em produção', { expectedStatus: 'Cancelado' }).status, 'Em produção');
+  assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore);
 });
 
 test('central recebe confirmacao automatica pela consulta administrativa', () => {

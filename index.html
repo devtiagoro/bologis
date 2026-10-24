@@ -1127,7 +1127,6 @@
     .kanban-column[data-kanban-column="Concluído"] { --kanban-accent: #7fbca3; }
     .kanban-column[data-kanban-column="Cancelado"] { --kanban-accent: #d9a1a1; }
     .kanban-column.is-drop-target { border-color: var(--accent); border-top-color: var(--accent); background: #fff7f2; }
-    .kanban-column.is-drop-blocked { opacity: .62; }
     .kanban-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 8px; }
     .kanban-column-head h3 { margin: 0; font-size: 14px; line-height: 1.3; color: var(--text); }
     .kanban-count { min-width: 26px; padding: 3px 8px; border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--muted); text-align: center; font-size: 12px; font-weight: 850; }
@@ -1155,11 +1154,67 @@
     .kanban-card .status-badge { margin-top: 8px; white-space: normal; }
     .kanban-move { display: block; margin-top: 10px; }
     .kanban-move .control { width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; font-size: 13px; }
-    .kanban-locked { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
     .kanban-saving { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 10px 0 0; color: var(--accent-strong); font-size: 13px; font-weight: 800; }
     .kanban-saving .loading-spinner { width: 16px; height: 16px; margin: 0; border-width: 2px; }
-    .kanban-card .order-details { margin-top: 10px; padding-top: 10px; font-size: 13px; }
-    .kanban-card .order-details-sections { grid-template-columns: minmax(0, 1fr); }
+    .kanban-card { position: relative; cursor: pointer; }
+    .kanban-card:hover { border-color: #dcc6b8; box-shadow: 0 8px 18px rgba(76, 49, 37, .09); }
+    .kanban-card-open { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+    .kanban-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+    /* Etapa 11.2: modal de detalhes do pedido */
+    body.modal-open { overflow: hidden; }
+    .order-modal {
+      width: min(1040px, calc(100% - 32px));
+      max-width: none;
+      max-height: calc(100dvh - 48px);
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 28px 80px rgba(47, 33, 26, .28);
+      overflow: hidden;
+    }
+    .order-modal[open] { display: flex; flex-direction: column; }
+    .order-modal::backdrop { background: rgba(47, 33, 26, .42); }
+    .order-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+    .order-modal-heading { min-width: 0; }
+    .order-modal-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+    .order-modal-header h2 { margin: 6px 0 0; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+    .order-modal-close { flex: 0 0 44px; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--text); font-size: 24px; line-height: 1; }
+    .order-modal-close:focus-visible, .order-modal a:focus-visible, .order-modal button:focus-visible, .order-modal select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .order-modal > .message { margin: 12px 24px 0; }
+    .order-modal-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 24px 24px; }
+    .order-modal-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 16px; align-items: start; }
+    .order-modal-column { display: grid; gap: 14px; min-width: 0; }
+    .order-modal-section { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: #fff; overflow-wrap: anywhere; font-size: 14px; }
+    .order-modal-section h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
+    .order-modal-items { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+    .order-modal-item { display: flex; justify-content: space-between; gap: 12px; min-width: 0; }
+    .order-modal-item > div { min-width: 0; }
+    .order-modal-item small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .order-modal-item-price { flex: 0 0 auto; text-align: right; white-space: nowrap; }
+    .order-modal-rows { display: grid; gap: 6px; margin: 12px 0 0; padding-top: 12px; border-top: 1px dashed var(--line); }
+    .order-modal-rows > div { display: flex; justify-content: space-between; gap: 12px; min-width: 0; }
+    .order-modal-rows dt { color: var(--muted); flex: 0 0 auto; }
+    .order-modal-rows dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+    .order-modal-rows.is-plain { margin-top: 0; padding-top: 0; border-top: 0; }
+    .order-modal-rows .is-total { padding-top: 6px; font-size: 16px; font-weight: 850; }
+    .order-modal-rows .is-total dt { color: var(--text); }
+    .order-modal-rows .is-savings dd { color: var(--success); }
+    .order-modal-pre { margin: 0; white-space: pre-line; line-height: 1.5; }
+    .order-modal-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .finance-state { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); color: var(--muted); font-weight: 850; line-height: 1.35; }
+    .finance-state[data-tone="success"] { background: #eaf6ef; color: #276647; }
+    .finance-state[data-tone="pending"] { background: #fff4df; color: #815b16; }
+    .finance-state[data-tone="warning"] { background: #fff0f0; color: #944343; }
+    .order-modal-status label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .order-modal-status .control { width: 100%; min-height: 44px; }
+    .order-modal-actions { display: grid; gap: 8px; margin-top: 12px; }
+    .order-modal-actions .ghost-btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; text-align: center; text-decoration: none; }
+    @media (max-width: 860px) {
+      .order-modal-grid { grid-template-columns: minmax(0, 1fr); }
+    }
 
     .orders-state {
       min-height: 180px;
@@ -1288,6 +1343,10 @@
       .orders-result-line { align-items: flex-start; flex-direction: column; }
       .orders-heading-actions { width: 100%; justify-content: space-between; }
       .kanban-board { --kanban-column: 84%; }
+      .order-modal { width: calc(100% - 16px); max-height: calc(100dvh - 16px); border-radius: 18px; }
+      .order-modal-header, .order-modal-scroll { padding-left: 16px; padding-right: 16px; }
+      .order-modal > .message { margin-left: 16px; margin-right: 16px; }
+      .order-modal-header h2 { font-size: 19px; }
       .admin-workspace .admin-nav { margin: 0 -4px; padding: 8px; }
       .admin-nav .nav-count { display: none; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr; }
@@ -1849,6 +1908,15 @@
 
   <div id="toast" class="toast" role="status"></div>
 
+  <dialog id="orderModal" class="order-modal" aria-labelledby="orderModalTitle">
+    <header class="order-modal-header">
+      <div id="orderModalHeading" class="order-modal-heading"><h2 id="orderModalTitle">Pedido</h2></div>
+      <button id="orderModalClose" class="order-modal-close" type="button" aria-label="Fechar detalhes do pedido">×</button>
+    </header>
+    <div id="orderModalMessage" class="message" role="status" aria-live="polite"></div>
+    <div id="orderModalBody" class="order-modal-scroll"></div>
+  </dialog>
+
   <script>
     (() => {
       'use strict';
@@ -1917,6 +1985,9 @@
       // Pedidos com movimentação aguardando resposta do Apps Script.
       const savingOrderIds = new Set();
       let draggedOrderId = '';
+      // Etapa 11.2: pedido aberto no modal e janela que ignora o clique gerado ao soltar um arraste.
+      const orderModalState = { orderId: '' };
+      let suppressCardClickUntil = 0;
       let adminSessionToken = '';
       let adminSessionExpiresAt = 0;
       let adminExpiryTimer = null;
@@ -1995,6 +2066,8 @@
       }
 
       function showToast(message) {
+        // O modal fica na camada superior e cobriria o aviso flutuante.
+        if (orderModalState.orderId) setMessage($('orderModalMessage'), 'success', message);
         const toast = $('toast');
         toast.textContent = message;
         toast.classList.add('show');
@@ -2942,14 +3015,14 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
-      function updateOrderStatus(orderId, status, options = {}) {
-        return apiPost({ action: 'updateOrderStatus', orderId, status, ...options }, { admin: true });
+      function updateOrderStatus(orderId, status, expectedStatus) {
+        return apiPost({ action: 'updateOrderStatus', orderId, status, expectedStatus }, { admin: true });
       }
 
       // expectedStatus permite ao Apps Script recusar a gravação se webhook ou conciliação mudaram o pedido.
-      async function changeOrderStatus(orderId, status, options = {}) {
+      async function changeOrderStatus(orderId, status) {
         const current = appState.orders.find(order => String(order.id) === String(orderId));
-        const result = await updateOrderStatus(orderId, status, { expectedStatus: String(current?.status || ''), ...options });
+        const result = await updateOrderStatus(orderId, status, String(current?.status || ''));
         const saved = String(result?.order?.status || status);
         appState.orders.filter(order => String(order.id) === String(orderId)).forEach(order => { order.status = saved; });
         renderOrderFilterOptions();
@@ -2957,64 +3030,24 @@
         return appState.orders.find(order => String(order.id) === String(orderId));
       }
 
-      // Espelho de orderStatusTransition_() do Apps Script, usado só para orientar a interface.
-      // O servidor revalida cada movimentação dentro do lock.
-      function orderStatusTransition(from, to) {
-        const [waiting, confirmed, production, done, cancelled] = DEFAULT_ORDER_STATUSES;
-        const current = String(from || '');
-        if (current === to) return { kind: 'same' };
-        if (current === cancelled) return { kind: 'blocked', message: 'Pedidos cancelados não podem ser movimentados.' };
-        if (to === cancelled) return { kind: 'confirm' };
-        if (![confirmed, production, done].includes(current)) {
-          if (to === waiting) return { kind: 'allowed' };
-          if (to === confirmed) return { kind: 'payment' };
-          return { kind: 'blocked', message: 'Confirme o pagamento antes de iniciar a produção ou concluir o pedido.' };
-        }
-        if (to === waiting) return { kind: 'blocked', message: 'Pedidos com pagamento confirmado não voltam para "Aguardando pagamento".' };
-        if ((current === confirmed && to === done) || current === done) return { kind: 'confirm' };
-        return { kind: 'allowed' };
-      }
-
-      function statusTransitionPrompt(order, to, kind) {
-        const label = `#${shortOrderId(order.id) || '—'} (${order.customerName || 'cliente não informado'})`;
-        if (kind === 'payment') {
-          return `Confirmar manualmente o pagamento do pedido ${label}?\n\nUse somente depois de verificar o recebimento. Pagamentos pela InfinitePay são confirmados automaticamente; mover o pedido não valida pagamento.`;
-        }
-        if (kind !== 'confirm') return '';
-        if (to === 'Cancelado') return `Cancelar o pedido ${label}?\n\nPedidos cancelados não podem voltar a outro status. Pagamentos já recebidos continuam registrados.`;
-        if (order.status === 'Concluído') return `Reabrir o pedido ${label} em "${to}"?`;
-        return `Mover o pedido ${label} para "${to}" sem passar por "Em produção"?`;
-      }
-
-      // Caminho único da Lista e do Kanban: confirma quando a regra exige e só consolida após o Apps Script.
+      // Caminho único da Lista e do Kanban: movimentação livre entre os status canônicos,
+      // consolidada somente após a resposta positiva do Apps Script.
       async function moveOrderToStatus(orderId, nextStatus) {
         const id = String(orderId || '');
         const order = appState.orders.find(item => String(item.id) === id);
-        if (!order || !nextStatus || savingOrderIds.has(id)) {
+        if (!order || !DEFAULT_ORDER_STATUSES.includes(nextStatus) || savingOrderIds.has(id)) {
           renderLocalOrders();
           return { moved: false, reason: 'unavailable' };
         }
-        const rule = orderStatusTransition(order.status, nextStatus);
-        if (rule.kind === 'same') {
+        if (String(order.status || '') === nextStatus) {
           renderLocalOrders();
           return { moved: false, reason: 'same' };
         }
-        clearMessage($('ordersMessage'));
-        if (rule.kind === 'blocked') {
-          setMessage($('ordersMessage'), 'error', rule.message);
-          renderLocalOrders();
-          return { moved: false, reason: 'blocked' };
-        }
-        const prompt = statusTransitionPrompt(order, nextStatus, rule.kind);
-        if (prompt && !window.confirm(prompt)) {
-          renderLocalOrders();
-          return { moved: false, reason: 'dismissed' };
-        }
-        const options = rule.kind === 'payment' ? { manualPaymentConfirmation: true } : rule.kind === 'confirm' ? { confirmTransition: true } : {};
+        clearOrdersMessage();
         savingOrderIds.add(id);
         renderLocalOrders();
         try {
-          await changeOrderStatus(id, nextStatus, options);
+          await changeOrderStatus(id, nextStatus);
           showToast(`Pedido #${shortOrderId(id)} movido para ${nextStatus}`);
           return { moved: true };
         } catch (error) {
@@ -3022,10 +3055,10 @@
           if (error.code === 'STATUS_CONFLICT') {
             if (typeof error.currentStatus === 'string') order.status = error.currentStatus;
             await loadAdminOrders();
-            if (!orderViewState.error) setMessage($('ordersMessage'), 'error', error.message);
+            if (!orderViewState.error) showOrdersMessage('error', `${error.message} Confira o status e mova o pedido novamente, se necessário.`);
           } else if (!isAdminAuthError(error)) {
-            const reason = error.code ? error.message : 'falha de conexão';
-            setMessage($('ordersMessage'), 'error', `Não foi possível mover o pedido #${shortOrderId(id)}: ${reason}. Ele permanece em "${order.status || 'status anterior'}".`);
+            const reason = error.code ? String(error.message || '').replace(/\.$/, '') : 'falha de conexão';
+            showOrdersMessage('error', `Não foi possível mover o pedido #${shortOrderId(id)}: ${reason}. Ele permanece em "${order.status || 'status anterior'}".`);
           }
           return { moved: false, reason: error.code === 'STATUS_CONFLICT' ? 'conflict' : 'error', error };
         } finally {
@@ -3454,10 +3487,8 @@
         const current = String(currentStatus || canonical[0]);
         const options = canonical.map(status => ({ status, legacy: false }));
         if (!canonical.includes(current)) options.unshift({ status: current, legacy: true });
-        // Destinos que o servidor recusaria ficam indisponíveis também na Lista.
-        const blocked = status => status !== current && orderStatusTransition(currentStatus, status).kind === 'blocked';
         return options.map(item =>
-          `<option value="${escapeHtml(item.status)}" ${item.status === current ? 'selected' : ''} ${item.legacy || blocked(item.status) ? 'disabled' : ''}>${escapeHtml(item.status)}${item.legacy ? ' (legado)' : ''}</option>`
+          `<option value="${escapeHtml(item.status)}" ${item.status === current ? 'selected' : ''} ${item.legacy ? 'disabled' : ''}>${escapeHtml(item.status)}${item.legacy ? ' (legado)' : ''}</option>`
         ).join('');
       }
 
@@ -3673,21 +3704,31 @@
         })[reason] || 'verificar na InfinitePay';
       }
 
-      function renderAdminCheckout(order) {
+      // Dados e ações da InfinitePay compartilhados pela Lista e pelo modal do Kanban.
+      function checkoutPresentation(order) {
         const checkout = order.checkout || {};
         const url = safeCheckoutUrl(checkout.url);
         const expiry = new Date(checkout.expiresAt || '');
-        const expiryText = Number.isNaN(expiry.getTime()) ? '—' : expiry.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-        const checkAction = ['returned_unverified', 'paid_unverified', 'payment_amount_mismatch'].includes(checkout.state)
-          ? `<button class="ghost-btn checkout-check" type="button" data-order-id="${escapeHtml(order.id || '')}">Conferir na InfinitePay</button>`
-          : '';
-        const retryAction = checkout.canManualRetry && !url && order.status === 'Aguardando pagamento'
-          ? `<button class="ghost-btn checkout-retry" type="button" data-order-id="${escapeHtml(order.id || '')}">${checkout.state === 'not_created' || !checkout.state ? 'Gerar checkout' : 'Gerar checkout novamente'}</button>`
-          : '';
-        const diagnostic = checkout.diagnostic
-          ? `<span class="checkout-diagnostic">Falha: ${escapeHtml(checkoutDiagnosticText(checkout.diagnostic))}${checkout.attempts ? ` · ${escapeHtml(String(checkout.attempts))} tentativa(s)` : ''}</span>`
-          : '';
-        const review = checkout.reviewReason ? `<span class="checkout-diagnostic">Conferência: ${escapeHtml(paymentReviewReasonText(checkout.reviewReason))}</span>` : '';
+        return {
+          checkout, url,
+          expiryText: Number.isNaN(expiry.getTime()) ? '—' : expiry.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+          checkAction: ['returned_unverified', 'paid_unverified', 'payment_amount_mismatch'].includes(checkout.state)
+            ? `<button class="ghost-btn checkout-check" type="button" data-order-id="${escapeHtml(order.id || '')}">Conferir na InfinitePay</button>`
+            : '',
+          retryAction: checkout.canManualRetry && !url && order.status === 'Aguardando pagamento'
+            ? `<button class="ghost-btn checkout-retry" type="button" data-order-id="${escapeHtml(order.id || '')}">${checkout.state === 'not_created' || !checkout.state ? 'Gerar checkout' : 'Gerar checkout novamente'}</button>`
+            : '',
+          diagnostic: checkout.diagnostic
+            ? `Falha: ${checkoutDiagnosticText(checkout.diagnostic)}${checkout.attempts ? ` · ${checkout.attempts} tentativa(s)` : ''}`
+            : '',
+          review: checkout.reviewReason ? `Conferência: ${paymentReviewReasonText(checkout.reviewReason)}` : ''
+        };
+      }
+
+      function renderAdminCheckout(order) {
+        const { checkout, url, expiryText, checkAction, retryAction, diagnostic: diagnosticText, review: reviewText } = checkoutPresentation(order);
+        const diagnostic = diagnosticText ? `<span class="checkout-diagnostic">${escapeHtml(diagnosticText)}</span>` : '';
+        const review = reviewText ? `<span class="checkout-diagnostic">${escapeHtml(reviewText)}</span>` : '';
         const details = `<div><span>ID: ${escapeHtml(checkout.chargeId || 'aguardando')}</span><span>Valor esperado: ${escapeHtml(brl(Number(checkout.expectedAmountCents || 0) / 100))}</span><span>Expira: ${escapeHtml(expiryText)}</span>${diagnostic}${review}${checkAction}${retryAction}<small>${checkout.state === 'paid_confirmed' ? 'Pagamento validado pela InfinitePay.' : 'O pedido só é confirmado automaticamente após validação do pagamento na InfinitePay.'}</small></div>`;
         return `<div class="admin-item-list"><strong>${escapeHtml(checkoutStateLabel(checkout.state))}</strong>${details}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>`;
       }
@@ -3805,15 +3846,10 @@
 
       function kanbanMoveControl(order) {
         const id = String(order.id || '');
-        const targets = DEFAULT_ORDER_STATUSES.filter(status => status !== String(order.status || ''))
-          .map(status => ({ status, kind: orderStatusTransition(order.status, status).kind }));
-        if (targets.every(target => target.kind === 'blocked')) {
-          return '<p class="kanban-locked">Pedido cancelado: movimentação bloqueada.</p>';
-        }
-        const hint = kind => kind === 'payment' ? ' · confirmação manual' : kind === 'confirm' ? ' · pede confirmação' : kind === 'blocked' ? ' · indisponível' : '';
+        const targets = DEFAULT_ORDER_STATUSES.filter(status => status !== String(order.status || ''));
         return `<label class="kanban-move"><span class="sr-only">Mover pedido #${escapeHtml(shortOrderId(id))} para</span><select class="control kanban-move-select" data-order-id="${escapeHtml(id)}">
           <option value="">Mover para…</option>
-          ${targets.map(target => `<option value="${escapeHtml(target.status)}" ${target.kind === 'blocked' ? 'disabled' : ''}>${escapeHtml(target.status)}${hint(target.kind)}</option>`).join('')}
+          ${targets.map(status => `<option value="${escapeHtml(status)}">${escapeHtml(status)}</option>`).join('')}
         </select></label>`;
       }
 
@@ -3821,16 +3857,14 @@
         const id = String(order.id || '');
         const saving = savingOrderIds.has(id);
         const customer = order.customerName || 'Cliente não informado';
-        const movable = !saving && DEFAULT_ORDER_STATUSES.some(status => !['same', 'blocked'].includes(orderStatusTransition(order.status, status).kind));
-        return `<article class="kanban-card${saving ? ' is-saving' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(order.status || '')}" draggable="${movable}" aria-busy="${saving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
+        return `<article class="kanban-card${saving ? ' is-saving' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(order.status || '')}" draggable="${!saving}" aria-busy="${saving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
           <div class="kanban-card-top"><span class="order-id" title="${escapeHtml(id)}">#${escapeHtml(shortOrderId(id) || '—')}</span><span class="kanban-chip order-fulfillment">${escapeHtml(orderFulfillmentShortLabel(order))}</span></div>
-          <h4>${escapeHtml(customer)}</h4>
+          <h4><button class="kanban-card-open" type="button" data-order-id="${escapeHtml(id)}" aria-haspopup="dialog" aria-label="Abrir detalhes do pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">${escapeHtml(customer)}</button></h4>
           <p class="kanban-card-items">${escapeHtml(orderFlavorSummary(order))} · ${escapeHtml(orderSlicesText(order))}</p>
           <div class="kanban-card-foot"><span>${escapeHtml(orderReceiptDateText(order))}</span><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong></div>
           ${legacyColumn ? `<span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || 'Sem status')}</span>` : ''}
           ${isPaymentDeadlineExpired(order) ? '<small class="order-meta">Prazo de pagamento encerrado</small>' : ''}
           ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : kanbanMoveControl(order)}
-          <details class="order-details"><summary>Mais informações</summary>${renderOrderDetailsContent(order)}</details>
         </article>`;
       }
 
@@ -3844,11 +3878,11 @@
         </div>${renderOrdersTotalSummary(totalCents)}`;
       }
 
-      // "same" (mesma coluna) e "none" (coluna de status legados) não geram requisição.
+      // "same" (mesma coluna) e "none" (coluna de status legados ou card em salvamento) não geram requisição.
       function kanbanDropKind(orderId, targetStatus) {
         const order = appState.orders.find(item => String(item.id) === String(orderId));
-        if (!order || !targetStatus || savingOrderIds.has(String(orderId))) return 'none';
-        return orderStatusTransition(order.status, targetStatus).kind;
+        if (!order || !DEFAULT_ORDER_STATUSES.includes(targetStatus) || savingOrderIds.has(String(orderId))) return 'none';
+        return String(order.status || '') === targetStatus ? 'same' : 'allowed';
       }
 
       function handleKanbanDrop(orderId, targetStatus) {
@@ -3859,7 +3893,7 @@
 
       function bindKanban(container) {
         const columns = qsa('.kanban-column', container);
-        const clearDropState = () => columns.forEach(column => column.classList.remove('is-drop-target', 'is-drop-blocked'));
+        const clearDropState = () => columns.forEach(column => column.classList.remove('is-drop-target'));
         qsa('.kanban-card[draggable="true"]', container).forEach(card => {
           card.addEventListener('dragstart', event => {
             draggedOrderId = card.dataset.kanbanCard;
@@ -3869,6 +3903,7 @@
           });
           card.addEventListener('dragend', () => {
             draggedOrderId = '';
+            suppressCardClickUntil = Date.now() + 350;
             card.classList.remove('is-dragging');
             clearDropState();
           });
@@ -3878,14 +3913,12 @@
           column.addEventListener('dragover', event => {
             const kind = kanbanDropKind(draggedOrderId, target);
             if (kind === 'none' || kind === 'same') return;
-            column.classList.toggle('is-drop-blocked', kind === 'blocked');
-            column.classList.toggle('is-drop-target', kind !== 'blocked');
-            if (kind === 'blocked') return;
+            column.classList.add('is-drop-target');
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
           });
           column.addEventListener('dragleave', event => {
-            if (!column.contains(event.relatedTarget)) column.classList.remove('is-drop-target', 'is-drop-blocked');
+            if (!column.contains(event.relatedTarget)) column.classList.remove('is-drop-target');
           });
           column.addEventListener('drop', event => {
             event.preventDefault();
@@ -3895,6 +3928,7 @@
             handleKanbanDrop(orderId, target);
           });
         });
+        qsa('.kanban-card', container).forEach(card => card.addEventListener('click', event => handleKanbanCardClick(card.dataset.kanbanCard, event.target)));
         qsa('.kanban-move-select', container).forEach(select => select.addEventListener('change', () => {
           if (select.value) moveOrderToStatus(select.dataset.orderId, select.value);
         }));
@@ -3905,22 +3939,207 @@
         qsa('.checkout-check', container).forEach(button => button.addEventListener('click', async () => {
           button.disabled = true;
           try { await checkCheckoutPayment(button.dataset.orderId); }
-          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível conferir o pagamento: ${error.message}`); }
+          catch (error) { showOrdersMessage('error', `Não foi possível conferir o pagamento: ${error.message}`); }
           finally { button.disabled = false; }
         }));
         qsa('.checkout-retry', container).forEach(button => button.addEventListener('click', async () => {
           if (!window.confirm('Gerar o checkout deste pedido na InfinitePay? Faça isso somente depois de confirmar que não existe outra cobrança para ele.')) return;
           button.disabled = true;
           try { await retryAdminCheckout(button.dataset.orderId); }
-          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível gerar o checkout: ${error.message}`); }
+          catch (error) { showOrdersMessage('error', `Não foi possível gerar o checkout: ${error.message}`); }
           finally { button.disabled = false; }
         }));
+      }
+
+      // Etapa 11.2: modal de detalhes aberto pelos cards do Kanban. Abrir não altera nenhum dado.
+      function financialSituation(order) {
+        const state = order.checkout?.state || '';
+        if (state === 'paid_confirmed') return { tone: 'success', label: 'Pagamento confirmado pela InfinitePay' };
+        if (state === 'payment_amount_mismatch') return { tone: 'warning', label: 'Valor pago divergente: requer conferência' };
+        if (state === 'paid_unverified' || state === 'unknown') return { tone: 'warning', label: 'Pagamento informado: requer conferência' };
+        if (['creating', 'active', 'returned_unverified'].includes(state)) return { tone: 'pending', label: 'Aguardando confirmação da InfinitePay' };
+        if (state === 'expired') return { tone: 'muted', label: 'Checkout expirado, sem pagamento confirmado' };
+        if (state === 'failed') return { tone: 'warning', label: 'Falha na geração do checkout' };
+        return { tone: 'muted', label: 'Sem cobrança InfinitePay registrada' };
+      }
+
+      function renderOrderModalHeading(order) {
+        return `<div class="order-modal-meta"><span class="order-id" title="${escapeHtml(order.id || '')}">#${escapeHtml(shortOrderId(order.id) || '—')}</span><span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || 'Sem status')}</span></div>
+          <h2 id="orderModalTitle">${escapeHtml(order.customerName || 'Cliente não informado')}</h2>`;
+      }
+
+      function renderOrderModalBody(order) {
+        const id = String(order.id || '');
+        const items = orderDisplayItems(order);
+        const total = orderTotal(order);
+        const subtotal = order.subtotal !== undefined && Number.isFinite(Number(order.subtotal)) ? Number(order.subtotal) : total;
+        const savings = items.reduce((sum, item) => sum + Number(item.savings || 0), 0);
+        const mode = order.fulfillment?.mode;
+        const fulfillment = orderFulfillmentSummary(order);
+        const guidance = mode === 'delivery' ? order.fulfillment?.instructions : mode === 'pickup' ? pickupGuidance(order.fulfillment?.instructions) : '';
+        const finance = financialSituation(order);
+        const payment = checkoutPresentation(order);
+        const saving = savingOrderIds.has(id);
+        const phone = whatsappLink(order.whatsapp);
+        const row = (label, value, className = '') => `<div${className ? ` class="${className}"` : ''}><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
+        const itemLine = item => {
+          const quantity = Number(item.quantity || 0);
+          const detail = item.pricingModel === 'progressive-v1'
+            ? `${quantity} ${quantity === 1 ? 'fatia' : 'fatias'}`
+            : `${quantity} × ${item.size || '—'}`;
+          return `<li class="order-modal-item"><div><strong>${escapeHtml(item.flavor || 'Item não informado')}</strong><small>${escapeHtml(detail)}</small></div>
+            <div class="order-modal-item-price"><strong>${escapeHtml(brl(item.subtotal))}</strong>${Number(item.savings) > 0 ? `<small>economia ${escapeHtml(brl(item.savings))}</small>` : ''}</div></li>`;
+        };
+        const itemsSection = `<section class="order-modal-section" aria-labelledby="orderModalItemsTitle">
+            <h3 id="orderModalItemsTitle">Encomenda</h3>
+            <ul class="order-modal-items">${items.map(itemLine).join('')}</ul>
+            <dl class="order-modal-rows">
+              ${row('Quantidade total', escapeHtml(orderSlicesText(order)))}
+              ${row('Subtotal', escapeHtml(brl(subtotal)))}
+              ${savings > 0 ? row('Economia progressiva', escapeHtml(brl(savings)), 'is-savings') : ''}
+              ${row('Taxa de entrega', mode === 'delivery' ? escapeHtml(Number(order.deliveryFee || 0) > 0 ? brl(Number(order.deliveryFee)) : 'Sem taxa') : '—')}
+              ${row('Total final', escapeHtml(brl(total)), 'is-total')}
+            </dl>
+          </section>`;
+        const fulfillmentSection = `<section class="order-modal-section" aria-labelledby="orderModalFulfillmentTitle">
+            <h3 id="orderModalFulfillmentTitle">Recebimento</h3>
+            <dl class="order-modal-rows is-plain">
+              ${row('Data programada', escapeHtml(orderReceiptDateText(order)))}
+              ${row('Modalidade', escapeHtml(fulfillment.label || 'Não informado'))}
+            </dl>
+            ${mode === 'delivery' ? `<p class="order-modal-note">Endereço</p><p class="order-modal-pre">${escapeHtml(formatAddress(order.fulfillment?.address) || 'Endereço não informado')}</p>` : ''}
+            ${guidance ? `<p class="order-modal-note">Orientações</p><p class="order-modal-pre">${escapeHtml(guidance)}</p>` : ''}
+            ${mode ? '' : '<p class="order-modal-note">Pedido anterior à escolha de entrega ou retirada.</p>'}
+          </section>`;
+        const notesSection = `<section class="order-modal-section" aria-labelledby="orderModalNotesTitle">
+            <h3 id="orderModalNotesTitle">Observações do cliente</h3>
+            <p class="order-modal-pre">${escapeHtml(order.notes || 'Sem observações')}</p>
+          </section>`;
+        const managementSection = `<section class="order-modal-section order-modal-status" aria-labelledby="orderModalStatusTitle">
+            <h3 id="orderModalStatusTitle">Gestão</h3>
+            <label for="orderModalStatus">Status do pedido</label>
+            <select id="orderModalStatus" class="control" data-order-id="${escapeHtml(id)}" ${saving ? 'disabled aria-busy="true"' : ''}>${renderStatusOptions(order.status)}</select>
+            ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
+            <p class="order-modal-note">Alterar o status não muda a situação financeira da cobrança.</p>
+          </section>`;
+        const paymentSection = `<section class="order-modal-section" aria-labelledby="orderModalPaymentTitle">
+            <h3 id="orderModalPaymentTitle">Pagamento</h3>
+            <dl class="order-modal-rows is-plain">
+              ${row('Status operacional', escapeHtml(order.status || 'Sem status'))}
+              ${row('Forma escolhida', escapeHtml(order.payment || '—'))}
+            </dl>
+            <p class="order-modal-note">Situação financeira (InfinitePay)</p>
+            <p class="finance-state" data-tone="${finance.tone}">${escapeHtml(finance.label)}</p>
+            ${order.checkout?.state && !['not_created', 'not_configured'].includes(order.checkout.state) ? `<dl class="order-modal-rows">
+              ${row('Cobrança', escapeHtml(payment.checkout.chargeId || 'aguardando'))}
+              ${row('Valor esperado', escapeHtml(brl(Number(payment.checkout.expectedAmountCents || 0) / 100)))}
+              ${row('Expira', escapeHtml(payment.expiryText))}
+            </dl>` : ''}
+            ${payment.diagnostic ? `<p class="order-modal-note">${escapeHtml(payment.diagnostic)}</p>` : ''}
+            ${payment.review ? `<p class="order-modal-note">${escapeHtml(payment.review)}</p>` : ''}
+            ${payment.checkAction || payment.retryAction || payment.url ? `<div class="order-modal-actions">${payment.checkAction}${payment.retryAction}${payment.url ? `<a class="ghost-btn" href="${escapeHtml(payment.url)}" target="_blank" rel="noopener">Abrir checkout</a>` : ''}</div>` : ''}
+            <p class="order-modal-note">O status operacional não comprova pagamento; a confirmação vem da InfinitePay.</p>
+          </section>`;
+        const customerSection = `<section class="order-modal-section" aria-labelledby="orderModalCustomerTitle">
+            <h3 id="orderModalCustomerTitle">Cliente</h3>
+            <dl class="order-modal-rows is-plain">
+              ${row('Nome', escapeHtml(order.customerName || 'Não informado'))}
+              ${row('WhatsApp', escapeHtml(order.whatsapp || '—'))}
+              ${row('Pedido', `<span class="order-full-id">${escapeHtml(id || '—')}</span>`)}
+              ${row('Criado em', escapeHtml(formatCreatedAt(order.createdAt)))}
+            </dl>
+            ${phone ? `<div class="order-modal-actions"><a class="ghost-btn" href="${phone}" target="_blank" rel="noopener">Abrir conversa no WhatsApp</a></div>` : ''}
+          </section>`;
+        // Até 860px a ordem do HTML acompanha a ordem visual (Gestão logo abaixo do cabeçalho),
+        // mantendo leitura e tabulação coerentes; no desktop ficam as duas colunas.
+        if (isCompactOrderModal()) {
+          return `<div class="order-modal-grid is-compact">${managementSection}${itemsSection}${fulfillmentSection}${paymentSection}${notesSection}${customerSection}</div>`;
+        }
+        return `<div class="order-modal-grid">
+          <div class="order-modal-column">${itemsSection}${fulfillmentSection}${notesSection}</div>
+          <aside class="order-modal-column" aria-label="Gestão do pedido">${managementSection}${paymentSection}${customerSection}</aside>
+        </div>`;
+      }
+
+      // Mesmo limite do CSS (.order-modal-grid em coluna única).
+      const ORDER_MODAL_COMPACT_QUERY = '(max-width: 860px)';
+      function isCompactOrderModal() {
+        return typeof window.matchMedia === 'function' && window.matchMedia(ORDER_MODAL_COMPACT_QUERY).matches;
+      }
+
+      // Re-renderiza com o estado atual (salvamento, conflito, confirmação automática); fecha se o pedido sumiu.
+      function renderOrderModal() {
+        if (!orderModalState.orderId) return;
+        const order = appState.orders.find(item => String(item.id) === orderModalState.orderId);
+        if (!order) {
+          closeOrderModal();
+          return;
+        }
+        const focusedId = document.activeElement?.id || '';
+        $('orderModalHeading').innerHTML = renderOrderModalHeading(order);
+        $('orderModalBody').innerHTML = renderOrderModalBody(order);
+        const select = $('orderModalStatus');
+        select.addEventListener('change', () => moveOrderToStatus(select.dataset.orderId, select.value));
+        bindOrderDetailActions($('orderModalBody'));
+        if (focusedId && focusedId !== 'orderModalClose' && $(focusedId)) $(focusedId).focus();
+      }
+
+      function openOrderModal(orderId) {
+        const order = appState.orders.find(item => String(item.id) === String(orderId));
+        if (!order) return false;
+        const dialog = $('orderModal');
+        const alreadyOpen = Boolean(orderModalState.orderId);
+        orderModalState.orderId = String(order.id);
+        clearMessage($('orderModalMessage'));
+        renderOrderModal();
+        if (!alreadyOpen) {
+          if (typeof dialog.showModal === 'function') {
+            if (!dialog.open) dialog.showModal();
+          } else {
+            dialog.setAttribute('open', '');
+          }
+          document.body.classList.add('modal-open');
+          $('orderModalClose').focus();
+        }
+        return true;
+      }
+
+      // Idempotente: chamado pelo X, Escape, clique no fundo e pelo evento "close" do <dialog>.
+      function closeOrderModal() {
+        if (!orderModalState.orderId) return;
+        const orderId = orderModalState.orderId;
+        orderModalState.orderId = '';
+        const dialog = $('orderModal');
+        if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+        else dialog.removeAttribute('open');
+        document.body.classList.remove('modal-open');
+        clearMessage($('orderModalMessage'));
+        qsa('.kanban-card-open').find(button => button.dataset.orderId === orderId)?.focus();
+      }
+
+      // Qualquer área do card abre o modal, exceto controles próprios e o clique que encerra um arraste.
+      function handleKanbanCardClick(orderId, target) {
+        if (draggedOrderId || Date.now() < suppressCardClickUntil) return false;
+        if (target?.closest?.('select, label, a, input, textarea')) return false;
+        return openOrderModal(orderId);
+      }
+
+      // Com o modal aberto o restante da central fica inerte; a mensagem também aparece nele.
+      function showOrdersMessage(type, text) {
+        setMessage($('ordersMessage'), type, text);
+        if (orderModalState.orderId) setMessage($('orderModalMessage'), type, text);
+      }
+
+      function clearOrdersMessage() {
+        clearMessage($('ordersMessage'));
+        clearMessage($('orderModalMessage'));
       }
 
       function renderLocalOrders() {
         const container = $('ordersContainer');
         if (!container) return;
         renderOrdersViewSwitch();
+        renderOrderModal();
         if (orderViewState.loading) {
           container.innerHTML = '<div class="orders-state" role="status"><div><div class="loading-spinner" aria-hidden="true"></div><strong>Carregando pedidos...</strong><div>Buscando as encomendas mais recentes.</div></div></div>';
           return;
@@ -3943,7 +4162,6 @@
         if (orderViewState.view === 'kanban') {
           container.innerHTML = renderOrdersKanban(orders, totalCents);
           bindKanban(container);
-          bindOrderDetailActions(container);
           return;
         }
 
@@ -4068,6 +4286,17 @@
         renderLocalOrders();
       });
       $('refreshOrdersBtn').addEventListener('click', () => withSavingState($('refreshOrdersBtn'), loadAdminOrders, 'Atualizando...'));
+      $('orderModalClose').addEventListener('click', closeOrderModal);
+      $('orderModal').addEventListener('close', closeOrderModal);
+      // Girar o tablet ou redimensionar a janela reorganiza o modal aberto sem perder o foco.
+      window.matchMedia?.(ORDER_MODAL_COMPACT_QUERY).addEventListener?.('change', renderOrderModal);
+      $('orderModal').addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeOrderModal();
+      });
+      // Clique no fundo escurecido (fora do conteúdo do diálogo) fecha o modal.
+      $('orderModal').addEventListener('click', event => { if (event.target === $('orderModal')) closeOrderModal(); });
       ['ordersListViewBtn', 'ordersKanbanViewBtn'].forEach(id => $(id).addEventListener('click', () => setOrdersView($(id).dataset.ordersView)));
       $('newOrderBtn').addEventListener('click', startAnotherOrder);
       $('recheckPaymentBtn').addEventListener('click', () => refreshPaymentStatus());
