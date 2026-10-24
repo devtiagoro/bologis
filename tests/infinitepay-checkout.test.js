@@ -902,7 +902,7 @@ test('alteracao manual de status usa o mesmo lock da confirmacao automatica', ()
   let held = 0;
   let maxHeld = 0;
   h.context.LockService = { getScriptLock: () => ({ waitLock() { held += 1; maxHeld = Math.max(maxHeld, held); }, releaseLock() { held -= 1; } }) };
-  h.context.updateOrderStatus_(order.id, 'Cancelado');
+  h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true });
   assert.equal(maxHeld, 1);
   assert.equal(held, 0);
   assert.equal(h.orderRows[0][13], 'Cancelado');
@@ -910,6 +910,48 @@ test('alteracao manual de status usa o mesmo lock da confirmacao automatica', ()
   h.context.verifyCheckoutPayment_(order.id);
   assert.equal(held, 0);
   assert.equal(h.orderRows[0][13], 'Cancelado');
+});
+
+test('kanban: webhook que confirma antes da movimentacao gera conflito sem perder a confirmacao', () => {
+  const { h, order } = returnedOrder({ webhook: true, returned: false });
+  h.setPaymentCheck(approved());
+  webhookCall(h, webhookQuery(h), { invoice_slug: 'invoice-hook', amount: 5494, paid_amount: 5494, installments: 1, capture_method: 'pix', transaction_nsu: 'transaction-hook', order_nsu: order.id, items: [] });
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  const historyBefore = JSON.stringify(checkoutRefs(h).history);
+  // Quadro desatualizado ainda mostra "Aguardando pagamento" e tenta cancelar.
+  assert.throws(() => h.context.updateOrderStatus_(order.id, 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true }),
+    error => error.code === 'STATUS_CONFLICT' && error.currentStatus === 'Confirmado');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(JSON.stringify(checkoutRefs(h).history), historyBefore);
+});
+
+test('kanban: pagamento confirmado pela InfinitePay nao pode ser revertido', () => {
+  const { h, order } = returnedOrder();
+  h.setPaymentCheck(approved());
+  h.context.verifyCheckoutPayment_(order.id);
+  const checkoutBefore = JSON.stringify(h.checkoutRows);
+  for (const options of [{ expectedStatus: 'Confirmado' }, { expectedStatus: 'Confirmado', confirmTransition: true, manualPaymentConfirmation: true }]) {
+    assert.throws(() => h.context.updateOrderStatus_(order.id, 'Aguardando pagamento', options), error => error.code === 'PAYMENT_REVERSAL_BLOCKED');
+  }
+  assert.equal(h.context.updateOrderStatus_(order.id, 'Em produção', { expectedStatus: 'Confirmado' }).status, 'Em produção');
+  assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore, 'Movimentação operacional não altera a cobrança nem o histórico.');
+});
+
+test('kanban: arrastar para Confirmado nao representa validacao financeira', () => {
+  const { h, order } = returnedOrder();
+  const checkoutBefore = JSON.stringify(h.checkoutRows);
+  for (const options of [{ expectedStatus: 'Aguardando pagamento' }, { expectedStatus: 'Aguardando pagamento', confirmTransition: true }]) {
+    assert.throws(() => h.context.updateOrderStatus_(order.id, 'Confirmado', options), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
+  }
+  assert.equal(h.orderRows[0][13], 'Aguardando pagamento');
+  // Confirmação manual explícita muda apenas o status operacional; a cobrança segue aguardando a InfinitePay.
+  h.context.updateOrderStatus_(order.id, 'Confirmado', { expectedStatus: 'Aguardando pagamento', manualPaymentConfirmation: true });
+  assert.equal(h.orderRows[0][13], 'Confirmado');
+  assert.equal(JSON.stringify(h.checkoutRows), checkoutBefore);
+  h.setPaymentCheck(approved());
+  const later = h.context.verifyCheckoutPayment_(order.id);
+  assert.equal(later.outcome, 'already_advanced');
+  assert.equal(h.orderRows[0][13], 'Confirmado');
 });
 
 test('central recebe confirmacao automatica pela consulta administrativa', () => {

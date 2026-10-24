@@ -428,22 +428,101 @@ test('dia corrente e calculado no timezone de Sao Paulo', () => {
   assert.equal(h.post().ok, true);
 });
 
-test('status canonicos sao aceitos pelo servidor', () => {
-  const row = ['PF-STATUS-1', new Date(), 'Cliente', '34999990000', new Date(), '00:00', 'Chocolate ficticio', 'p', 'Pequeno', '', 89, 'PIX', '', 'Aguardando pagamento', 'site'];
-  const h = createHarness({ rows: [row] });
-  for (const status of h.statuses) {
-    assert.equal(h.context.updateOrderStatus_('PF-STATUS-1', status).status, status);
-  }
+function statusRow(id, status) {
+  return [id, new Date(), 'Cliente', '34999990000', new Date(), '00:00', 'Chocolate ficticio', 'p', 'Pequeno', '', 89, 'PIX', '', status, 'site'];
+}
+
+function moveStatus(h, id, status, options = {}) {
+  return h.context.updateOrderStatus_(id, status, { expectedStatus: h.rows.find(row => row[0] === id)[13], ...options });
+}
+
+test('status canonicos sao aceitos pelo servidor no fluxo operacional', () => {
+  const h = createHarness({ rows: [statusRow('PF-STATUS-1', 'Aguardando pagamento')] });
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Confirmado', { manualPaymentConfirmation: true }).status, 'Confirmado');
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Em produção').status, 'Em produção');
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Concluído').status, 'Concluído');
+  assert.equal(moveStatus(h, 'PF-STATUS-1', 'Cancelado', { confirmTransition: true }).status, 'Cancelado');
+  assert.deepEqual([...h.statuses], ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído', 'Cancelado']);
 });
 
 test('status legado e preservado, mas nao pode ser atribuido novamente', () => {
   for (const legacyStatus of ['Novo', 'Pagamento não confirmado']) {
-    const row = ['PF-LEGACY-1', new Date(), 'Cliente', '34999990000', new Date(), '00:00', 'Chocolate ficticio', 'p', 'Pequeno', '', 89, 'PIX', '', legacyStatus, 'site'];
-    const h = createHarness({ rows: [row] });
+    const h = createHarness({ rows: [statusRow('PF-LEGACY-1', legacyStatus)] });
     assert.equal(h.context.getOrders_()[0].status, legacyStatus);
-    assert.throws(() => h.context.updateOrderStatus_('PF-LEGACY-1', legacyStatus), /Status inválido/);
+    assert.throws(() => moveStatus(h, 'PF-LEGACY-1', legacyStatus), /Status inválido/);
     assert.equal(h.rows[0][13], legacyStatus);
   }
+});
+
+test('transicoes de status seguem a tabela operacional do servidor', () => {
+  const rule = (from, to) => vm.runInContext(`orderStatusTransition_(${JSON.stringify(from)}, ${JSON.stringify(to)}).kind`, createHarness().context);
+  const expected = [
+    ['Aguardando pagamento', 'Confirmado', 'payment'], ['Aguardando pagamento', 'Em produção', 'blocked'],
+    ['Aguardando pagamento', 'Concluído', 'blocked'], ['Aguardando pagamento', 'Cancelado', 'confirm'],
+    ['Confirmado', 'Em produção', 'allowed'], ['Confirmado', 'Concluído', 'confirm'], ['Confirmado', 'Aguardando pagamento', 'blocked'],
+    ['Em produção', 'Concluído', 'allowed'], ['Em produção', 'Confirmado', 'allowed'], ['Em produção', 'Aguardando pagamento', 'blocked'],
+    ['Concluído', 'Em produção', 'confirm'], ['Concluído', 'Confirmado', 'confirm'], ['Concluído', 'Cancelado', 'confirm'],
+    ['Cancelado', 'Aguardando pagamento', 'blocked'], ['Cancelado', 'Confirmado', 'blocked'], ['Cancelado', 'Em produção', 'blocked'],
+    ['Novo', 'Aguardando pagamento', 'allowed'], ['Novo', 'Confirmado', 'payment'], ['Pagamento não confirmado', 'Em produção', 'blocked'],
+    ['Status personalizado', 'Cancelado', 'confirm'], ['', 'Aguardando pagamento', 'allowed'],
+    ['Em produção', 'Em produção', 'same']
+  ];
+  for (const [from, to, kind] of expected) assert.equal(rule(from, to), kind, `${from || '(vazio)'} → ${to}`);
+});
+
+test('confirmacao manual de pagamento exige autorizacao explicita', () => {
+  const h = createHarness({ rows: [statusRow('PF-MANUAL-1', 'Aguardando pagamento')] });
+  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado'), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
+  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { confirmTransition: true }), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
+  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { manualPaymentConfirmation: 'true' }), error => error.code === 'PAYMENT_CONFIRMATION_REQUIRED');
+  assert.throws(() => moveStatus(h, 'PF-MANUAL-1', 'Em produção', { manualPaymentConfirmation: true }), error => error.code === 'PAYMENT_NOT_CONFIRMED');
+  assert.equal(h.rows[0][13], 'Aguardando pagamento');
+  assert.equal(moveStatus(h, 'PF-MANUAL-1', 'Confirmado', { manualPaymentConfirmation: true }).previousStatus, 'Aguardando pagamento');
+  assert.equal(h.rows[0][13], 'Confirmado');
+});
+
+test('cancelamento e reabertura exigem confirmacao; cancelado fica bloqueado', () => {
+  const h = createHarness({ rows: [statusRow('PF-CANCEL-1', 'Concluído'), statusRow('PF-CANCEL-2', 'Em produção')] });
+  assert.throws(() => moveStatus(h, 'PF-CANCEL-1', 'Em produção'), error => error.code === 'TRANSITION_CONFIRMATION_REQUIRED');
+  assert.equal(moveStatus(h, 'PF-CANCEL-1', 'Em produção', { confirmTransition: true }).status, 'Em produção');
+  assert.throws(() => moveStatus(h, 'PF-CANCEL-2', 'Cancelado'), error => error.code === 'TRANSITION_CONFIRMATION_REQUIRED');
+  assert.equal(h.rows[1][13], 'Em produção');
+  moveStatus(h, 'PF-CANCEL-2', 'Cancelado', { confirmTransition: true });
+  for (const status of ['Aguardando pagamento', 'Confirmado', 'Em produção', 'Concluído']) {
+    assert.throws(() => moveStatus(h, 'PF-CANCEL-2', status, { confirmTransition: true, manualPaymentConfirmation: true }), error => error.code === 'ORDER_CANCELLED');
+  }
+  assert.equal(h.rows[1][13], 'Cancelado');
+});
+
+test('status divergente do esperado devolve conflito com o status atual', () => {
+  const h = createHarness({ rows: [statusRow('PF-RACE-1', 'Confirmado')] });
+  const locksBefore = h.lockWaits;
+  assert.throws(() => h.context.updateOrderStatus_('PF-RACE-1', 'Cancelado', { expectedStatus: 'Aguardando pagamento', confirmTransition: true }),
+    error => error.code === 'STATUS_CONFLICT' && error.currentStatus === 'Confirmado');
+  assert.throws(() => h.context.updateOrderStatus_('PF-RACE-1', 'Em produção'), error => error.code === 'STATUS_CONFLICT');
+  assert.equal(h.rows[0][13], 'Confirmado');
+  assert.equal(h.lockWaits - locksBefore, 2);
+  assert.equal(h.lockReleases, h.lockWaits);
+  const conflict = h.context.safeApiError_(h.context.statusConflictError_('Confirmado'));
+  assert.equal(conflict.code, 'STATUS_CONFLICT');
+  assert.equal(conflict.currentStatus, 'Confirmado');
+});
+
+test('mesma coluna nao grava status e pedido inexistente retorna erro claro', () => {
+  const h = createHarness({ rows: [statusRow('PF-SAME-1', 'Em produção')] });
+  let writes = 0;
+  const original = h.context.getSpreadsheet_;
+  h.context.getSpreadsheet_ = () => {
+    const ss = original();
+    return { ...ss, getSheetByName: name => {
+      const sheet = ss.getSheetByName(name);
+      return { ...sheet, getRange: (...args) => { const range = sheet.getRange(...args); return { ...range, setValue: value => { writes += 1; range.setValue(value); } }; } };
+    } };
+  };
+  const result = moveStatus(h, 'PF-SAME-1', 'Em produção');
+  assert.equal(result.unchanged, true);
+  assert.equal(writes, 0);
+  assert.throws(() => h.context.updateOrderStatus_('PF-INEXISTENTE', 'Cancelado', { expectedStatus: '' }), error => error.code === 'ORDER_NOT_FOUND');
 });
 
 test('configuracao comercial rejeita dia e horario invalidos', () => {

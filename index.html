@@ -1085,6 +1085,82 @@
     .order-mobile-actions { margin-top: 14px; }
     .order-mobile-actions .control { min-height: 46px; }
 
+    /* Etapa 11: visualização Kanban */
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    #ordersPanel > .section-heading { flex-wrap: wrap; }
+    .orders-heading-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+    .orders-view-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+    .orders-view-switch button { min-height: 40px; min-width: 76px; padding: 8px 14px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); font-weight: 800; }
+    .orders-view-switch button[aria-pressed="true"] { background: #fff; color: var(--text); box-shadow: 0 3px 10px rgba(76, 49, 37, .10); }
+    .orders-view-switch button:focus-visible, .kanban-board:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .kanban-board {
+      --kanban-column: minmax(250px, 1fr);
+      /* Contém os rótulos .sr-only (absolutos) na área rolável, sem alargar a página. */
+      position: relative;
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: var(--kanban-column);
+      gap: 12px;
+      align-items: start;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      padding: 2px 2px 12px;
+      border-radius: 16px;
+      scroll-snap-type: x proximity;
+      scrollbar-width: thin;
+    }
+    .kanban-column {
+      --kanban-accent: var(--line);
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--kanban-accent);
+      border-radius: 16px;
+      background: var(--surface-2);
+      scroll-snap-align: start;
+      transition: border-color .15s ease, background-color .15s ease;
+    }
+    .kanban-column[data-kanban-column="Aguardando pagamento"] { --kanban-accent: #e6c27d; }
+    .kanban-column[data-kanban-column="Confirmado"] { --kanban-accent: #8cc3a6; }
+    .kanban-column[data-kanban-column="Em produção"] { --kanban-accent: #9eabd6; }
+    .kanban-column[data-kanban-column="Concluído"] { --kanban-accent: #7fbca3; }
+    .kanban-column[data-kanban-column="Cancelado"] { --kanban-accent: #d9a1a1; }
+    .kanban-column.is-drop-target { border-color: var(--accent); border-top-color: var(--accent); background: #fff7f2; }
+    .kanban-column.is-drop-blocked { opacity: .62; }
+    .kanban-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 8px; }
+    .kanban-column-head h3 { margin: 0; font-size: 14px; line-height: 1.3; color: var(--text); }
+    .kanban-count { min-width: 26px; padding: 3px 8px; border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--muted); text-align: center; font-size: 12px; font-weight: 850; }
+    .kanban-dropzone { display: grid; gap: 10px; min-height: 120px; padding: 4px 10px 12px; }
+    .kanban-empty { display: grid; place-items: center; min-height: 96px; margin: 0; border: 1px dashed #d8c8be; border-radius: 12px; color: var(--muted); font-size: 13px; }
+    .kanban-card {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 4px 12px rgba(76, 49, 37, .05);
+      overflow-wrap: anywhere;
+    }
+    .kanban-card[draggable="true"] { cursor: grab; }
+    .kanban-card.is-dragging { opacity: .5; }
+    .kanban-card.is-saving { opacity: .78; cursor: progress; }
+    .kanban-card.order-expired { background: #fff8ef; }
+    .kanban-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+    .kanban-chip { flex: 0 0 auto; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-weight: 800; }
+    .kanban-card h4 { margin: 6px 0 4px; font-size: 15px; line-height: 1.3; color: var(--text); }
+    .kanban-card-items { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+    .kanban-card-foot { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+    .kanban-card-foot strong { color: var(--text); }
+    .kanban-card .status-badge { margin-top: 8px; white-space: normal; }
+    .kanban-move { display: block; margin-top: 10px; }
+    .kanban-move .control { width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; font-size: 13px; }
+    .kanban-locked { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+    .kanban-saving { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 10px 0 0; color: var(--accent-strong); font-size: 13px; font-weight: 800; }
+    .kanban-saving .loading-spinner { width: 16px; height: 16px; margin: 0; border-width: 2px; }
+    .kanban-card .order-details { margin-top: 10px; padding-top: 10px; font-size: 13px; }
+    .kanban-card .order-details-sections { grid-template-columns: minmax(0, 1fr); }
+
     .orders-state {
       min-height: 180px;
       display: grid;
@@ -1210,6 +1286,8 @@
       .admin-heading-actions button { width: 100%; }
       .orders-toolbar { grid-template-columns: 1fr; }
       .orders-result-line { align-items: flex-start; flex-direction: column; }
+      .orders-heading-actions { width: 100%; justify-content: space-between; }
+      .kanban-board { --kanban-column: 84%; }
       .admin-workspace .admin-nav { margin: 0 -4px; padding: 8px; }
       .admin-nav .nav-count { display: none; }
       .list-row.simple, .list-row.payment { grid-template-columns: 1fr; }
@@ -1220,7 +1298,7 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .admin-panel.active { animation: none; }
-      .choice, .primary-btn, .toast { transition: none; }
+      .choice, .primary-btn, .toast, .kanban-column { transition: none; }
     }
   </style>
 </head>
@@ -1726,7 +1804,13 @@
                 <h2>Pedidos recebidos</h2>
                 <p>Localize encomendas e avance o status manualmente.</p>
               </div>
-              <button id="refreshOrdersBtn" class="ghost-btn" type="button">Atualizar</button>
+              <div class="orders-heading-actions">
+                <div class="orders-view-switch" role="group" aria-label="Visualização dos pedidos">
+                  <button id="ordersListViewBtn" type="button" data-orders-view="list" aria-pressed="true">Lista</button>
+                  <button id="ordersKanbanViewBtn" type="button" data-orders-view="kanban" aria-pressed="false">Kanban</button>
+                </div>
+                <button id="refreshOrdersBtn" class="ghost-btn" type="button">Atualizar</button>
+              </div>
             </div>
             <div id="statusCounters" class="status-counters" aria-label="Contadores por status"></div>
             <div class="orders-toolbar" aria-label="Filtros de pedidos">
@@ -1828,7 +1912,11 @@
       let configRevision = 0;
       let configSaveInFlight = false;
       const dirtyConfigDomains = new Set();
-      const orderViewState = { search: '', status: '', deliveryDate: '', sort: 'delivery-asc', loading: false, error: '' };
+      const ORDERS_VIEW_STORAGE_KEY = 'bologis:orders-view';
+      const orderViewState = { search: '', status: '', deliveryDate: '', sort: 'delivery-asc', loading: false, error: '', view: readStoredOrdersView() };
+      // Pedidos com movimentação aguardando resposta do Apps Script.
+      const savingOrderIds = new Set();
+      let draggedOrderId = '';
       let adminSessionToken = '';
       let adminSessionExpiresAt = 0;
       let adminExpiryTimer = null;
@@ -1928,6 +2016,7 @@
         const error = new Error(data?.message || data?.error || fallback || 'Erro na API');
         error.code = data?.code || '';
         error.currentRevision = data?.currentRevision;
+        error.currentStatus = data?.currentStatus;
         return error;
       }
 
@@ -2853,16 +2942,97 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
-      function updateOrderStatus(orderId, status) {
-        return apiPost({ action: 'updateOrderStatus', orderId, status }, { admin: true });
+      function updateOrderStatus(orderId, status, options = {}) {
+        return apiPost({ action: 'updateOrderStatus', orderId, status, ...options }, { admin: true });
       }
 
-      async function changeOrderStatus(orderId, status) {
-        await updateOrderStatus(orderId, status);
-        appState.orders.filter(order => String(order.id) === String(orderId)).forEach(order => { order.status = status; });
+      // expectedStatus permite ao Apps Script recusar a gravação se webhook ou conciliação mudaram o pedido.
+      async function changeOrderStatus(orderId, status, options = {}) {
+        const current = appState.orders.find(order => String(order.id) === String(orderId));
+        const result = await updateOrderStatus(orderId, status, { expectedStatus: String(current?.status || ''), ...options });
+        const saved = String(result?.order?.status || status);
+        appState.orders.filter(order => String(order.id) === String(orderId)).forEach(order => { order.status = saved; });
         renderOrderFilterOptions();
         renderLocalOrders();
         return appState.orders.find(order => String(order.id) === String(orderId));
+      }
+
+      // Espelho de orderStatusTransition_() do Apps Script, usado só para orientar a interface.
+      // O servidor revalida cada movimentação dentro do lock.
+      function orderStatusTransition(from, to) {
+        const [waiting, confirmed, production, done, cancelled] = DEFAULT_ORDER_STATUSES;
+        const current = String(from || '');
+        if (current === to) return { kind: 'same' };
+        if (current === cancelled) return { kind: 'blocked', message: 'Pedidos cancelados não podem ser movimentados.' };
+        if (to === cancelled) return { kind: 'confirm' };
+        if (![confirmed, production, done].includes(current)) {
+          if (to === waiting) return { kind: 'allowed' };
+          if (to === confirmed) return { kind: 'payment' };
+          return { kind: 'blocked', message: 'Confirme o pagamento antes de iniciar a produção ou concluir o pedido.' };
+        }
+        if (to === waiting) return { kind: 'blocked', message: 'Pedidos com pagamento confirmado não voltam para "Aguardando pagamento".' };
+        if ((current === confirmed && to === done) || current === done) return { kind: 'confirm' };
+        return { kind: 'allowed' };
+      }
+
+      function statusTransitionPrompt(order, to, kind) {
+        const label = `#${shortOrderId(order.id) || '—'} (${order.customerName || 'cliente não informado'})`;
+        if (kind === 'payment') {
+          return `Confirmar manualmente o pagamento do pedido ${label}?\n\nUse somente depois de verificar o recebimento. Pagamentos pela InfinitePay são confirmados automaticamente; mover o pedido não valida pagamento.`;
+        }
+        if (kind !== 'confirm') return '';
+        if (to === 'Cancelado') return `Cancelar o pedido ${label}?\n\nPedidos cancelados não podem voltar a outro status. Pagamentos já recebidos continuam registrados.`;
+        if (order.status === 'Concluído') return `Reabrir o pedido ${label} em "${to}"?`;
+        return `Mover o pedido ${label} para "${to}" sem passar por "Em produção"?`;
+      }
+
+      // Caminho único da Lista e do Kanban: confirma quando a regra exige e só consolida após o Apps Script.
+      async function moveOrderToStatus(orderId, nextStatus) {
+        const id = String(orderId || '');
+        const order = appState.orders.find(item => String(item.id) === id);
+        if (!order || !nextStatus || savingOrderIds.has(id)) {
+          renderLocalOrders();
+          return { moved: false, reason: 'unavailable' };
+        }
+        const rule = orderStatusTransition(order.status, nextStatus);
+        if (rule.kind === 'same') {
+          renderLocalOrders();
+          return { moved: false, reason: 'same' };
+        }
+        clearMessage($('ordersMessage'));
+        if (rule.kind === 'blocked') {
+          setMessage($('ordersMessage'), 'error', rule.message);
+          renderLocalOrders();
+          return { moved: false, reason: 'blocked' };
+        }
+        const prompt = statusTransitionPrompt(order, nextStatus, rule.kind);
+        if (prompt && !window.confirm(prompt)) {
+          renderLocalOrders();
+          return { moved: false, reason: 'dismissed' };
+        }
+        const options = rule.kind === 'payment' ? { manualPaymentConfirmation: true } : rule.kind === 'confirm' ? { confirmTransition: true } : {};
+        savingOrderIds.add(id);
+        renderLocalOrders();
+        try {
+          await changeOrderStatus(id, nextStatus, options);
+          showToast(`Pedido #${shortOrderId(id)} movido para ${nextStatus}`);
+          return { moved: true };
+        } catch (error) {
+          savingOrderIds.delete(id);
+          if (error.code === 'STATUS_CONFLICT') {
+            if (typeof error.currentStatus === 'string') order.status = error.currentStatus;
+            await loadAdminOrders();
+            if (!orderViewState.error) setMessage($('ordersMessage'), 'error', error.message);
+          } else if (!isAdminAuthError(error)) {
+            const reason = error.code ? error.message : 'falha de conexão';
+            setMessage($('ordersMessage'), 'error', `Não foi possível mover o pedido #${shortOrderId(id)}: ${reason}. Ele permanece em "${order.status || 'status anterior'}".`);
+          }
+          return { moved: false, reason: error.code === 'STATUS_CONFLICT' ? 'conflict' : 'error', error };
+        } finally {
+          savingOrderIds.delete(id);
+          renderOrderFilterOptions();
+          renderLocalOrders();
+        }
       }
 
       async function submitOrder(event) {
@@ -3284,8 +3454,10 @@
         const current = String(currentStatus || canonical[0]);
         const options = canonical.map(status => ({ status, legacy: false }));
         if (!canonical.includes(current)) options.unshift({ status: current, legacy: true });
+        // Destinos que o servidor recusaria ficam indisponíveis também na Lista.
+        const blocked = status => status !== current && orderStatusTransition(currentStatus, status).kind === 'blocked';
         return options.map(item =>
-          `<option value="${escapeHtml(item.status)}" ${item.status === current ? 'selected' : ''} ${item.legacy ? 'disabled' : ''}>${escapeHtml(item.status)}${item.legacy ? ' (legado)' : ''}</option>`
+          `<option value="${escapeHtml(item.status)}" ${item.status === current ? 'selected' : ''} ${item.legacy || blocked(item.status) ? 'disabled' : ''}>${escapeHtml(item.status)}${item.legacy ? ' (legado)' : ''}</option>`
         ).join('');
       }
 
@@ -3480,7 +3652,7 @@
       }
 
       function orderStatusControl(order, mobile = false) {
-        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(order.status || '')}" aria-label="Status do pedido ${escapeHtml(order.id || '')}">${renderStatusOptions(order.status)}</select></label>`;
+        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(order.status || '')}" aria-label="Status do pedido ${escapeHtml(order.id || '')}" ${savingOrderIds.has(String(order.id || '')) ? 'disabled aria-busy="true"' : ''}>${renderStatusOptions(order.status)}</select></label>`;
       }
 
       function checkoutStateLabel(state) {
@@ -3598,9 +3770,157 @@
           : result.checkout?.providerPaid ? 'Pagamento informado, mas requer conferência administrativa.' : 'Consulta concluída; pagamento ainda não informado.');
       }
 
+      function readStoredOrdersView() {
+        try {
+          return window.localStorage.getItem(ORDERS_VIEW_STORAGE_KEY) === 'kanban' ? 'kanban' : 'list';
+        } catch (_) {
+          return 'list';
+        }
+      }
+
+      // Somente a preferência visual ("list" ou "kanban") é guardada no navegador.
+      function setOrdersView(view) {
+        orderViewState.view = view === 'kanban' ? 'kanban' : 'list';
+        try { window.localStorage.setItem(ORDERS_VIEW_STORAGE_KEY, orderViewState.view); } catch (_) { /* armazenamento indisponível */ }
+        renderLocalOrders();
+      }
+
+      function renderOrdersViewSwitch() {
+        [['ordersListViewBtn', 'list'], ['ordersKanbanViewBtn', 'kanban']].forEach(([id, view]) => {
+          const button = $(id);
+          if (button) button.setAttribute('aria-pressed', String(orderViewState.view === view));
+        });
+      }
+
+      // Colunas canônicas sempre presentes; status legados ou personalizados vão para "Outros status".
+      function kanbanColumns(orders) {
+        const canonical = Array.isArray(config.orderStatuses) && config.orderStatuses.length ? config.orderStatuses : DEFAULT_ORDER_STATUSES;
+        const columns = canonical.map(status => ({ status, title: status, legacy: false, orders: [] }));
+        const other = { status: '', title: 'Outros status', legacy: true, orders: [] };
+        orders.forEach(order => {
+          (columns.find(column => column.status === String(order.status || '')) || other).orders.push(order);
+        });
+        return other.orders.length ? [...columns, other] : columns;
+      }
+
+      function kanbanMoveControl(order) {
+        const id = String(order.id || '');
+        const targets = DEFAULT_ORDER_STATUSES.filter(status => status !== String(order.status || ''))
+          .map(status => ({ status, kind: orderStatusTransition(order.status, status).kind }));
+        if (targets.every(target => target.kind === 'blocked')) {
+          return '<p class="kanban-locked">Pedido cancelado: movimentação bloqueada.</p>';
+        }
+        const hint = kind => kind === 'payment' ? ' · confirmação manual' : kind === 'confirm' ? ' · pede confirmação' : kind === 'blocked' ? ' · indisponível' : '';
+        return `<label class="kanban-move"><span class="sr-only">Mover pedido #${escapeHtml(shortOrderId(id))} para</span><select class="control kanban-move-select" data-order-id="${escapeHtml(id)}">
+          <option value="">Mover para…</option>
+          ${targets.map(target => `<option value="${escapeHtml(target.status)}" ${target.kind === 'blocked' ? 'disabled' : ''}>${escapeHtml(target.status)}${hint(target.kind)}</option>`).join('')}
+        </select></label>`;
+      }
+
+      function renderKanbanCard(order, legacyColumn) {
+        const id = String(order.id || '');
+        const saving = savingOrderIds.has(id);
+        const customer = order.customerName || 'Cliente não informado';
+        const movable = !saving && DEFAULT_ORDER_STATUSES.some(status => !['same', 'blocked'].includes(orderStatusTransition(order.status, status).kind));
+        return `<article class="kanban-card${saving ? ' is-saving' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(order.status || '')}" draggable="${movable}" aria-busy="${saving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
+          <div class="kanban-card-top"><span class="order-id" title="${escapeHtml(id)}">#${escapeHtml(shortOrderId(id) || '—')}</span><span class="kanban-chip order-fulfillment">${escapeHtml(orderFulfillmentShortLabel(order))}</span></div>
+          <h4>${escapeHtml(customer)}</h4>
+          <p class="kanban-card-items">${escapeHtml(orderFlavorSummary(order))} · ${escapeHtml(orderSlicesText(order))}</p>
+          <div class="kanban-card-foot"><span>${escapeHtml(orderReceiptDateText(order))}</span><strong class="order-value">${escapeHtml(brl(orderTotal(order)))}</strong></div>
+          ${legacyColumn ? `<span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || 'Sem status')}</span>` : ''}
+          ${isPaymentDeadlineExpired(order) ? '<small class="order-meta">Prazo de pagamento encerrado</small>' : ''}
+          ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : kanbanMoveControl(order)}
+          <details class="order-details"><summary>Mais informações</summary>${renderOrderDetailsContent(order)}</details>
+        </article>`;
+      }
+
+      function renderOrdersKanban(orders, totalCents) {
+        return `<div class="kanban-board" role="region" aria-label="Quadro de pedidos por status" tabindex="0">
+          ${kanbanColumns(orders).map((column, index) => `
+            <section class="kanban-column" data-kanban-column="${escapeHtml(column.status)}" aria-labelledby="kanban-column-${index}">
+              <header class="kanban-column-head"><h3 id="kanban-column-${index}">${escapeHtml(column.title)}</h3><span class="kanban-count" aria-label="${column.orders.length} ${column.orders.length === 1 ? 'pedido' : 'pedidos'}">${column.orders.length}</span></header>
+              <div class="kanban-dropzone">${column.orders.length ? column.orders.map(order => renderKanbanCard(order, column.legacy)).join('') : '<p class="kanban-empty">Nenhum pedido</p>'}</div>
+            </section>`).join('')}
+        </div>${renderOrdersTotalSummary(totalCents)}`;
+      }
+
+      // "same" (mesma coluna) e "none" (coluna de status legados) não geram requisição.
+      function kanbanDropKind(orderId, targetStatus) {
+        const order = appState.orders.find(item => String(item.id) === String(orderId));
+        if (!order || !targetStatus || savingOrderIds.has(String(orderId))) return 'none';
+        return orderStatusTransition(order.status, targetStatus).kind;
+      }
+
+      function handleKanbanDrop(orderId, targetStatus) {
+        const kind = kanbanDropKind(orderId, targetStatus);
+        if (kind === 'none' || kind === 'same') return Promise.resolve({ moved: false, reason: kind });
+        return moveOrderToStatus(orderId, targetStatus);
+      }
+
+      function bindKanban(container) {
+        const columns = qsa('.kanban-column', container);
+        const clearDropState = () => columns.forEach(column => column.classList.remove('is-drop-target', 'is-drop-blocked'));
+        qsa('.kanban-card[draggable="true"]', container).forEach(card => {
+          card.addEventListener('dragstart', event => {
+            draggedOrderId = card.dataset.kanbanCard;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', draggedOrderId);
+            card.classList.add('is-dragging');
+          });
+          card.addEventListener('dragend', () => {
+            draggedOrderId = '';
+            card.classList.remove('is-dragging');
+            clearDropState();
+          });
+        });
+        columns.forEach(column => {
+          const target = column.dataset.kanbanColumn;
+          column.addEventListener('dragover', event => {
+            const kind = kanbanDropKind(draggedOrderId, target);
+            if (kind === 'none' || kind === 'same') return;
+            column.classList.toggle('is-drop-blocked', kind === 'blocked');
+            column.classList.toggle('is-drop-target', kind !== 'blocked');
+            if (kind === 'blocked') return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          });
+          column.addEventListener('dragleave', event => {
+            if (!column.contains(event.relatedTarget)) column.classList.remove('is-drop-target', 'is-drop-blocked');
+          });
+          column.addEventListener('drop', event => {
+            event.preventDefault();
+            const orderId = draggedOrderId || event.dataTransfer.getData('text/plain');
+            draggedOrderId = '';
+            clearDropState();
+            handleKanbanDrop(orderId, target);
+          });
+        });
+        qsa('.kanban-move-select', container).forEach(select => select.addEventListener('change', () => {
+          if (select.value) moveOrderToStatus(select.dataset.orderId, select.value);
+        }));
+      }
+
+      // Ações da InfinitePay dentro de "Mais informações", comuns à Lista e ao Kanban.
+      function bindOrderDetailActions(container) {
+        qsa('.checkout-check', container).forEach(button => button.addEventListener('click', async () => {
+          button.disabled = true;
+          try { await checkCheckoutPayment(button.dataset.orderId); }
+          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível conferir o pagamento: ${error.message}`); }
+          finally { button.disabled = false; }
+        }));
+        qsa('.checkout-retry', container).forEach(button => button.addEventListener('click', async () => {
+          if (!window.confirm('Gerar o checkout deste pedido na InfinitePay? Faça isso somente depois de confirmar que não existe outra cobrança para ele.')) return;
+          button.disabled = true;
+          try { await retryAdminCheckout(button.dataset.orderId); }
+          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível gerar o checkout: ${error.message}`); }
+          finally { button.disabled = false; }
+        }));
+      }
+
       function renderLocalOrders() {
         const container = $('ordersContainer');
         if (!container) return;
+        renderOrdersViewSwitch();
         if (orderViewState.loading) {
           container.innerHTML = '<div class="orders-state" role="status"><div><div class="loading-spinner" aria-hidden="true"></div><strong>Carregando pedidos...</strong><div>Buscando as encomendas mais recentes.</div></div></div>';
           return;
@@ -3618,6 +3938,12 @@
             ? '<div class="empty-state"><strong>Nenhum pedido corresponde aos filtros.</strong><br>Ajuste a pesquisa, o status ou a data de entrega.</div>'
             : '<div class="empty-state"><strong>Ainda não há pedidos recebidos.</strong><br>Novas encomendas aparecerão aqui assim que forem registradas.</div>';
           container.innerHTML += renderOrdersTotalSummary(totalCents);
+          return;
+        }
+        if (orderViewState.view === 'kanban') {
+          container.innerHTML = renderOrdersKanban(orders, totalCents);
+          bindKanban(container);
+          bindOrderDetailActions(container);
           return;
         }
 
@@ -3686,33 +4012,13 @@
           button.textContent = expanded ? 'Mais informações' : 'Ocultar informações';
           if (row) row.hidden = expanded;
         }));
-        qsa('.order-status', container).forEach(select => select.addEventListener('change', async () => {
-          const nextStatus = select.value;
-          const previousStatus = select.dataset.previousStatus;
-          select.title = nextStatus;
+        qsa('.order-status', container).forEach(select => select.addEventListener('change', () => {
+          select.title = select.value;
           select.disabled = true;
-          try {
-            await changeOrderStatus(select.dataset.orderId, nextStatus);
-            showToast('Status atualizado');
-          } catch (error) {
-            select.value = previousStatus;
-            renderLocalOrders();
-            setMessage($('ordersMessage'), 'error', `Não foi possível alterar o status: ${error.message}`);
-          }
+          // Recusa, cancelamento do diálogo ou erro re-renderizam a linha com o status vigente.
+          moveOrderToStatus(select.dataset.orderId, select.value);
         }));
-        qsa('.checkout-check', container).forEach(button => button.addEventListener('click', async () => {
-          button.disabled = true;
-          try { await checkCheckoutPayment(button.dataset.orderId); }
-          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível conferir o pagamento: ${error.message}`); }
-          finally { button.disabled = false; }
-        }));
-        qsa('.checkout-retry', container).forEach(button => button.addEventListener('click', async () => {
-          if (!window.confirm('Gerar o checkout deste pedido na InfinitePay? Faça isso somente depois de confirmar que não existe outra cobrança para ele.')) return;
-          button.disabled = true;
-          try { await retryAdminCheckout(button.dataset.orderId); }
-          catch (error) { setMessage($('ordersMessage'), 'error', `Não foi possível gerar o checkout: ${error.message}`); }
-          finally { button.disabled = false; }
-        }));
+        bindOrderDetailActions(container);
       }
 
       // Eventos principais
@@ -3762,6 +4068,7 @@
         renderLocalOrders();
       });
       $('refreshOrdersBtn').addEventListener('click', () => withSavingState($('refreshOrdersBtn'), loadAdminOrders, 'Atualizando...'));
+      ['ordersListViewBtn', 'ordersKanbanViewBtn'].forEach(id => $(id).addEventListener('click', () => setOrdersView($(id).dataset.ordersView)));
       $('newOrderBtn').addEventListener('click', startAnotherOrder);
       $('recheckPaymentBtn').addEventListener('click', () => refreshPaymentStatus());
       ['fulfillmentDelivery', 'fulfillmentPickup'].forEach(id => $(id).addEventListener('change', () => {

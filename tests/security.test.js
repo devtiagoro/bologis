@@ -191,13 +191,23 @@ test('updateOrderStatus passa pelo doPost autenticado', () => {
   const h = createHarness();
   h.configure();
   let received;
-  h.context.updateOrderStatus_ = (orderId, status) => (received = { orderId, status });
+  h.context.updateOrderStatus_ = (orderId, status, options) => (received = { orderId, status, options });
   const result = h.post({
     action: 'updateOrderStatus', adminToken: h.login(),
-    orderId: 'HML-FAKE-1', status: 'Confirmado'
+    orderId: 'HML-FAKE-1', status: 'Confirmado', expectedStatus: 'Aguardando pagamento'
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(received, { orderId: 'HML-FAKE-1', status: 'Confirmado' });
+  assert.deepEqual(JSON.parse(JSON.stringify(received)), {
+    orderId: 'HML-FAKE-1', status: 'Confirmado',
+    options: { expectedStatus: 'Aguardando pagamento', confirmTransition: false, manualPaymentConfirmation: false }
+  });
+  // Somente o booleano true autoriza; valores "verdadeiros" em texto não confirmam pagamento.
+  h.post({
+    action: 'updateOrderStatus', adminToken: h.login(), orderId: 'HML-FAKE-1', status: 'Confirmado',
+    expectedStatus: 'Aguardando pagamento', manualPaymentConfirmation: 'true', confirmTransition: 1
+  });
+  assert.equal(received.options.manualPaymentConfirmation, false);
+  assert.equal(received.options.confirmTransition, false);
 });
 
 test('endAdminSession passa pelo doPost e impede reutilizacao do token', () => {

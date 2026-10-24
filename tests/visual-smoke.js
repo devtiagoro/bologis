@@ -248,6 +248,80 @@ const STABLE_PROBE = `(async () => {
   throw new Error('Layout não estabilizou.');
 })()`;
 
+// Kanban: mede o quadro (inclusive com detalhes abertos) e executa drag-and-drop com eventos nativos do Chrome.
+const KANBAN_PROBE = `(async () => {
+  const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const calls = [];
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => { calls.push(JSON.parse(options.body)); return originalFetch(url, options); };
+  document.getElementById('ordersKanbanViewBtn').click();
+  await document.fonts.ready;
+  await frame();
+  const page = document.documentElement;
+  const panelRect = document.querySelector('.admin-content').getBoundingClientRect();
+  const board = document.querySelector('.kanban-board');
+  const inPanel = element => { const rect = element.getBoundingClientRect(); return rect.left >= panelRect.left - 1 && rect.right <= panelRect.right + 1; };
+  const columns = [...board.querySelectorAll('.kanban-column')];
+  const cards = [...board.querySelectorAll('.kanban-card')];
+  const withinCards = () => cards.every(card => {
+    const box = card.getBoundingClientRect();
+    return [...card.querySelectorAll('*')].filter(element => element.getClientRects().length).every(element => {
+      const rect = element.getBoundingClientRect();
+      return rect.left >= box.left - 1 && rect.right <= box.right + 1;
+    });
+  });
+  const surfaceText = card => { const copy = card.cloneNode(true); copy.querySelector('details')?.remove(); return copy.textContent; };
+  const layout = {
+    pressed: document.getElementById('ordersKanbanViewBtn').getAttribute('aria-pressed'),
+    pageOverflow: page.scrollWidth > page.clientWidth + 1,
+    boardWithin: inPanel(board),
+    overflowX: getComputedStyle(board).overflowX,
+    columns: columns.map(column => [column.querySelector('h3').textContent, column.querySelectorAll('.kanban-card').length]),
+    minColumnWidth: Math.round(Math.min(...columns.map(column => column.getBoundingClientRect().width))),
+    moveTargets: [...board.querySelectorAll('.kanban-move-select')].every(select => select.getBoundingClientRect().height >= 44),
+    cardsWithin: withinCards(),
+    technicalHidden: cards.every(card => !/invoice-fictitious|Valor esperado|Observação fictícia/.test(surfaceText(card))),
+    shows1899: /1899|GMT-/.test(board.innerText),
+    total: document.querySelector('#ordersContainer .orders-total-summary')?.innerText.trim() || ''
+  };
+  const details = [...board.querySelectorAll('details')];
+  details.forEach(item => { item.open = true; });
+  await frame();
+  layout.detailsOverflow = page.scrollWidth > page.clientWidth + 1 || !inPanel(board);
+  layout.detailsWithin = withinCards();
+  details.forEach(item => { item.open = false; });
+  await frame();
+
+  const card = id => document.querySelector('[data-kanban-card="' + id + '"]');
+  const drag = (id, status) => {
+    const column = document.querySelector('.kanban-column[data-kanban-column="' + status + '"]');
+    const data = new DataTransfer();
+    card(id).dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
+    const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: data });
+    column.dispatchEvent(over);
+    const state = { accepted: over.defaultPrevented, highlighted: column.classList.contains('is-drop-target'), blocked: column.classList.contains('is-drop-blocked') };
+    column.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+    card(id)?.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
+    return state;
+  };
+  const paidId = 'PF-20260831-113122-AB3E86';
+  const waitingId = 'PF-I-IDENTIFICADOR-MUITO-LONGO-PARA-VALIDAR-QUEBRA-RESPONSIVA-001';
+  const columnOf = id => card(id)?.closest('.kanban-column')?.dataset.kanbanColumn;
+  const dnd = { same: drag(paidId, 'Confirmado'), blocked: drag(waitingId, 'Em produção'), callsBeforeMove: calls.length };
+  dnd.move = drag(paidId, 'Em produção');
+  dnd.whileSaving = { column: columnOf(paidId), saving: card(paidId).classList.contains('is-saving') };
+  for (let attempt = 0; attempt < 50 && card(paidId)?.classList.contains('is-saving'); attempt++) await wait(50);
+  dnd.after = columnOf(paidId);
+  dnd.calls = calls.filter(call => call.action === 'updateOrderStatus').map(call => [call.orderId, call.status, call.expectedStatus]);
+  dnd.leftover = document.querySelectorAll('.is-drop-target, .is-drop-blocked, .is-dragging').length;
+  window.fetch = originalFetch;
+  // Restaura a preferência para a próxima resolução abrir na Lista.
+  document.getElementById('ordersListViewBtn').click();
+  layout.restoredList = Boolean(document.querySelector('#ordersContainer .orders-table-wrap'));
+  return { layout, dnd };
+})()`;
+
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   if (url.pathname === '/api') {
@@ -257,6 +331,9 @@ const server = http.createServer((request, response) => {
       let body = {};
       try { body = JSON.parse(raw || '{}'); } catch (_) {}
       response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      if (body.action === 'updateOrderStatus') {
+        return setTimeout(() => response.end(JSON.stringify({ ok: true, order: { id: body.orderId, status: body.status, previousStatus: body.expectedStatus } })), 120);
+      }
       if (body.action === 'registerCheckoutReturn') return response.end(JSON.stringify({ ok: true, checkout: { state: 'returned_unverified' } }));
       if (body.action === 'verifyCheckoutPayment') {
         // Somente a resposta do servidor libera a tela de obrigado; a URL de teste também tenta forçá-la.
@@ -436,6 +513,36 @@ const server = http.createServer((request, response) => {
           if (DEFAULT_STATUSES.includes(status.text)) assert.ok(status.fits, `Status "${status.text}" cortado no seletor em ${label} (${status.width}px).`);
         }
 
+        const kanbanPage = await devTools.openPage(`${origin}/admin-preview`, viewport);
+        await kanbanPage.evaluate(STABLE_PROBE);
+        const { layout: board, dnd } = await kanbanPage.evaluate(KANBAN_PROBE);
+        await kanbanPage.evaluate(`document.getElementById('ordersKanbanViewBtn').click(); document.querySelector('.kanban-board').scrollIntoView({ block: 'start' }); new Promise(resolve => setTimeout(resolve, 2600))`);
+        await kanbanPage.screenshot(path.join(tempDir, `admin-kanban-${label}.png`));
+        await kanbanPage.evaluate(`document.getElementById('ordersListViewBtn').click()`);
+        await kanbanPage.close();
+        assert.equal(board.pressed, 'true', `Alternância Kanban sem aria-pressed em ${label}.`);
+        assert.equal(board.pageOverflow, false, `Kanban provocou overflow da página em ${label}.`);
+        assert.equal(board.boardWithin, true, `Quadro saiu do painel em ${label}.`);
+        assert.equal(board.overflowX, 'auto', `Quadro sem rolagem horizontal contida em ${label}.`);
+        assert.deepEqual(board.columns, [['Aguardando pagamento', 1], ['Confirmado', 1], ['Em produção', 0], ['Concluído', 0], ['Cancelado', 0], ['Outros status', 1]], `Distribuição das colunas incorreta em ${label}.`);
+        assert.ok(board.minColumnWidth >= 240, `Coluna estreita demais em ${label}: ${board.minColumnWidth}px.`);
+        assert.equal(board.moveTargets, true, `Controle "Mover para" menor que 44px em ${label}.`);
+        assert.equal(board.cardsWithin, true, `Conteúdo do card saiu do card em ${label}.`);
+        assert.equal(board.technicalHidden, true, `Dados técnicos expostos na superfície do card em ${label}.`);
+        assert.equal(board.shows1899, false, `Horário serial de 1899 exibido no Kanban em ${label}.`);
+        assert.match(board.total, /^Total dos pedidos exibidos:[\s\S]*209,85/, `Total do Kanban incorreto em ${label}.`);
+        assert.equal(board.detailsOverflow, false, `Detalhes abertos no Kanban provocaram overflow em ${label}.`);
+        assert.equal(board.detailsWithin, true, `Detalhes abertos saíram do card em ${label}.`);
+        assert.equal(board.restoredList, true, `Retorno para Lista falhou em ${label}.`);
+        assert.deepEqual(dnd.same, { accepted: false, highlighted: false, blocked: false }, `Mesma coluna aceitou soltura em ${label}.`);
+        assert.deepEqual(dnd.blocked, { accepted: false, highlighted: false, blocked: true }, `Destino bloqueado aceitou soltura em ${label}.`);
+        assert.equal(dnd.callsBeforeMove, 0, `Soltura inválida gerou requisição em ${label}.`);
+        assert.deepEqual(dnd.move, { accepted: true, highlighted: true, blocked: false }, `Coluna de destino não foi destacada em ${label}.`);
+        assert.deepEqual(dnd.whileSaving, { column: 'Confirmado', saving: true }, `Card mudou antes da resposta do servidor em ${label}.`);
+        assert.equal(dnd.after, 'Em produção', `Card não foi para a coluna de destino em ${label}.`);
+        assert.deepEqual(dnd.calls, [['PF-20260831-113122-AB3E86', 'Em produção', 'Confirmado']], `Requisição de movimentação incorreta em ${label}.`);
+        assert.equal(dnd.leftover, 0, `Destaques de arraste permaneceram em ${label}.`);
+
         for (const [token, expected] of [['visual-verifying', 'verifying'], ['visual-confirmed', 'confirmed']]) {
           const forced = expected === 'verifying' ? '&paid=true&paymentState=confirmed&status=Confirmado' : '';
           const returnPage = await devTools.openPage(`${origin}/?payment_return=1&order_nsu=PF-I-RETORNO-VISUAL-COM-IDENTIFICADOR-LONGO-001&checkout_token=${token}&slug=inv&transaction_nsu=tx${forced}`, viewport);
@@ -501,6 +608,8 @@ const server = http.createServer((request, response) => {
     console.log('PASS cards responsivos e tabela desktop permanecem dentro do painel, inclusive com detalhes abertos');
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
     console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
+    console.log('PASS Kanban com seis colunas, cards contidos, rolagem horizontal restrita ao quadro e total reutilizado nas seis resoluções');
+    console.log('PASS drag-and-drop: destaque do destino, salvamento antes da consolidação, sem requisição na mesma coluna ou destino bloqueado');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
     console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');

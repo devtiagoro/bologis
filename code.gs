@@ -649,7 +649,12 @@ function doPost(e) {
         ok: true,
         order: updateOrderStatus_(
           body.orderId,
-          body.status
+          body.status,
+          {
+            expectedStatus: body.expectedStatus,
+            confirmTransition: body.confirmTransition === true,
+            manualPaymentConfirmation: body.manualPaymentConfirmation === true
+          }
         )
       });
 
@@ -679,6 +684,9 @@ function safeApiError_(error) {
       : 'Não foi possível processar a solicitação.',
     currentRevision: isExpected && error.currentRevision
       ? error.currentRevision
+      : undefined,
+    currentStatus: isExpected && typeof error.currentStatus === 'string'
+      ? error.currentStatus
       : undefined
   };
 }
@@ -3211,109 +3219,74 @@ function getCheckoutsMap_(sheet) {
 
 
 // O lock impede que uma alteração manual e a confirmação automática se sobreponham.
-function updateOrderStatus_(orderId, status) {
+function updateOrderStatus_(orderId, status, options) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    return writeOrderStatus_(orderId, status);
+    return writeOrderStatus_(orderId, status, options || {});
   } finally {
     lock.releaseLock();
   }
 }
 
-function writeOrderStatus_(
-  orderId,
-  status
-) {
+/**
+ * Etapa 11: regra de movimentação entre status, usada pela Lista e pelo Kanban.
+ * kind: same (sem alteração), allowed, confirm (exige confirmTransition),
+ * payment (exige manualPaymentConfirmation) ou blocked.
+ * Status legados ou personalizados são tratados como anteriores ao pagamento.
+ */
+function orderStatusTransition_(from, to) {
+  const [waiting, confirmed, production, done, cancelled] = PF_ORDER.statuses;
+  const current = String(from || '');
+  if (current === to) return { kind: 'same' };
+  if (current === cancelled) {
+    return { kind: 'blocked', code: 'ORDER_CANCELLED', message: 'Pedidos cancelados não podem ser movimentados.' };
+  }
+  if (to === cancelled) return { kind: 'confirm' };
+  if (![confirmed, production, done].includes(current)) {
+    if (to === waiting) return { kind: 'allowed' };
+    if (to === confirmed) return { kind: 'payment' };
+    return { kind: 'blocked', code: 'PAYMENT_NOT_CONFIRMED', message: 'Confirme o pagamento antes de iniciar a produção ou concluir o pedido.' };
+  }
+  if (to === waiting) {
+    return { kind: 'blocked', code: 'PAYMENT_REVERSAL_BLOCKED', message: 'Pedidos com pagamento confirmado não voltam para "Aguardando pagamento".' };
+  }
+  // Concluir sem passar pela produção ou reabrir um pedido concluído exige confirmação.
+  if ((current === confirmed && to === done) || current === done) return { kind: 'confirm' };
+  return { kind: 'allowed' };
+}
 
-  const allowed = PF_ORDER.statuses;
+function statusConflictError_(currentStatus) {
+  const error = apiError_('STATUS_CONFLICT', 'O pedido foi atualizado por outra operação. Os pedidos foram recarregados com o status mais recente.');
+  error.currentStatus = currentStatus;
+  return error;
+}
 
+function writeOrderStatus_(orderId, status, options) {
+  const settings = options || {};
+  if (!PF_ORDER.statuses.includes(status)) throw apiError_('INVALID_STATUS', 'Status inválido.');
+  const id = String(orderId == null ? '' : orderId);
+  const sheet = getSpreadsheet_().getSheetByName(PF.sheets.orders);
+  const record = id ? findOrderRecordById_(sheet, id) : null;
+  if (!record) throw apiError_('ORDER_NOT_FOUND', 'Pedido não encontrado.');
 
-  if (
-    !allowed.includes(status)
-  ) {
-
-    throw new Error(
-      'Status inválido.'
-    );
-
+  // Relido dentro do lock: webhook, conciliação ou outra aba podem ter alterado o pedido.
+  const currentStatus = String(record.row[13] || '');
+  if (typeof settings.expectedStatus !== 'string' || settings.expectedStatus !== currentStatus) {
+    throw statusConflictError_(currentStatus);
+  }
+  const rule = orderStatusTransition_(currentStatus, status);
+  if (rule.kind === 'same') return { id, status: currentStatus, previousStatus: currentStatus, unchanged: true };
+  if (rule.kind === 'blocked') throw apiError_(rule.code, rule.message);
+  if (rule.kind === 'payment' && settings.manualPaymentConfirmation !== true) {
+    throw apiError_('PAYMENT_CONFIRMATION_REQUIRED', 'A confirmação exige pagamento validado pela InfinitePay ou confirmação manual autorizada.');
+  }
+  if (rule.kind === 'confirm' && settings.confirmTransition !== true) {
+    throw apiError_('TRANSITION_CONFIRMATION_REQUIRED', 'Confirme a movimentação para "' + status + '".');
   }
 
-
-
-  const sheet =
-    getSpreadsheet_()
-      .getSheetByName(
-        PF.sheets.orders
-      );
-
-
-  const lastRow =
-    sheet.getLastRow();
-
-
-  if (lastRow < 2) {
-
-    throw new Error(
-      'Pedido não encontrado.'
-    );
-
-  }
-
-
-
-  const ids =
-    sheet
-      .getRange(
-        2,
-        1,
-        lastRow - 1,
-        1
-      )
-      .getValues();
-
-
-
-  const index =
-    ids.findIndex(
-      row =>
-        String(row[0])
-        === String(orderId)
-    );
-
-
-
-  if (index === -1) {
-
-    throw new Error(
-      'Pedido não encontrado.'
-    );
-
-  }
-
-
-
-  const rowNumber =
-    index + 2;
-
-
-  sheet
-    .getRange(
-      rowNumber,
-      14
-    )
-    .setValue(status);
-
-
-
-  return {
-
-    id: String(orderId),
-
-    status
-
-  };
-
+  sheet.getRange(record.rowNumber, 14).setValue(status);
+  return { id, status, previousStatus: currentStatus, unchanged: false };
 }
 
 
