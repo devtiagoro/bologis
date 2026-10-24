@@ -189,7 +189,7 @@
 
     .field.full { grid-column: 1 / -1; }
 
-    .field label {
+    .field label, .field .field-label {
       display: block;
       margin: 0 0 8px;
       font-weight: 800;
@@ -294,13 +294,51 @@
 
     .item-builder-actions {
       display: grid;
-      grid-template-columns: 130px minmax(0, 1fr);
+      grid-template-columns: 156px minmax(0, 1fr);
       gap: 12px;
       align-items: end;
       margin-top: 16px;
     }
 
     .add-item-btn { width: 100%; }
+
+    .quantity-stepper {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) 46px;
+      align-items: center;
+      min-height: 52px;
+      border-radius: var(--radius-md);
+      border: 1px solid #dccdc3;
+      background: #fff;
+      overflow: hidden;
+    }
+    .quantity-stepper:has([aria-invalid="true"]) {
+      border-color: #b94747;
+      box-shadow: 0 0 0 3px rgba(185, 71, 71, .12);
+    }
+    .stepper-btn {
+      height: 100%;
+      min-height: 50px;
+      border: 0;
+      background: #fff9f5;
+      color: var(--accent-strong);
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+    .stepper-btn:hover:not(:disabled) { background: var(--accent-soft); }
+    .stepper-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+    .stepper-btn:disabled { background: #f6f1ed; color: #c9bab0; cursor: not-allowed; }
+    .stepper-value {
+      text-align: center;
+      font-size: 18px;
+      font-weight: 900;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      user-select: none;
+    }
 
     .pricing-estimate {
       display: flex;
@@ -1268,8 +1306,12 @@
 
               <div class="item-builder-actions">
                 <div class="field">
-                  <label for="itemQuantity">Quantidade de fatias</label>
-                  <input class="control" id="itemQuantity" type="number" min="1" max="20" step="1" value="1" inputmode="numeric" />
+                  <span class="field-label" id="itemQuantityLabel">Quantidade de fatias</span>
+                  <div class="quantity-stepper" role="group" aria-labelledby="itemQuantityLabel">
+                    <button id="itemQuantityDecrease" class="stepper-btn" type="button" aria-label="Diminuir uma fatia" disabled>−</button>
+                    <output id="itemQuantity" class="stepper-value" aria-live="polite" aria-labelledby="itemQuantityLabel">1</output>
+                    <button id="itemQuantityIncrease" class="stepper-btn" type="button" aria-label="Aumentar uma fatia">+</button>
+                  </div>
                 </div>
                 <button id="addOrderItemBtn" class="secondary-btn add-item-btn" type="button">Adicionar à encomenda</button>
               </div>
@@ -1755,6 +1797,8 @@
       let config = normalizeConfig(DEFAULT_CONFIG);
       const appState = { config, orders: [] };
       let orderItems = [];
+      const MAX_SLICES_PER_FLAVOR = 20;
+      let builderQuantity = 1;
       let isSubmitting = false;
       let pendingOrderAttempt = null;
       // Último pedido confirmado nesta aba; permite consultar o pagamento sem criar outro pedido.
@@ -2176,10 +2220,19 @@
         return [...grouped.values()];
       }
 
+      // Contador de fatias: só os botões alteram a quantidade, sempre entre 1 e o limite por sabor.
+      function setBuilderQuantity(value) {
+        builderQuantity = Math.min(MAX_SLICES_PER_FLAVOR, Math.max(1, Math.trunc(Number(value)) || 1));
+        $('itemQuantity').textContent = String(builderQuantity);
+        $('itemQuantityDecrease').disabled = builderQuantity <= 1;
+        $('itemQuantityIncrease').disabled = builderQuantity >= MAX_SLICES_PER_FLAVOR;
+        renderPricingEstimate();
+      }
+
       function addSelectedOrderItem() {
         clearFieldErrors();
         const flavor = $('flavorSelect').value;
-        const quantity = Number($('itemQuantity').value);
+        const quantity = builderQuantity;
         if (!flavor) return showFieldError('flavorSelect', 'Escolha um sabor antes de adicionar.');
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
           return showFieldError('itemQuantity', 'Informe uma quantidade de fatias entre 1 e 20.');
@@ -2194,7 +2247,7 @@
           if (orderItems.length >= 12) return showFieldError('orderItems', 'A encomenda aceita até 12 sabores diferentes.');
           orderItems.push({ flavor, quantity });
         }
-        $('itemQuantity').value = '1';
+        setBuilderQuantity(1);
         renderOrderItems();
         updateSummary();
         showToast(existing ? 'Quantidade atualizada' : 'Bolo adicionado');
@@ -2241,7 +2294,7 @@
       }
 
       function renderPricingEstimate() {
-        const quantity = Number($('itemQuantity').value);
+        const quantity = builderQuantity;
         const details = progressivePriceDetails(quantity);
         const target = $('pricingEstimate');
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
@@ -2518,6 +2571,7 @@
       function startAnotherOrder() {
         $('orderForm').reset();
         orderItems = [];
+        setBuilderQuantity(1);
         pendingOrderAttempt = null;
         lastSubmittedOrder = null;
         clearMessage($('orderMessage'));
@@ -3564,7 +3618,8 @@
       $('endAdminSessionBtn').addEventListener('click', endAdminAccess);
       $('customerPhone').addEventListener('input', (event) => event.target.value = normalizePhone(event.target.value));
       ['flavorSelect', 'orderDate'].forEach(id => $(id).addEventListener('change', updateSummary));
-      $('itemQuantity').addEventListener('input', renderPricingEstimate);
+      $('itemQuantityDecrease').addEventListener('click', () => setBuilderQuantity(builderQuantity - 1));
+      $('itemQuantityIncrease').addEventListener('click', () => setBuilderQuantity(builderQuantity + 1));
       $('addOrderItemBtn').addEventListener('click', addSelectedOrderItem);
 
       $('copyPublicLinkBtn').addEventListener('click', copyPublicUrl);

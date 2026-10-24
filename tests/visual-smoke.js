@@ -140,7 +140,26 @@ const PUBLIC_FORM_PROBE = `(async () => {
   }
   const ready = !document.getElementById('deliveryChoice').classList.contains('hidden');
   document.getElementById('flavorSelect').value = document.getElementById('flavorSelect').options[1]?.value || '';
+  const minus = document.getElementById('itemQuantityDecrease');
+  const plus = document.getElementById('itemQuantityIncrease');
+  const visor = document.getElementById('itemQuantity');
+  const stepperBox = document.querySelector('.quantity-stepper').getBoundingClientRect();
+  const builderCard = document.querySelector('.order-card').getBoundingClientRect();
+  const stepper = {
+    noTypedInput: !document.querySelector('input#itemQuantity'),
+    startsAtOne: visor.textContent === '1' && minus.disabled && !plus.disabled,
+    within: stepperBox.left >= builderCard.left - 1 && stepperBox.right <= builderCard.right + 1,
+    targets: [minus, plus].every(button => { const rect = button.getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44; }),
+    order: minus.getBoundingClientRect().right <= visor.getBoundingClientRect().left + 1 && visor.getBoundingClientRect().right <= plus.getBoundingClientRect().left + 1
+  };
+  plus.click(); plus.click();
+  stepper.afterPlus = visor.textContent + '|' + document.getElementById('pricingEstimate').textContent;
+  for (let i = 0; i < 25; i++) plus.click();
+  stepper.capped = visor.textContent === '20' && plus.disabled;
+  for (let i = 0; i < 25; i++) minus.click();
+  stepper.floored = visor.textContent === '1' && minus.disabled;
   document.getElementById('addOrderItemBtn').click();
+  stepper.resetAfterAdd = visor.textContent === '1';
   document.getElementById('fulfillmentDelivery').click();
   await document.fonts.ready;
   await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})));
@@ -166,7 +185,7 @@ const PUBLIC_FORM_PROBE = `(async () => {
     previous = current;
   }
   document.getElementById('deliveryFields').scrollIntoView({ block: 'center' });
-  const snapshot = { ...result };
+  const snapshot = { ...result, stepper };
   document.getElementById('fulfillmentPickup').click();
   await frame();
   snapshot.pickupHidesAddress = document.getElementById('deliveryFields').getClientRects().length === 0
@@ -375,6 +394,15 @@ const server = http.createServer((request, response) => {
         assert.equal(form.feeShown, true, `Taxa de entrega ausente no resumo em ${label}.`);
         assert.match(form.total, /27,97/, `Total com taxa incorreto em ${label}.`);
         assert.equal(form.pickupHidesAddress, true, `Retirada manteve campos de endereço em ${label}.`);
+        assert.equal(form.stepper.noTypedInput, true, `Quantidade ainda usa campo digitável em ${label}.`);
+        assert.equal(form.stepper.startsAtOne, true, `Contador não inicia em 1 com "-" desabilitado em ${label}.`);
+        assert.equal(form.stepper.within, true, `Contador de fatias saiu do formulário em ${label}.`);
+        assert.equal(form.stepper.targets, true, `Botões do contador menores que 44px em ${label}.`);
+        assert.equal(form.stepper.order, true, `Ordem "-", visor, "+" incorreta em ${label}.`);
+        assert.match(form.stepper.afterPlus, /^3\|3 fatias[\s\S]*49,97[\s\S]*Economia/, `Prévia não acompanhou o contador em ${label}.`);
+        assert.equal(form.stepper.capped, true, `Contador ultrapassou 20 fatias em ${label}.`);
+        assert.equal(form.stepper.floored, true, `Contador ficou abaixo de 1 fatia em ${label}.`);
+        assert.equal(form.stepper.resetAfterAdd, true, `Contador não voltou a 1 após adicionar em ${label}.`);
       }
     } finally {
       await devTools.close();
@@ -400,6 +428,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS seletor de status legível e identificado em todas as resoluções');
     console.log('PASS total dos pedidos exibidos no rodapé da tabela e abaixo dos cards nas seis resoluções');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
+    console.log('PASS contador de fatias com limites 1–20, prévia imediata e botões acessíveis nas seis resoluções');
     if (process.argv.includes('--keep')) console.log(`ARTEFATOS_VISUAIS=${tempDir}`);
   } finally {
     server.close();

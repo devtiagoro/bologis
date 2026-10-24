@@ -46,6 +46,9 @@ source = source.replace(
         configDomainPayload,
         updateOrderItemQuantity,
         removeOrderItem,
+        addSelectedOrderItem,
+        setBuilderQuantity,
+        builderQuantity() { return builderQuantity; },
         changeOrderStatus,
         normalizedPhoneDigits,
         setOrders(value) { appState.orders = value; },
@@ -80,7 +83,10 @@ function makeElement(id = '') {
   return {
     id, value: '', textContent: '', innerHTML: '', className: '', type: 'text', href: '',
     checked: false, disabled: false, dataset: {}, style: {}, classList: makeClassList(),
-    addEventListener() {}, setAttribute() {}, removeAttribute() {}, hasAttribute() { return false; },
+    listeners: {},
+    addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); },
+    dispatch(type, event = {}) { (this.listeners[type] || []).forEach(handler => handler({ target: this, ...event })); },
+    setAttribute() {}, removeAttribute() {}, hasAttribute() { return false; },
     appendChild() {}, insertAdjacentElement() {}, remove() {}, focus() {}, click() {}, reset() {},
     querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; }
   };
@@ -736,6 +742,84 @@ test('resumo de sabores e fatias cobre pedidos atuais e por tamanho', () => {
   assert.equal(api.orderFlavorSummary({ items: [{ flavor: 'A', quantity: 1, pricingModel: 'progressive-v1' }, { flavor: 'B', quantity: 1, pricingModel: 'progressive-v1' }] }), 'A + 1 sabor');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'p', size: 'Pequeno', quantity: 2 }] }), '2 bolos');
   assert.equal(api.orderSlicesText({ items: [{ flavor: 'Bolo', sizeId: 'f', size: '1 Fatia', quantity: 2 }] }), '2 fatias');
+});
+
+// Contador de fatias com botões de menos e mais
+function stepperRuntime() {
+  const runtime = createRuntime();
+  const api = runtime.window.__uxTest;
+  api.setConfig({ progressivePricing: { firstSlicePrice: 19.97, additionalSlicePrice: 15 }, flavors: ['Chocolate', 'Ninho'], sizes: [], payments: [] });
+  api.setBuilderQuantity(1);
+  const press = (id, times = 1) => { for (let i = 0; i < times; i++) runtime.get(id).dispatch('click'); };
+  return { runtime, api, press, plus: n => press('itemQuantityIncrease', n), minus: n => press('itemQuantityDecrease', n) };
+}
+
+test('formulário usa contador de fatias sem campo digitável', () => {
+  const builder = html.slice(html.indexOf('<div class="item-builder-actions">'), html.indexOf('id="addOrderItemBtn"'));
+  assert.doesNotMatch(builder, /<input[^>]*itemQuantity/);
+  assert.match(builder, /<button id="itemQuantityDecrease" class="stepper-btn" type="button" aria-label="Diminuir uma fatia" disabled>/);
+  assert.match(builder, /<output id="itemQuantity" class="stepper-value"[^>]*>1<\/output>/);
+  assert.match(builder, /<button id="itemQuantityIncrease" class="stepper-btn" type="button" aria-label="Aumentar uma fatia">/);
+  assert.ok(builder.indexOf('itemQuantityDecrease') < builder.indexOf('id="itemQuantity"') && builder.indexOf('id="itemQuantity"') < builder.indexOf('itemQuantityIncrease'));
+});
+
+test('contador inicia em 1, soma e subtrai uma fatia e atualiza a prévia', () => {
+  const { runtime, api, plus, minus } = stepperRuntime();
+  assert.equal(api.builderQuantity(), 1);
+  assert.equal(runtime.get('itemQuantity').textContent, '1');
+  assert.match(runtime.get('pricingEstimate').innerHTML, /1 fatia · primeira R\$\s?19,97<\/span><strong>R\$\s?19,97<\/strong>/);
+  plus(2);
+  assert.equal(runtime.get('itemQuantity').textContent, '3');
+  assert.match(runtime.get('pricingEstimate').innerHTML, /3 fatias · primeira R\$\s?19,97 \+ 2 × R\$\s?15,00/);
+  assert.match(runtime.get('pricingEstimate').innerHTML, /R\$\s?49,97<br><span class="economy">Economia R\$\s?9,94/);
+  minus();
+  assert.equal(api.builderQuantity(), 2);
+  assert.match(runtime.get('pricingEstimate').innerHTML, /R\$\s?34,97/);
+});
+
+test('contador respeita os limites de 1 e 20 fatias e desabilita os botões nos extremos', () => {
+  const { runtime, api, plus, minus } = stepperRuntime();
+  assert.equal(runtime.get('itemQuantityDecrease').disabled, true);
+  assert.equal(runtime.get('itemQuantityIncrease').disabled, false);
+  minus(3);
+  assert.equal(api.builderQuantity(), 1);
+  plus(25);
+  assert.equal(api.builderQuantity(), 20);
+  assert.equal(runtime.get('itemQuantity').textContent, '20');
+  assert.equal(runtime.get('itemQuantityIncrease').disabled, true);
+  assert.equal(runtime.get('itemQuantityDecrease').disabled, false);
+  assert.match(runtime.get('pricingEstimate').innerHTML, /R\$\s?304,97/);
+  minus();
+  assert.equal(runtime.get('itemQuantityIncrease').disabled, false);
+  for (const value of [0, -4, 99, 'abc', 2.7]) {
+    api.setBuilderQuantity(value);
+    assert.ok(api.builderQuantity() >= 1 && api.builderQuantity() <= 20 && Number.isInteger(api.builderQuantity()), String(value));
+  }
+});
+
+test('adicionar à encomenda usa a quantidade do contador e o redefine para 1', () => {
+  const { runtime, api, plus } = stepperRuntime();
+  runtime.get('flavorSelect').value = 'Chocolate';
+  plus(3);
+  api.addSelectedOrderItem();
+  assert.equal(JSON.stringify(api.getOrderItems()), JSON.stringify([{ flavor: 'Chocolate', quantity: 4 }]));
+  assert.equal(api.builderQuantity(), 1);
+  assert.equal(runtime.get('itemQuantity').textContent, '1');
+  assert.equal(runtime.get('itemQuantityDecrease').disabled, true);
+  assert.match(runtime.get('orderItems').innerHTML, /Chocolate · 4 fatias/);
+  assert.match(runtime.get('summaryTotal').textContent, /R\$\s?64,97/);
+  assert.match(runtime.get('pricingEstimate').innerHTML, /1 fatia ·/);
+});
+
+test('contador mantém o limite de 20 fatias somado ao mesmo sabor', () => {
+  const { runtime, api, plus } = stepperRuntime();
+  runtime.get('flavorSelect').value = 'Ninho';
+  plus(17);
+  api.addSelectedOrderItem();
+  plus(2);
+  api.addSelectedOrderItem();
+  assert.equal(JSON.stringify(api.getOrderItems()), JSON.stringify([{ flavor: 'Ninho', quantity: 18 }]));
+  assert.equal(api.builderQuantity(), 3, 'Quantidade recusada permanece no contador para ajuste.');
 });
 
 // Etapa 9.3: totalização dos pedidos exibidos
