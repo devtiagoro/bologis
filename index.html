@@ -3060,13 +3060,19 @@
         return appState.orders.find(order => String(order.id) === String(orderId));
       }
 
-      // Etapa 11.4: arquivamento separado do status, confirmado pelo Apps Script antes de sair da tela.
+      // Etapa 11.4/11.5: arquivamento separado do status. O estado confirmado pelo servidor fica em
+      // order.archivedAt; pendingArchiveOps guarda o valor otimista exibido até a resposta (pedido → archivedAt).
       const ARCHIVABLE_STATUSES = ['Concluído', 'Cancelado'];
-      const archivingOrderIds = new Set();
+      const pendingArchiveOps = new Map();
+
+      function displayedArchivedAt(order) {
+        const id = String(order.id || '');
+        return pendingArchiveOps.has(id) ? pendingArchiveOps.get(id) : String(order.archivedAt || '');
+      }
 
       function canArchiveOrder(order) {
         const id = String(order.id || '');
-        return !order.archivedAt && ARCHIVABLE_STATUSES.includes(String(order.status || '')) && !pendingStatusMoves.has(id) && !archivingOrderIds.has(id);
+        return !order.archivedAt && ARCHIVABLE_STATUSES.includes(String(order.status || '')) && !pendingStatusMoves.has(id) && !pendingArchiveOps.has(id);
       }
 
       function formatArchivedAt(value) {
@@ -3074,31 +3080,38 @@
         return Number.isNaN(date.getTime()) ? String(value || '') : date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
       }
 
+      // Aplica na hora (card, contadores, total e modal) e consolida com a resposta do Apps Script.
       async function setOrderArchived(orderId, archive) {
         const id = String(orderId || '');
         const order = appState.orders.find(item => String(item.id) === id);
-        if (!order || archivingOrderIds.has(id) || pendingStatusMoves.has(id)) return { done: false, reason: 'unavailable' };
+        if (!order || pendingArchiveOps.has(id) || pendingStatusMoves.has(id)) return { done: false, reason: 'unavailable' };
         if (archive ? !canArchiveOrder(order) : !order.archivedAt) return { done: false, reason: 'not_eligible' };
         clearOrdersMessage();
-        archivingOrderIds.add(id);
+        pendingArchiveOps.set(id, archive ? new Date().toISOString() : '');
+        renderOrderFilterOptions();
         renderLocalOrders();
+        // Fecha o modal quando o pedido deixa de pertencer ao filtro atual (o foco vai para o quadro).
+        if (orderModalState.orderId === id && !matchesArchiveScope(order, orderViewState.archive)) closeOrderModal();
+        showToast(`Pedido #${shortOrderId(id)} ${archive ? 'arquivado' : 'desarquivado'}`);
         try {
           const result = await apiPost({ action: archive ? 'archiveOrder' : 'unarchiveOrder', orderId: id, expectedStatus: String(order.status || '') }, { admin: true });
           appState.orders.filter(item => String(item.id) === id).forEach(item => { item.archivedAt = String(result?.order?.archivedAt || ''); });
-          showToast(`Pedido #${shortOrderId(id)} ${archive ? 'arquivado' : 'desarquivado'}`);
           return { done: true };
         } catch (error) {
-          archivingOrderIds.delete(id);
+          if (isAdminAuthError(error)) return { done: false, reason: 'auth', error };
+          // A resposta pode ter se perdido depois da gravação: confere o servidor antes de desfazer na tela.
+          const reconciled = await loadAdminOrders({ silent: true });
+          const current = appState.orders.find(item => String(item.id) === id);
+          if (reconciled && current && Boolean(current.archivedAt) === archive) return { done: true, reconciled: true };
           if (error.code === 'STATUS_CONFLICT') {
-            await loadAdminOrders({ silent: true });
-            if (!orderViewState.error) showOrdersMessage('error', `${error.message} Confira o pedido e tente novamente.`);
-          } else if (!isAdminAuthError(error)) {
+            showOrdersMessage('error', `${error.message} Confira o pedido e tente novamente.`);
+          } else {
             const reason = error.code ? String(error.message || '').replace(/\.$/, '') : 'falha de conexão';
-            showOrdersMessage('error', `Não foi possível ${archive ? 'arquivar' : 'desarquivar'} o pedido #${shortOrderId(id)}: ${reason}.`);
+            showOrdersMessage('error', `Não foi possível ${archive ? 'arquivar' : 'desarquivar'} o pedido #${shortOrderId(id)}: ${reason}. ${reconciled ? 'O pedido voltou ao estado anterior.' : 'Use "Atualizar" para conferir o estado salvo.'}`);
           }
           return { done: false, reason: error.code === 'STATUS_CONFLICT' ? 'conflict' : 'error', error };
         } finally {
-          archivingOrderIds.delete(id);
+          pendingArchiveOps.delete(id);
           renderOrderFilterOptions();
           renderLocalOrders();
         }
@@ -3113,7 +3126,7 @@
       async function moveOrderToStatus(orderId, nextStatus) {
         const id = String(orderId || '');
         const order = appState.orders.find(item => String(item.id) === id);
-        if (!order || !DEFAULT_ORDER_STATUSES.includes(nextStatus) || pendingStatusMoves.has(id)) {
+        if (!order || !DEFAULT_ORDER_STATUSES.includes(nextStatus) || pendingStatusMoves.has(id) || pendingArchiveOps.has(id)) {
           renderLocalOrders();
           return { moved: false, reason: 'unavailable' };
         }
@@ -3121,7 +3134,7 @@
           renderLocalOrders();
           return { moved: false, reason: 'same' };
         }
-        if (order.archivedAt || archivingOrderIds.has(id)) {
+        if (order.archivedAt) {
           showOrdersMessage('error', `Desarquive o pedido #${shortOrderId(id)} antes de alterar o status.`);
           renderLocalOrders();
           return { moved: false, reason: 'archived' };
@@ -3559,15 +3572,17 @@
           $('ordersNavCount').textContent = String(orders.length);
           renderOrderFilterOptions();
           renderLocalOrders();
+          return true;
         } catch (error) {
           if (silent) {
             showOrdersMessage('error', 'Não foi possível recarregar os pedidos. Use "Atualizar" para conferir o status mais recente.');
-            return;
+            return false;
           }
           orderViewState.loading = false;
           orderViewState.error = 'Não foi possível carregar os pedidos. Verifique a conexão e tente novamente.';
           renderLocalOrders();
           setMessage($('ordersMessage'), 'error', orderViewState.error);
+          return false;
         }
       }
 
@@ -3644,7 +3659,7 @@
 
       // Pedidos sem archivedAt (inclusive os anteriores à Etapa 11.4) são ativos.
       function matchesArchiveScope(order, scope = 'active') {
-        const archived = Boolean(order.archivedAt);
+        const archived = Boolean(displayedArchivedAt(order));
         if (scope === 'all') return true;
         return scope === 'archived' ? archived : !archived;
       }
@@ -3787,7 +3802,7 @@
       }
 
       function orderStatusControl(order, mobile = false) {
-        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(displayedOrderStatus(order))}" aria-label="Status do pedido ${escapeHtml(order.id || '')}" ${pendingStatusMoves.has(String(order.id || '')) ? 'disabled aria-busy="true"' : order.archivedAt ? 'disabled' : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select></label>${order.archivedAt ? `<small class="order-meta">Arquivado em ${escapeHtml(formatArchivedAt(order.archivedAt))}</small><button class="ghost-btn order-unarchive" type="button" data-unarchive-order="${escapeHtml(order.id || '')}" ${archivingOrderIds.has(String(order.id || '')) ? 'disabled aria-busy="true"' : ''}>Desarquivar</button>` : ''}`;
+        return `<label>${mobile ? '<span class="order-meta">Atualizar status</span>' : ''}<select class="control order-status" data-order-id="${escapeHtml(order.id || '')}" data-previous-status="${escapeHtml(order.status || '')}" title="${escapeHtml(displayedOrderStatus(order))}" aria-label="Status do pedido ${escapeHtml(order.id || '')}" ${pendingStatusMoves.has(String(order.id || '')) || pendingArchiveOps.has(String(order.id || '')) ? 'disabled aria-busy="true"' : order.archivedAt ? 'disabled' : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select></label>${displayedArchivedAt(order) ? `<small class="order-meta">Arquivado em ${escapeHtml(formatArchivedAt(displayedArchivedAt(order)))}</small><button class="ghost-btn order-unarchive" type="button" data-unarchive-order="${escapeHtml(order.id || '')}" ${pendingArchiveOps.has(String(order.id || '')) ? 'disabled aria-busy="true"' : ''}>Desarquivar</button>` : ''}`;
       }
 
       function checkoutStateLabel(state) {
@@ -3952,9 +3967,9 @@
       function renderKanbanCard(order, legacyColumn) {
         const id = String(order.id || '');
         const saving = pendingStatusMoves.has(id);
-        const archiving = archivingOrderIds.has(id);
-        const archived = Boolean(order.archivedAt);
-        const archivable = canArchiveOrder(order) || (archiving && !archived);
+        const archiving = pendingArchiveOps.has(id);
+        const archived = Boolean(displayedArchivedAt(order));
+        const archivable = canArchiveOrder(order);
         const customer = order.customerName || 'Cliente não informado';
         const movable = !saving && !archiving && !archived;
         return `<article class="kanban-card${saving ? ' is-saving' : ''}${archivable ? ' can-archive' : ''}${archived ? ' is-archived' : ''}${isPaymentDeadlineExpired(order) ? ' order-expired' : ''}" data-kanban-card="${escapeHtml(id)}" data-status="${escapeHtml(displayedOrderStatus(order))}" data-movable="${movable}" aria-busy="${saving || archiving}" aria-label="Pedido #${escapeHtml(shortOrderId(id) || '—')}, ${escapeHtml(customer)}">
@@ -3965,9 +3980,9 @@
           ${legacyColumn ? `<span class="status-badge" data-status="${escapeHtml(order.status || '')}">${escapeHtml(order.status || 'Sem status')}</span>` : ''}
           ${isPaymentDeadlineExpired(order) ? '<small class="order-meta">Prazo de pagamento encerrado</small>' : ''}
           ${archivable ? `<button class="kanban-archive-btn" type="button" data-no-drag data-archive-order="${escapeHtml(id)}" aria-label="Arquivar pedido" title="Arquivar pedido" ${archiving ? 'disabled aria-busy="true"' : ''}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M3.5 4.5h17v4h-17zM5.5 8.5v10a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-10M10 12.5h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` : ''}
-          ${archived ? `<p class="kanban-archived-meta">Arquivado em ${escapeHtml(formatArchivedAt(order.archivedAt))}</p><button class="ghost-btn kanban-unarchive-btn" type="button" data-no-drag data-unarchive-order="${escapeHtml(id)}" ${archiving ? 'disabled aria-busy="true"' : ''}>${archiving ? 'Desarquivando...' : 'Desarquivar'}</button>` : ''}
+          ${archived ? `<p class="kanban-archived-meta">Arquivado em ${escapeHtml(formatArchivedAt(displayedArchivedAt(order)))}</p><button class="ghost-btn kanban-unarchive-btn" type="button" data-no-drag data-unarchive-order="${escapeHtml(id)}" ${archiving ? 'disabled aria-busy="true"' : ''}>Desarquivar</button>` : ''}
           ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
-          ${archiving && !archived ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Arquivando...</p>' : ''}
+          ${archiving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
         </article>`;
       }
 
@@ -3984,7 +3999,7 @@
       // "same" (mesma coluna) e "none" (fora do quadro, coluna de status legados ou card em salvamento) não geram requisição.
       function kanbanDropKind(orderId, targetStatus) {
         const order = appState.orders.find(item => String(item.id) === String(orderId));
-        if (!order || order.archivedAt || archivingOrderIds.has(String(orderId)) || !DEFAULT_ORDER_STATUSES.includes(targetStatus) || pendingStatusMoves.has(String(orderId))) return 'none';
+        if (!order || order.archivedAt || pendingArchiveOps.has(String(orderId)) || !DEFAULT_ORDER_STATUSES.includes(targetStatus) || pendingStatusMoves.has(String(orderId))) return 'none';
         return String(order.status || '') === targetStatus ? 'same' : 'allowed';
       }
 
@@ -4243,8 +4258,8 @@
         const finance = financialSituation(order);
         const payment = checkoutPresentation(order);
         const saving = pendingStatusMoves.has(id);
-        const archived = Boolean(order.archivedAt);
-        const archiving = archivingOrderIds.has(id);
+        const archived = Boolean(displayedArchivedAt(order));
+        const archiving = pendingArchiveOps.has(id);
         const phone = whatsappLink(order.whatsapp);
         const row = (label, value, className = '') => `<div${className ? ` class="${className}"` : ''}><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
         const itemLine = item => {
@@ -4286,8 +4301,8 @@
             <select id="orderModalStatus" class="control" data-order-id="${escapeHtml(id)}" ${saving || archived || archiving ? `disabled${saving || archiving ? ' aria-busy="true"' : ''}` : ''}>${renderStatusOptions(displayedOrderStatus(order))}</select>
             ${saving ? '<p class="kanban-saving" role="status"><span class="loading-spinner" aria-hidden="true"></span>Salvando...</p>' : ''}
             <p class="order-modal-note">${archived ? 'Desarquive o pedido para alterar o status.' : 'Alterar o status não muda a situação financeira da cobrança.'}</p>
-            ${archived ? `<dl class="order-modal-rows"><div><dt>Arquivado em</dt><dd>${escapeHtml(formatArchivedAt(order.archivedAt))}</dd></div></dl>` : ''}
-            ${archived || canArchiveOrder(order) || archiving ? `<div class="order-modal-actions"><button id="orderModalArchive" class="ghost-btn" type="button" data-archive-action="${archived ? 'unarchive' : 'archive'}" ${archiving ? 'disabled aria-busy="true"' : ''}>${archiving ? (archived ? 'Desarquivando...' : 'Arquivando...') : (archived ? 'Desarquivar pedido' : 'Arquivar pedido')}</button></div>` : ''}
+            ${archived ? `<dl class="order-modal-rows"><div><dt>Arquivado em</dt><dd>${escapeHtml(formatArchivedAt(displayedArchivedAt(order)))}</dd></div></dl>` : ''}
+            ${archived || canArchiveOrder(order) || archiving ? `<div class="order-modal-actions"><button id="orderModalArchive" class="ghost-btn" type="button" data-archive-action="${archived ? 'unarchive' : 'archive'}" ${archiving ? 'disabled aria-busy="true"' : ''}>${archiving ? 'Salvando...' : (archived ? 'Desarquivar pedido' : 'Arquivar pedido')}</button></div>` : ''}
           </section>`;
         const paymentSection = `<section class="order-modal-section" aria-labelledby="orderModalPaymentTitle">
             <h3 id="orderModalPaymentTitle">Pagamento</h3>
@@ -4384,7 +4399,8 @@
         else dialog.removeAttribute('open');
         document.body.classList.remove('modal-open');
         clearMessage($('orderModalMessage'));
-        qsa('.kanban-card-open').find(button => button.dataset.orderId === orderId)?.focus();
+        // Se o card saiu do filtro (ex.: arquivado pelo modal), o foco vai para o quadro.
+        (qsa('.kanban-card-open').find(button => button.dataset.orderId === orderId) || $('ordersContainer')?.querySelector('.kanban-board'))?.focus();
       }
 
       // Qualquer área do card abre o modal, exceto controles próprios e o clique que encerra um arraste.

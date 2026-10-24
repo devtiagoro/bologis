@@ -474,7 +474,7 @@ const ARCHIVE_HELPERS = `(async () => {
     state(id) {
       return {
         column: card(id)?.closest('.kanban-column')?.dataset.kanbanColumn || '',
-        archiving: /Arquivando|Desarquivando/.test(card(id)?.textContent || ''),
+        saving: Boolean(card(id)?.querySelector('.kanban-saving')),
         archivedMeta: card(id)?.querySelector('.kanban-archived-meta')?.textContent || '',
         unarchive: Boolean(card(id)?.querySelector('[data-unarchive-order]')),
         concluded: Number(document.querySelector('.kanban-column[data-kanban-column="Concluído"] .kanban-count')?.textContent || 0),
@@ -485,7 +485,7 @@ const ARCHIVE_HELPERS = `(async () => {
         calls: window.__calls.filter(call => ['archiveOrder', 'unarchiveOrder'].includes(call.action)).map(call => [call.action, call.orderId, call.expectedStatus])
       };
     },
-    async settle(id) { for (let attempt = 0; attempt < 60 && /Arquivando|Desarquivando/.test(card(id)?.textContent || ''); attempt++) await wait(50); },
+    async settle() { const count = () => window.__calls.filter(call => ['archiveOrder', 'unarchiveOrder'].includes(call.action)).length; const before = count(); await wait(700); return count() >= before; },
     frames
   };
   return true;
@@ -875,11 +875,13 @@ const server = http.createServer((request, response) => {
           await sleep(250);
         }
         await mouseClick(archivePage, spot.button);
+        // Otimista: antes da resposta do servidor (350 ms) o card já saiu e contador/total mudaram.
         const archiving = await archiveState();
         assert.equal(archiving.modalOpen, false, `Botão de arquivar abriu o modal em ${label}.`);
         assert.equal(archiving.ghost, false, `Botão de arquivar iniciou arraste em ${label}.`);
-        assert.equal(archiving.archiving, true, `Indicação de arquivamento ausente em ${label}.`);
-        assert.equal(archiving.column, 'Concluído', `Card saiu antes da confirmação em ${label}.`);
+        assert.equal(archiving.column, '', `Card não saiu imediatamente dos Ativos em ${label}.`);
+        assert.equal(archiving.concluded, 0, `Contador não mudou imediatamente em ${label}.`);
+        assert.match(archiving.total, /159,88/, `Total não mudou imediatamente em ${label}.`);
         await archivePage.evaluate(`window.__archive.settle('${archiveId}')`);
         const archivedNow = await archiveState();
         assert.equal(archivedNow.column, '', `Card arquivado continuou nos Ativos em ${label}.`);
@@ -901,6 +903,9 @@ const server = http.createServer((request, response) => {
         await sleep(400);
         spot = await archivePage.evaluate(`window.__archive.show('${archiveId}')`);
         await mouseClick(archivePage, spot.button);
+        const unarchiving = await archiveState();
+        assert.equal(unarchiving.column, '', `Pedido desarquivado não saiu imediatamente de Arquivados em ${label}.`);
+        assert.match(unarchiving.total, /0,00/, `Total de Arquivados não mudou imediatamente em ${label}.`);
         await archivePage.evaluate(`window.__archive.settle('${archiveId}')`);
         assert.equal((await archiveState()).column, '', `Pedido desarquivado continuou em Arquivados em ${label}.`);
         await archivePage.evaluate("window.__archive.filter('all')");
@@ -1020,7 +1025,7 @@ const server = http.createServer((request, response) => {
     console.log('PASS toque: deslize rápido preserva a rolagem; pressão longa arrasta; clique abre o modal e soltar não abre');
     console.log('PASS modal do pedido: clique, teclado, Escape, X, foco restaurado, fundo inerte, sem abrir após arraste e contido nas seis resoluções');
     console.log('PASS modal compacto (390, 768): Gestão logo abaixo do cabeçalho; desktop (1024+) mantém duas colunas; um único seletor de status');
-    console.log('PASS arquivamento: botão no hover/foco (desktop) e sempre visível com 44px (toque), sem abrir modal ou arrastar; some dos Ativos após confirmação');
+    console.log('PASS arquivamento otimista: botão no hover/foco (desktop) e sempre visível com 44px (toque); card, contador e total mudam antes da resposta do servidor');
     console.log('PASS filtros Ativos, Arquivados e Todos com data do arquivamento, total correto, sem arrastar arquivados e com desarquivamento');
     console.log('PASS formulário com entrega e retirada contido nas seis resoluções');
     console.log('PASS retorno do pagamento: verificação e tela de obrigado validada pelo servidor nas seis resoluções');
